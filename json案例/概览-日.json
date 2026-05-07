@@ -1,0 +1,329 @@
+{
+  "page": {
+    "title": "湖里分公司营业概览",
+    "module": "business_overview",
+    "viewType": "day",
+    "selectedDate": "2026-05-07",
+    "lastUpdated": "2026-05-07 14:32",
+    "tabs": [
+      { "key": "day", "label": "日", "active": true },
+      { "key": "month", "label": "月", "active": false },
+      { "key": "year", "label": "年", "active": false }
+    ]
+  },
+  "summary": {
+    "title": "2026-05-07 日营业汇总",
+    "metrics": [
+      {
+        "key": "revenue",
+        "label": "营业额",
+        "value": 2000,
+        "unit": "元",
+        "compare": {
+          "label": "环比",
+          "value": -30,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "visitor_count",
+        "label": "来客数",
+        "value": 72,
+        "unit": "人",
+        "compare": {
+          "label": "环比",
+          "value": -20,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "avg_order_value",
+        "label": "客单价",
+        "value": 27.78,
+        "unit": "元",
+        "compare": {
+          "label": "环比",
+          "value": -12,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "gross_profit",
+        "label": "毛利",
+        "value": 412,
+        "unit": "元",
+        "rate": 21,
+        "rateUnit": "%",
+        "compare": {
+          "label": "环比",
+          "value": -40,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "daily_avg_revenue",
+        "label": "日均营收",
+        "value": 3288,
+        "unit": "元",
+        "extra": {
+          "label": "总计营收",
+          "value": 23021,
+          "unit": "元"
+        }
+      },
+      {
+        "key": "daily_avg_gross_profit",
+        "label": "日均毛利",
+        "value": 816,
+        "unit": "元",
+        "extra": {
+          "label": "总计毛利",
+          "value": 5715,
+          "unit": "元"
+        }
+      },
+      {
+        "key": "member_revenue",
+        "label": "会员营业额",
+        "value": 4.4,
+        "unit": "元",
+        "compare": {
+          "label": "环比",
+          "value": -98,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "member_order_count",
+        "label": "会员单量",
+        "value": 3,
+        "unit": "单",
+        "compare": {
+          "label": "环比",
+          "value": 200,
+          "unit": "%",
+          "direction": "up"
+        }
+      },
+      {
+        "key": "member_avg_order_value",
+        "label": "会员客单价",
+        "value": 1.47,
+        "unit": "元",
+        "compare": {
+          "label": "环比",
+          "value": -99,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "member_gross_profit",
+        "label": "会员毛利",
+        "value": 0.27,
+        "unit": "元",
+        "rate": 6,
+        "rateUnit": "%",
+        "compare": {
+          "label": "环比",
+          "value": -100,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "ecommerce_revenue",
+        "label": "电商业绩",
+        "value": 1613.37,
+        "unit": "元",
+        "compare": {
+          "label": "环比",
+          "value": -16,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "ecommerce_order_count",
+        "label": "电商单量",
+        "value": 58,
+        "unit": "单",
+        "compare": {
+          "label": "环比",
+          "value": -13,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "ecommerce_avg_order_value",
+        "label": "电商客单价",
+        "value": 27.82,
+        "unit": "元",
+        "compare": {
+          "label": "环比",
+          "value": -2,
+          "unit": "%",
+          "direction": "down"
+        }
+      },
+      {
+        "key": "ecommerce_gross_profit",
+        "label": "电商毛利",
+        "value": 268.89,
+        "unit": "元",
+        "rate": 0,
+        "rateUnit": "%",
+        "compare": {
+          "label": "环比",
+          "value": -9,
+          "unit": "%",
+          "direction": "down"
+        }
+      }
+    ]
+  },
+  "ranking": {
+    "title": "业绩排名",
+    "items": [
+      {
+        "key": "best_revenue",
+        "label": "最佳营收",
+        "period": "2026-05-01",
+        "value": 4214.44,
+        "unit": "元"
+      },
+      {
+        "key": "best_order_count",
+        "label": "最佳单量",
+        "period": "2026-05-01",
+        "value": 113,
+        "unit": "单"
+      },
+      {
+        "key": "best_gross_profit",
+        "label": "最佳毛利",
+        "period": "2026-05-01",
+        "value": 1128.34,
+        "unit": "元"
+      }
+    ]
+  },
+  "businessTable": {
+    "title": "营业数据列表",
+    "granularity": "day",
+    "columns": [
+      { "key": "period", "label": "日期" },
+      { "key": "retail_amount", "label": "零售金额", "unit": "元" },
+      { "key": "gross_profit", "label": "毛利", "unit": "元" },
+      { "key": "visitor_count", "label": "来客数", "unit": "人" },
+      { "key": "member_amount", "label": "会员金额", "unit": "元" },
+      { "key": "member_gross_profit", "label": "会员毛利", "unit": "元" },
+      { "key": "ecommerce_amount", "label": "电商金额", "unit": "元" },
+      { "key": "ecommerce_gross_profit", "label": "电商毛利", "unit": "元" }
+    ],
+    "rows": [
+      {
+        "period": "2026-05-07",
+        "retail_amount": 1999.82,
+        "gross_profit": 411.52,
+        "visitor_count": 72,
+        "member_amount": 4.4,
+        "member_gross_profit": 0.27,
+        "ecommerce_amount": 1613.37,
+        "ecommerce_gross_profit": 268.89
+      },
+      {
+        "period": "2026-05-06",
+        "retail_amount": 2850.31,
+        "gross_profit": 687.49,
+        "visitor_count": 90,
+        "member_amount": 198,
+        "member_gross_profit": 106,
+        "ecommerce_amount": 1909.84,
+        "ecommerce_gross_profit": 295.58
+      },
+      {
+        "period": "2026-05-05",
+        "retail_amount": 2565.05,
+        "gross_profit": 688.57,
+        "visitor_count": 83,
+        "member_amount": 54.4,
+        "member_gross_profit": 4.98,
+        "ecommerce_amount": 1853.29,
+        "ecommerce_gross_profit": 366.46
+      },
+      {
+        "period": "2026-05-04",
+        "retail_amount": 4030.93,
+        "gross_profit": 1103.45,
+        "visitor_count": 107,
+        "member_amount": 0,
+        "member_gross_profit": 0,
+        "ecommerce_amount": 2951.88,
+        "ecommerce_gross_profit": 587.47
+      },
+      {
+        "period": "2026-05-03",
+        "retail_amount": 3701.93,
+        "gross_profit": 928.58,
+        "visitor_count": 111,
+        "member_amount": 0,
+        "member_gross_profit": 0,
+        "ecommerce_amount": 2779.96,
+        "ecommerce_gross_profit": 480.94
+      },
+      {
+        "period": "2026-05-02",
+        "retail_amount": 3658.15,
+        "gross_profit": 766.55,
+        "visitor_count": 108,
+        "member_amount": 61.1,
+        "member_gross_profit": 0,
+        "ecommerce_amount": 2754.78,
+        "ecommerce_gross_profit": 474.21
+      },
+      {
+        "period": "2026-05-01",
+        "retail_amount": 4214.44,
+        "gross_profit": 1128.34,
+        "visitor_count": 113,
+        "member_amount": 0,
+        "member_gross_profit": 0,
+        "ecommerce_amount": 2489.37,
+        "ecommerce_gross_profit": 434.66
+      }
+    ]
+  },
+  "sourceDistribution": {
+    "title": "业绩来源占比",
+    "type": "donut",
+    "center": {
+      "label": "总营收",
+      "value": 2000,
+      "unit": "元"
+    },
+    "items": [
+      {
+        "key": "normal",
+        "label": "普通",
+        "value": 382.05
+      },
+      {
+        "key": "member",
+        "label": "会员",
+        "value": 4.4
+      },
+      {
+        "key": "ecommerce",
+        "label": "电商",
+        "value": 1613.37
+      }
+    ]
+  }
+}

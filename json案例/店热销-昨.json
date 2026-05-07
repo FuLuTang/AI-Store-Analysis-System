@@ -1,0 +1,61 @@
+{
+  "page": {
+    "title": "运营热销品种",
+    "module": "operation_hot_products",
+    "viewType": "yesterday",
+    "search": {
+      "enabled": true,
+      "keyword": ""
+    },
+    "tabs": [
+      { "key": "today", "label": "今天", "active": false },
+      { "key": "yesterday", "label": "昨天", "active": true },
+      { "key": "7days", "label": "7天", "active": false },
+      { "key": "30days", "label": "30天", "active": false }
+    ]
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "product_name": "[丹南泰]和胃整肠丸 0.2g*50丸/瓶/盒",
+      "barcode": "8851445907117",
+      "sales_receipt_count": 4,
+      "sales_quantity": 4
+    },
+    {
+      "rank": 2,
+      "product_name": "[康恩贝]肠炎宁片 0.42g*12片*2板/盒",
+      "barcode": "6946572600078",
+      "sales_receipt_count": 3,
+      "sales_quantity": 3
+    },
+    {
+      "rank": 3,
+      "product_name": "[金双歧]双歧杆菌乳杆菌三联活菌片 0.5g*12片*3板/盒",
+      "barcode": "6922146871464",
+      "sales_receipt_count": 3,
+      "sales_quantity": 3
+    },
+    {
+      "rank": 4,
+      "product_name": "[恩威]洁尔阴洗液 160ml/瓶",
+      "barcode": "6932556900029",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 5,
+      "product_name": "连花 连花清瘟胶囊 0.35g*36粒/盒",
+      "barcode": "6920855052082",
+      "sales_receipt_count": 2,
+      "sales_quantity": 3
+    },
+    {
+      "rank": 6,
+      "product_name": "[苏春]珍珠明目滴眼液 8ml/支/盒",
+      "barcode": "6900508175702",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    }
+  ]
+}

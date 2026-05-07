@@ -1,0 +1,103 @@
+{
+  "page": {
+    "title": "运营热销品种",
+    "module": "operation_hot_products",
+    "viewType": "today",
+    "search": {
+      "enabled": true,
+      "keyword": ""
+    },
+    "tabs": [
+      { "key": "today", "label": "今天", "active": true },
+      { "key": "yesterday", "label": "昨天", "active": false },
+      { "key": "7days", "label": "7天", "active": false },
+      { "key": "30days", "label": "30天", "active": false }
+    ]
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "product_name": "[芬必得]布洛芬缓释胶囊 0.3g*10粒*2板/盒",
+      "barcode": "6913991300322",
+      "sales_receipt_count": 3,
+      "sales_quantity": 3
+    },
+    {
+      "rank": 2,
+      "product_name": "[农夫山泉]饮用天然水 550ml/瓶",
+      "barcode": "6921168509256",
+      "sales_receipt_count": 3,
+      "sales_quantity": 6
+    },
+    {
+      "rank": 3,
+      "product_name": "[维福佳]维生素 C片 0.1g*100片/瓶",
+      "barcode": "9999900117075",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 4,
+      "product_name": "[三金]西瓜霜润喉片 0.6g*36片/盒",
+      "barcode": "6939261900788",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 5,
+      "product_name": "[葵花]人工牛黄甲硝唑胶囊 12粒*2板/盒",
+      "barcode": "6934366600854",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 6,
+      "product_name": "艾纳香 咽立爽口含滴丸 0.025g*60丸瓶/盒",
+      "barcode": "6921746900994",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 7,
+      "product_name": "[晶明]更昔洛韦滴眼液 (8ml:8mg)*8ml/瓶/盒",
+      "barcode": "6935899804191",
+      "sales_receipt_count": 1,
+      "sales_quantity": 1
+    },
+    {
+      "rank": 8,
+      "product_name": "[毓婷]左炔诺孕酮片 (72小时紧急避孕药)0.75mg*2片/板/盒",
+      "barcode": "6922887440448",
+      "sales_receipt_count": 1,
+      "sales_quantity": 1
+    },
+    {
+      "rank": 9,
+      "product_name": "[整肠生]地衣芽孢杆菌活菌胶囊 0.25g*20粒/瓶/盒",
+      "barcode": "6905227000526",
+      "sales_receipt_count": 1,
+      "sales_quantity": 1
+    },
+    {
+      "rank": 10,
+      "product_name": "[金双歧]双歧杆菌乳杆菌三联活菌片 0.5g*12片*3板/盒",
+      "barcode": "6922146871464",
+      "sales_receipt_count": 1,
+      "sales_quantity": 1
+    },
+    {
+      "rank": 11,
+      "product_name": "金毓婷 左炔诺孕酮片 1.5mg*2片/盒",
+      "barcode": "6922887441131",
+      "sales_receipt_count": 1,
+      "sales_quantity": 1
+    },
+    {
+      "rank": 12,
+      "product_name": "酒川芎 10克",
+      "barcode": null,
+      "sales_receipt_count": null,
+      "sales_quantity": null
+    }
+  ]
+}

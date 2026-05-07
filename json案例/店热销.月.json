@@ -1,0 +1,61 @@
+{
+  "page": {
+    "title": "运营热销品种",
+    "module": "operation_hot_products",
+    "viewType": "30days",
+    "search": {
+      "enabled": true,
+      "keyword": ""
+    },
+    "tabs": [
+      { "key": "today", "label": "今天", "active": false },
+      { "key": "yesterday", "label": "昨天", "active": false },
+      { "key": "7days", "label": "7天", "active": false },
+      { "key": "30days", "label": "30天", "active": true }
+    ]
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "product_name": "芬必得 布洛芬缓释胶囊 0.3g*20粒/盒",
+      "barcode": "6913991300322",
+      "sales_receipt_count": 106,
+      "sales_quantity": 106
+    },
+    {
+      "rank": 2,
+      "product_name": "[丹南泰]和胃整肠丸 0.2g*50丸/瓶/盒",
+      "barcode": "8851445907117",
+      "sales_receipt_count": 59,
+      "sales_quantity": 59
+    },
+    {
+      "rank": 3,
+      "product_name": "[999]感冒灵颗粒 10g*9袋/盒",
+      "barcode": "6901339913419",
+      "sales_receipt_count": 53,
+      "sales_quantity": 53
+    },
+    {
+      "rank": 4,
+      "product_name": "[金双歧]双歧杆菌乳杆菌三联活菌片 0.5g*12片*3板/盒",
+      "barcode": "6922146871464",
+      "sales_receipt_count": 43,
+      "sales_quantity": 49
+    },
+    {
+      "rank": 5,
+      "product_name": "[农夫山泉]饮用天然水 550ml/瓶",
+      "barcode": "6921168509256",
+      "sales_receipt_count": 42,
+      "sales_quantity": 79
+    },
+    {
+      "rank": 6,
+      "product_name": "[都乐]金嗓子喉片 2g*6片*2板/盒",
+      "barcode": "6920560420268",
+      "sales_receipt_count": 37,
+      "sales_quantity": 37
+    }
+  ]
+}

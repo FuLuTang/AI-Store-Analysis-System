@@ -1,0 +1,112 @@
+{
+  "page": {
+    "title": "O2O商品归类",
+    "module": "o2o_product_category",
+    "themeColor": "#ff7a16",
+    "search": {
+      "enabled": true,
+      "placeholder": "",
+      "keyword": ""
+    },
+    "filter": {
+      "enabled": true,
+      "label": "筛选"
+    },
+    "pagination": {
+      "currentIndex": 30,
+      "total": 15687
+    }
+  },
+  "products": [
+    {
+      "product_code": "80013",
+      "approval_no": "卫药准字29-XK-2795",
+      "product_name": "高级痱水(白美人)",
+      "common_name": "高级痱水",
+      "barcode": "6931966600131",
+      "shelf": "",
+      "manufacturer": "广州名露医疗卫生用品有限公司",
+      "unit": "瓶",
+      "specification": "60ml",
+      "purchase_price": 0,
+      "stock_quantity": null,
+      "retail_price": 18,
+      "member_price": 0
+    },
+    {
+      "product_code": "30065",
+      "approval_no": "/",
+      "product_name": "西洋参含片(鑫三扬)",
+      "common_name": "西洋参含片",
+      "barcode": "6936784969230",
+      "shelf": "常温区00238",
+      "manufacturer": "鑫三扬药业（厦门）有限公司",
+      "unit": "盒",
+      "specification": "1.25g*12片",
+      "purchase_price": 3.42,
+      "stock_quantity": null,
+      "retail_price": 12,
+      "member_price": 0
+    },
+    {
+      "product_code": "5010326",
+      "approval_no": "/",
+      "product_name": "建曲",
+      "common_name": "建曲",
+      "barcode": "",
+      "shelf": "常温区00238",
+      "manufacturer": "四川千方中药饮片有限公司",
+      "unit": "克",
+      "specification": "10g*50块",
+      "purchase_price": 0.02,
+      "stock_quantity": null,
+      "retail_price": 0.05,
+      "member_price": 0
+    },
+    {
+      "product_code": "5010013",
+      "approval_no": "无",
+      "product_name": "红景天",
+      "common_name": "红景天",
+      "barcode": "",
+      "shelf": "常温区00238",
+      "manufacturer": "广东汇群中药股份饮片有限公司",
+      "unit": "克",
+      "specification": "克",
+      "purchase_price": 0.11,
+      "stock_quantity": null,
+      "retail_price": 0.2,
+      "member_price": 0
+    },
+    {
+      "product_code": "5010161",
+      "approval_no": "/",
+      "product_name": "炒鸡内金",
+      "common_name": "炒鸡内金",
+      "barcode": "",
+      "shelf": "常温区00238",
+      "manufacturer": "广东汇群中药饮片股份有限公司",
+      "unit": "克",
+      "specification": "/",
+      "purchase_price": 0.03,
+      "stock_quantity": null,
+      "retail_price": 0.052,
+      "member_price": 0
+    },
+    {
+      "product_code": "5010071",
+      "approval_no": "/",
+      "product_name": "醋鳖甲",
+      "common_name": "醋鳖甲",
+      "barcode": "",
+      "shelf": "常温区00238",
+      "manufacturer": "广东汇群中药股份饮片有限公司",
+      "unit": "克",
+      "specification": "/",
+      "purchase_price": 0.22,
+      "stock_quantity": null,
+      "retail_price": 0.5,
+      "member_price": 0
+    }
+  ]
+}

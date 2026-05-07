@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>福州门店 AI 分析系统</title>
+    <link rel="stylesheet" href="index.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <a href="index.html" class="active">用户工作台</a>
+            <a href="monitor.html">后台监控流</a>
+            <button class="settings-btn" onclick="openSettings()">
+                <i class="fas fa-cog"></i> 设置
+            </button>
+        </nav>
+
+        <header>
+            <h1>药店经营 AI 智能诊断</h1>
+            <p style="color: var(--text-muted); margin-bottom: 2rem;">拖入门店经营 JSON 数据，一键获取深度归因与优化策略。</p>
+        </header>
+
+        <div class="card">
+            <div id="dropZone" class="drop-zone">
+                <i class="fas fa-file-upload"></i>
+                <p id="fileName">拖放一个或多个 JSON 文件到此处</p>
+                <div id="fileList" class="file-list"></div>
+                <input type="file" id="fileInput" hidden accept=".json" multiple>
+            </div>
+
+            <div style="text-align: center;">
+                <button id="startBtn" class="btn" disabled>
+                    <i class="fas fa-magic"></i> 开始多维 AI 诊断
+                </button>
+            </div>
+
+            <div style="text-align: center; margin-top: 1rem; display: flex; justify-content: center; align-items: center; gap: 0.5rem;">
+                <span id="labelSimple" style="font-size: 0.9rem; color: var(--text-muted); font-weight: bold;">精简</span>
+                <label class="switch">
+                    <input type="checkbox" id="reportToggle">
+                    <span class="slider round"></span>
+                </label>
+                <span id="labelFull" style="font-size: 0.9rem; color: var(--text-muted);">完整</span>
+            </div>
+
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p id="statusText">正在并行处理数据流...</p>
+            </div>
+
+            <div id="result" class="report-section">
+                <div class="report-card">
+                    <div id="reportContent" class="markdown-body"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置弹窗 -->
+    <div id="settingsModal" class="modal-overlay">
+        <div class="modal">
+            <h2><i class="fas fa-cog"></i> AI 接口设置</h2>
+            <div class="form-group">
+                <label>API Base URL</label>
+                <input type="text" id="settingBaseUrl" placeholder="https://api.openai.com/v1">
+            </div>
+            <div class="form-group">
+                <label>API Key</label>
+                <input type="password" id="settingApiKey" placeholder="sk-...">
+            </div>
+            <div class="form-group">
+                <label>模型名称</label>
+                <input type="text" id="settingModel" placeholder="gpt-4o">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="closeSettings()">取消</button>
+                <button class="btn" onclick="saveSettings()">
+                    <i class="fas fa-save"></i> 保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const startBtn = document.getElementById('startBtn');
+        const fileListDisplay = document.getElementById('fileList');
+        const loading = document.getElementById('loading');
+        const statusText = document.getElementById('statusText');
+        const resultSection = document.getElementById('result');
+        const reportToggle = document.getElementById('reportToggle');
+        const labelSimple = document.getElementById('labelSimple');
+        const labelFull = document.getElementById('labelFull');
+        
+        let jsonFilesData = [];
+        let currentReport = null;
+        let currentFullReport = null;
+
+        reportToggle.addEventListener('change', () => {
+            if (reportToggle.checked) {
+                labelSimple.style.fontWeight = 'normal';
+                labelFull.style.fontWeight = 'bold';
+            } else {
+                labelSimple.style.fontWeight = 'bold';
+                labelFull.style.fontWeight = 'normal';
+            }
+            renderReport();
+        });
+
+        function renderReport() {
+            if (currentReport === null || currentFullReport === null) return;
+            
+            const isFull = reportToggle.checked;
+            const rep = isFull ? currentFullReport : currentReport;
+            
+            const contentDiv = document.getElementById('reportContent');
+            const cardDiv = contentDiv.closest('.report-card');
+            
+            if (rep.trim() === '') {
+                cardDiv.style.display = 'none';
+            } else {
+                cardDiv.style.display = 'block';
+                contentDiv.innerHTML = marked.parse(rep);
+            }
+        }
+
+        // === 设置相关 ===
+        function loadSettings() {
+            return {
+                baseUrl: localStorage.getItem('ai_baseUrl') || 'https://api.openai.com/v1',
+                apiKey: localStorage.getItem('ai_apiKey') || '',
+                model: localStorage.getItem('ai_model') || 'gpt-4o'
+            };
+        }
+
+        function openSettings() {
+            const s = loadSettings();
+            document.getElementById('settingBaseUrl').value = s.baseUrl;
+            document.getElementById('settingApiKey').value = s.apiKey;
+            document.getElementById('settingModel').value = s.model;
+            document.getElementById('settingsModal').classList.add('open');
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.remove('open');
+        }
+
+        function saveSettings() {
+            localStorage.setItem('ai_baseUrl', document.getElementById('settingBaseUrl').value.trim());
+            localStorage.setItem('ai_apiKey', document.getElementById('settingApiKey').value.trim());
+            localStorage.setItem('ai_model', document.getElementById('settingModel').value.trim());
+            closeSettings();
+        }
+
+        // === 文件上传 ===
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        dropZone.ondragover = (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        };
+
+        dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            handleFiles(e.dataTransfer.files);
+        };
+
+        function handleFiles(files) {
+            if (files.length === 0) return;
+            
+            jsonFilesData = [];
+            fileListDisplay.innerHTML = '';
+            
+            Array.from(files).forEach(file => {
+                if (!file.name.endsWith('.json')) return;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        jsonFilesData.push(data);
+                        
+                        const item = document.createElement('div');
+                        item.className = 'file-item';
+                        item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
+                        fileListDisplay.appendChild(item);
+
+                        if (jsonFilesData.length > 0) {
+                            startBtn.disabled = false;
+                            document.getElementById('fileName').innerText = `已准备 ${jsonFilesData.length} 个数据文件`;
+                        }
+                    } catch (err) {
+                        console.error('JSON 解析失败', file.name);
+                    }
+                };
+                reader.readAsText(file);
+            });
+        }
+
+        // === 开始分析 ===
+        startBtn.onclick = async () => {
+            if (jsonFilesData.length === 0) return;
+
+            const settings = loadSettings();
+
+            startBtn.disabled = true;
+            loading.style.display = 'flex';
+            resultSection.classList.remove('visible');
+            statusText.innerText = settings.apiKey
+                ? '正在调用 AI 进行深度分析...'
+                : '正在使用模拟模式（未配置 API）...';
+
+            try {
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        files: jsonFilesData,
+                        settings: settings.apiKey ? settings : null
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    currentReport = data.report;
+                    currentFullReport = data.fullReport;
+                    
+                    renderReport();
+                    
+                    loading.style.display = 'none';
+                    resultSection.classList.add('visible');
+                } else {
+                    throw new Error(data.message);
+                }
+            } catch (err) {
+                alert('分析出错: ' + err.message);
+                loading.style.display = 'none';
+                startBtn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>

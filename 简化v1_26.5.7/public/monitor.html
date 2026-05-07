@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统后台监控 - AI 分析系统</title>
+    <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container" style="max-width: 1100px;">
+        <nav>
+            <a href="index.html">用户工作台</a>
+            <a href="monitor.html" class="active">后台监控流</a>
+        </nav>
+
+        <header>
+            <h1>后台数据流转监视器</h1>
+            <p style="color: var(--text-muted); margin-bottom: 1.5rem;">实时观察系统处理步骤与日志输出。</p>
+        </header>
+
+        <!-- 流程图 -->
+        <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="flow-container">
+                <!-- 第一阶段：输入 -->
+                <div class="flow-row">
+                    <div id="input" class="node pending"><span>json 传入</span></div>
+                </div>
+                
+                <div class="v-connector" style="height: 20px;"></div>
+
+                <!-- 第二阶段：并行处理 -->
+                <div class="flow-row" style="align-items: stretch; gap: 4rem; position: relative;">
+                    <!-- 分支连线 (上) -->
+                    <div style="position: absolute; top: -20px; left: 50%; transform: translateX(-50%); width: calc(100% - 160px); height: 20px; border-top: 2px solid #e2e8f0; border-left: 2px solid #e2e8f0; border-right: 2px solid #e2e8f0;"></div>
+
+                    <!-- AI 分支 -->
+                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
+                        <div style="font-size: 0.65rem; color: #94a3b8; position: absolute; top: 4px; width: 100%; text-align: center;">AI 调用</div>
+                        <div id="clean" class="node pending"><span>json清洗与转换</span></div>
+                        <div class="v-connector"></div>
+                        <div id="api" class="node pending"><span>API调用</span></div>
+                        <div class="v-connector"></div>
+                        <div id="output" class="node pending"><span>输出</span></div>
+                        <div class="v-connector"></div>
+                        <div id="review" class="node pending"><span>报告明显错误评审</span></div>
+                    </div>
+
+                    <!-- 算法分支 -->
+                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
+                        <div style="font-size: 0.65rem; color: #94a3b8; position: absolute; top: 4px; width: 100%; text-align: center;">算法处理</div>
+                        <div id="alg1" class="node pending"><span>数据整理</span></div>
+                        <div class="v-connector"></div>
+                        <div id="alg2" class="node pending"><span>算指标</span></div>
+                        <div class="v-connector"></div>
+                        <div id="alg3" class="node pending"><span>检查异常</span></div>
+                    </div>
+                </div>
+
+                <!-- 第三阶段：结果聚合 -->
+                <div style="position: relative; width: 100%; display: flex; flex-direction: column; align-items: center;">
+                    <!-- 分支连线 (下) -->
+                    <div style="width: calc(100% - 160px); height: 20px; border-bottom: 2px solid #e2e8f0; border-left: 2px solid #e2e8f0; border-right: 2px solid #e2e8f0; margin-bottom: 20px;"></div>
+                    <div style="position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: 2px; height: 20px; background: #e2e8f0;"></div>
+                </div>
+
+                <!-- 第四阶段：输出 -->
+                <div class="flow-row">
+                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: var(--primary); background: #eff6ff;">
+                        <div style="font-size: 0.65rem; color: var(--primary); position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">结果融合-输出</div>
+                        <div id="fusion" class="node pending"><span>数据融合</span></div>
+                        <div class="v-connector"></div>
+                        <div id="rep1" class="node pending"><span>出“完整报告”</span></div>
+                        <div class="v-connector"></div>
+                        <div id="rep2" class="node pending"><span>出“简化报告”</span></div>
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top: 0.75rem; color: var(--text-muted); font-size: 0.8rem; display: flex; justify-content: space-between;">
+                <span>SSE: <span id="connStatus" style="color: var(--success)">已连接</span></span>
+                <span id="currentTime">等待任务...</span>
+            </div>
+        </div>
+
+        <!-- 日志面板 -->
+        <div class="log-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+            <div class="log-panel">
+                <div class="log-title"><span class="log-dot" id="dot-input"></span> json 传入</div>
+                <div class="log-terminal" id="log-input"></div>
+            </div>
+            <div class="log-panel">
+                <div class="log-title"><span class="log-dot" id="dot-clean"></span> 清洗与转换</div>
+                <div class="log-terminal" id="log-clean"></div>
+            </div>
+            <div class="log-panel">
+                <div class="log-title"><span class="log-dot" id="dot-api"></span> API 调用</div>
+                <div class="log-terminal" id="log-api"></div>
+            </div>
+            <div class="log-panel">
+                <div class="log-title"><span class="log-dot" id="dot-output"></span> 输出</div>
+                <div class="log-terminal" id="log-output"></div>
+            </div>
+            <div class="log-panel">
+                <div class="log-title"><span class="log-dot" id="dot-alg1"></span> 数据整理</div>
+                <div class="log-terminal" id="log-alg1"></div>
+            </div>
+            <div class="log-panel">
+                <div class="log-title">
+                    <span class="log-dot" id="dot-alg2"></span> 算指标
+                    <span id="alg2-progress" class="progress-badge" style="display:none;">0/0</span>
+                </div>
+                <div class="log-terminal" id="log-alg2"></div>
+            </div>
+            <div class="log-panel">
+                <div class="log-title">
+                    <span class="log-dot" id="dot-alg3"></span> 检查异常
+                    <span id="alg3-tally" class="tally-badges" style="display:none;"></span>
+                </div>
+                <div class="log-terminal" id="log-alg3"></div>
+            </div>
+
+            <div class="log-panel">
+                <div class="log-title"><span class="log-dot" id="dot-fusion"></span> 融合 / 报告</div>
+                <div class="log-terminal" id="log-fusion"></div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .progress-badge {
+            margin-left: auto;
+            background: var(--primary);
+            color: white;
+            font-size: 0.65rem;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-weight: 700;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+        .tally-badges {
+            margin-left: auto;
+            display: inline-flex;
+            gap: 4px;
+        }
+        .tally-badge {
+            font-size: 0.6rem;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+        .tally-badge.pass { background: #dcfce7; color: #166534; }
+        .tally-badge.attention { background: #fef9c3; color: #854d0e; }
+        .tally-badge.warning { background: #fee2e2; color: #991b1b; }
+        .tally-badge.uncountable { background: #f1f5f9; color: #64748b; }
+    </style>
+
+    <script>
+        const connStatus = document.getElementById('connStatus');
+        const timeDisplay = document.getElementById('currentTime');
+        const eventSource = new EventSource('/api/stream');
+
+        eventSource.onopen = () => {
+            connStatus.innerText = '已连接';
+            connStatus.style.color = 'var(--success)';
+        };
+        eventSource.onerror = () => {
+            connStatus.innerText = '断开，重连中...';
+            connStatus.style.color = 'var(--error)';
+        };
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'status') {
+                updateNode(data.nodeId, data.status, data.time);
+            } else if (data.type === 'log') {
+                appendLog(data.nodeId, data.message, data.time);
+            } else if (data.type === 'progress') {
+                updateProgress(data.nodeId, data.current, data.total);
+            } else if (data.type === 'tally') {
+                updateTally(data.nodeId, data.tally);
+            }
+        };
+
+        function updateNode(nodeId, status, time) {
+            const node = document.getElementById(nodeId);
+            if (node) {
+                node.classList.remove('pending', 'active', 'success', 'error', 'simulated');
+                node.classList.add(status);
+            }
+            
+            // 更新日志面板指示灯 — 直接匹配 nodeId
+            let targetDotId = nodeId;
+            if (['rep1', 'rep2'].includes(nodeId)) targetDotId = 'fusion';
+            if (nodeId === 'review') targetDotId = 'output';
+
+            const dot = document.getElementById('dot-' + targetDotId);
+            if (dot) {
+                dot.className = 'log-dot';
+                dot.classList.add('dot-' + status);
+            }
+            // 如果是 pending，清空日志
+            if (status === 'pending') {
+                const logEl = document.getElementById('log-' + targetDotId);
+                if (logEl) logEl.innerHTML = '';
+                // 重置进度和tally
+                const progEl = document.getElementById(nodeId + '-progress');
+                if (progEl) { progEl.style.display = 'none'; progEl.textContent = '0/0'; }
+                const tallyEl = document.getElementById(nodeId + '-tally');
+                if (tallyEl) { tallyEl.style.display = 'none'; tallyEl.innerHTML = ''; }
+            }
+            timeDisplay.innerText = `最后更新: ${time}`;
+        }
+
+        function appendLog(nodeId, message, time) {
+            // 每个 alg 节点有独立面板
+            let targetId = nodeId;
+            if (['rep1', 'rep2'].includes(nodeId)) targetId = 'fusion';
+            if (nodeId === 'review') targetId = 'output';
+
+            const logEl = document.getElementById('log-' + targetId);
+            if (!logEl) return;
+
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            line.innerHTML = `<span class="log-time">${time}</span> ${escapeHtml(message)}`;
+            logEl.appendChild(line);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function updateProgress(nodeId, current, total) {
+            const el = document.getElementById(nodeId + '-progress');
+            if (!el) return;
+            el.style.display = 'inline';
+            el.textContent = `${current}/${total}`;
+            // 完成时变色
+            if (current === total) {
+                el.style.background = 'var(--success)';
+            } else {
+                el.style.background = 'var(--primary)';
+            }
+        }
+
+        function updateTally(nodeId, tally) {
+            const el = document.getElementById(nodeId + '-tally');
+            if (!el) return;
+            el.style.display = 'inline-flex';
+            el.innerHTML = `
+                <span class="tally-badge pass">🟢${tally.pass}</span>
+                <span class="tally-badge attention">🟡${tally.attention}</span>
+                <span class="tally-badge warning">🔴${tally.warning}</span>
+                ${tally.uncountable ? `<span class="tally-badge uncountable">⚪${tally.uncountable}</span>` : ''}
+            `;
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+    </script>
+</body>
+</html>

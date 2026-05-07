@@ -1,0 +1,187 @@
+{
+  "page": {
+    "title": "热销TOP500",
+    "module": "hot_sale_top500",
+    "viewType": "in_stock",
+    "search": {
+      "enabled": true,
+      "keyword": ""
+    },
+    "tabs": [
+      { "key": "top500", "label": "TOP500", "active": false },
+      { "key": "in_stock", "label": "有货", "active": true },
+      { "key": "out_of_stock", "label": "缺货", "active": false },
+      { "key": "missing_category", "label": "缺品种", "active": false }
+    ]
+  },
+  "products": [
+    {
+      "rank": 1,
+      "sales_rank": 1,
+      "product_name": "[999]感冒灵颗粒 10g*9袋/盒",
+      "city": "厦门",
+      "barcode": "6901339913419"
+    },
+    {
+      "rank": 2,
+      "sales_rank": 2,
+      "product_name": "[金毓婷]左炔诺孕酮片 (72小时紧急避孕药)1.5mg/片/板/盒",
+      "city": "厦门",
+      "barcode": "6922887440332"
+    },
+    {
+      "rank": 3,
+      "sales_rank": 3,
+      "product_name": "[稳健医疗]医用棉签 (灭菌级)(竹棒型 A1型通用型)10cm*50支/袋",
+      "city": "厦门",
+      "barcode": "6932593099717"
+    },
+    {
+      "rank": 4,
+      "sales_rank": 4,
+      "product_name": "[都乐]金嗓子喉片 2g*6片*2板/盒",
+      "city": "厦门",
+      "barcode": "6920560420268"
+    },
+    {
+      "rank": 5,
+      "sales_rank": 5,
+      "product_name": "[大卫]验孕试纸人绒毛膜促性腺激素(HCG)检测试纸(胶体金法)1条",
+      "city": "厦门",
+      "barcode": "6938444900010"
+    },
+    {
+      "rank": 6,
+      "sales_rank": 6,
+      "product_name": "[芬必得]布洛芬缓释胶囊 0.3g*12粒*2板/盒",
+      "city": "厦门",
+      "barcode": null
+    },
+    {
+      "rank": 7,
+      "sales_rank": 7,
+      "product_name": "[三金]桂林西瓜霜 3g/瓶/盒",
+      "city": "厦门",
+      "barcode": "6939261901600"
+    },
+    {
+      "rank": 8,
+      "sales_rank": 8,
+      "product_name": "[感康]复方氨酚烷胺片 6片*2板/盒",
+      "city": "厦门",
+      "barcode": "6934247900011"
+    },
+    {
+      "rank": 9,
+      "sales_rank": 9,
+      "product_name": "[信龙]炉甘石洗剂 100ml/瓶",
+      "city": "厦门",
+      "barcode": "6924364520056"
+    },
+    {
+      "rank": 10,
+      "sales_rank": 10,
+      "product_name": "[仁和]布洛芬缓释胶囊 0.3g*11粒*2板/盒",
+      "city": "厦门",
+      "barcode": "6922097701513"
+    },
+    {
+      "rank": 11,
+      "sales_rank": 11,
+      "product_name": "[百多邦]莫匹罗星软膏 2%*5g/支/盒",
+      "city": "厦门",
+      "barcode": "6913991300445"
+    },
+    {
+      "rank": 12,
+      "sales_rank": 12,
+      "product_name": "[三金]西瓜霜润喉片 0.6g*36片/盒",
+      "city": "厦门",
+      "barcode": "6939261900788"
+    },
+    {
+      "rank": 13,
+      "sales_rank": 13,
+      "product_name": "[江中]健胃消食片 (薄膜衣片)0.8g*8片*4板/盒",
+      "city": "厦门",
+      "barcode": "6903757998054"
+    },
+    {
+      "rank": 14,
+      "sales_rank": 14,
+      "product_name": "[苏春]珍珠明目滴眼液 8ml/支/盒",
+      "city": "厦门",
+      "barcode": "6900508175702"
+    },
+    {
+      "rank": 15,
+      "sales_rank": 15,
+      "product_name": "[水仙]风油精 3ml/瓶/盒",
+      "city": "厦门",
+      "barcode": "6925485988367"
+    },
+    {
+      "rank": 16,
+      "sales_rank": 16,
+      "product_name": "[999皮炎平]复方醋酸地塞米松乳膏 (20g:15mg)*20g/支/盒",
+      "city": "厦门",
+      "barcode": "6901339905216"
+    },
+    {
+      "rank": 17,
+      "sales_rank": 17,
+      "product_name": "[开瑞坦]氯雷他定片 10mg*6片/板/盒",
+      "city": "厦门",
+      "barcode": "6936225120015"
+    },
+    {
+      "rank": 18,
+      "sales_rank": 18,
+      "product_name": "[三金]西瓜霜清咽含片 1.8g*16片/盒",
+      "city": "厦门",
+      "barcode": "6939261900238"
+    },
+    {
+      "rank": 19,
+      "sales_rank": 19,
+      "product_name": "[信龙]开塞露 (含甘油)20ml*6支/盒",
+      "city": "厦门",
+      "barcode": "6924364580715"
+    },
+    {
+      "rank": 20,
+      "sales_rank": 21,
+      "product_name": "[京都念慈菴]京都念慈菴蜜炼川贝枇杷膏 150ml/瓶/盒",
+      "city": "厦门",
+      "barcode": "081364361693"
+    },
+    {
+      "rank": 21,
+      "sales_rank": 22,
+      "product_name": "[恒健]开塞露 (含甘油)20ml*20支/盒",
+      "city": "厦门",
+      "barcode": "6920190330609"
+    },
+    {
+      "rank": 22,
+      "sales_rank": 27,
+      "product_name": "[午时]金银花露 (含糖型)300ml/瓶",
+      "city": "厦门",
+      "barcode": "6911011120233"
+    },
+    {
+      "rank": 23,
+      "sales_rank": 28,
+      "product_name": "[云南白药]云南白药气雾剂 (50g+60g)/盒",
+      "city": "厦门",
+      "barcode": "6901070180163"
+    },
+    {
+      "rank": 24,
+      "sales_rank": 29,
+      "product_name": "[息斯敏]氯雷他定片 10mg*6片/板/盒",
+      "city": "厦门",
+      "barcode": "6921184500060"
+    }
+  ]
+}

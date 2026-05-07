@@ -1,0 +1,14 @@
+{
+  "name": "fuzhou-store-ai-analysis",
+  "version": "1.0.0",
+  "description": "Fuzhou Store AI Analysis System",
+  "main": "server.js",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.18.2",
+    "openai": "^4.20.1"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

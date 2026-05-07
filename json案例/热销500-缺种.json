@@ -1,0 +1,145 @@
+{
+  "page": {
+    "title": "热销TOP500",
+    "module": "hot_sale_top500",
+    "viewType": "missing_category",
+    "search": {
+      "enabled": true,
+      "keyword": ""
+    },
+    "tabs": [
+      { "key": "top500", "label": "TOP500", "active": false },
+      { "key": "in_stock", "label": "有货", "active": false },
+      { "key": "out_of_stock", "label": "缺货", "active": false },
+      { "key": "missing_category", "label": "缺品种", "active": true }
+    ]
+  },
+  "products": [
+    {
+      "rank": 1,
+      "sales_rank": 25,
+      "product_name": "芒硝*5g",
+      "city": "厦门",
+      "barcode": "2700445362"
+    },
+    {
+      "rank": 2,
+      "sales_rank": 32,
+      "product_name": "[东北制药]维生素C片 100mg*100片/瓶",
+      "city": "厦门",
+      "barcode": "9999900000736"
+    },
+    {
+      "rank": 3,
+      "sales_rank": 50,
+      "product_name": "[毓婷]验孕棒人绒毛膜促性腺激素(HCG)检测试剂盒(胶体金法)1人份",
+      "city": "厦门",
+      "barcode": "6953123500145"
+    },
+    {
+      "rank": 4,
+      "sales_rank": 58,
+      "product_name": "[KL]生理氯化钠溶液(500ml:4.5g)*500ml/瓶",
+      "city": "厦门",
+      "barcode": "9999900001462"
+    },
+    {
+      "rank": 5,
+      "sales_rank": 80,
+      "product_name": "[三力]开喉剑喷雾剂(儿童型)15ml/瓶/盒",
+      "city": "厦门",
+      "barcode": "6908641000226"
+    },
+    {
+      "rank": 6,
+      "sales_rank": 94,
+      "product_name": "[999]蒲地蓝消炎片 0.6g*12片*3板/盒",
+      "city": "厦门",
+      "barcode": "6921793021505"
+    },
+    {
+      "rank": 7,
+      "sales_rank": 112,
+      "product_name": "[仁和]阿昔洛韦乳膏 3%(10g:0.3g)*15g/支/盒",
+      "city": "厦门",
+      "barcode": "6930633001645"
+    },
+    {
+      "rank": 8,
+      "sales_rank": 117,
+      "product_name": "[天工]玻璃体温计1支/盒",
+      "city": "厦门",
+      "barcode": "201722006412"
+    },
+    {
+      "rank": 9,
+      "sales_rank": 127,
+      "product_name": "[义水丹]金银花露 340ml/瓶",
+      "city": "厦门",
+      "barcode": "6931398412486"
+    },
+    {
+      "rank": 10,
+      "sales_rank": 128,
+      "product_name": "[海露]玻璃酸钠滴眼液0.1%(10ml:10mg)*10ml/支/盒",
+      "city": "厦门",
+      "barcode": "40207996022051"
+    },
+    {
+      "rank": 11,
+      "sales_rank": 137,
+      "product_name": "[仁和]奥美拉唑肠溶胶囊 20mg*14粒/瓶/盒",
+      "city": "厦门",
+      "barcode": "69516085008021"
+    },
+    {
+      "rank": 12,
+      "sales_rank": 152,
+      "product_name": "[易孚]人表皮生长因子凝胶 5万IU(100μg)/10g/支/盒",
+      "city": "厦门",
+      "barcode": null
+    },
+    {
+      "rank": 13,
+      "sales_rank": 161,
+      "product_name": "[匹可星]地奈德乳膏0.05%(15g:7.5mg)*15g/支/盒",
+      "city": "厦门",
+      "barcode": "6920114800867"
+    },
+    {
+      "rank": 14,
+      "sales_rank": 167,
+      "product_name": "[赣珊瑚]碘伏消毒液100ml/瓶",
+      "city": "厦门",
+      "barcode": "6937534500062"
+    },
+    {
+      "rank": 15,
+      "sales_rank": 171,
+      "product_name": "[维福佳]维生素C片0.1g*100片/瓶",
+      "city": "厦门",
+      "barcode": "9999900000738"
+    },
+    {
+      "rank": 16,
+      "sales_rank": 176,
+      "product_name": "[OKMAN 艾时达]盐酸达泊西汀片30mg*3片*1板/盒",
+      "city": "厦门",
+      "barcode": "6920587908251"
+    },
+    {
+      "rank": 17,
+      "sales_rank": 177,
+      "product_name": "[维福佳]维生素B6片10mg*100片/瓶",
+      "city": "厦门",
+      "barcode": "9999900000731"
+    },
+    {
+      "rank": 18,
+      "sales_rank": 180,
+      "product_name": "[999]感冒清热颗粒12g*18袋/大袋",
+      "city": "厦门",
+      "barcode": null
+    }
+  ]
+}

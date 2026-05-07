@@ -1,0 +1,9 @@
+# 缓存
+/data_cache
+/cache
+
+# 运行文件
+*/node_modules
+
+# 无用文件
+.DS_Store

@@ -1,0 +1,145 @@
+{
+  "page": {
+    "title": "热销TOP500",
+    "module": "hot_sale_top500",
+    "viewType": "out_of_stock",
+    "search": {
+      "enabled": true,
+      "keyword": ""
+    },
+    "tabs": [
+      { "key": "top500", "label": "TOP500", "active": false },
+      { "key": "in_stock", "label": "有货", "active": false },
+      { "key": "out_of_stock", "label": "缺货", "active": true },
+      { "key": "missing_category", "label": "缺品种", "active": false }
+    ]
+  },
+  "products": [
+    {
+      "rank": 1,
+      "sales_rank": 20,
+      "product_name": "[云南白药]创可贴(轻巧护翼型)1.5cm*2.3cm*20片/盒",
+      "city": "厦门",
+      "barcode": "6940756220113"
+    },
+    {
+      "rank": 2,
+      "sales_rank": 23,
+      "product_name": "[两只老虎]壮骨麝香止痛膏(7cm*10cm)*10贴/袋",
+      "city": "厦门",
+      "barcode": "6920568400019"
+    },
+    {
+      "rank": 3,
+      "sales_rank": 24,
+      "product_name": "[云丰]蒲地蓝消炎片(薄膜衣片)0.3g*24片*2板/盒",
+      "city": "厦门",
+      "barcode": "6901070385537"
+    },
+    {
+      "rank": 4,
+      "sales_rank": 26,
+      "product_name": "[仁和]阿莫西林胶囊 0.25g*10粒*4板/盒",
+      "city": "厦门",
+      "barcode": "6940200200678"
+    },
+    {
+      "rank": 5,
+      "sales_rank": 35,
+      "product_name": "[思密达]蒙脱石散(草莓味)3g*10袋/盒",
+      "city": "厦门",
+      "barcode": "6932833600109"
+    },
+    {
+      "rank": 6,
+      "sales_rank": 45,
+      "product_name": "[康恩贝]肠炎宁片 0.42g*12片*3板/盒",
+      "city": "厦门",
+      "barcode": null
+    },
+    {
+      "rank": 7,
+      "sales_rank": 47,
+      "product_name": "[仁和]人工牛黄甲硝唑胶囊 12粒*2板/盒",
+      "city": "厦门",
+      "barcode": "6930397802458"
+    },
+    {
+      "rank": 8,
+      "sales_rank": 52,
+      "product_name": "[济川药业]蒲地蓝消炎口服液 10ml*10支/盒",
+      "city": "厦门",
+      "barcode": "6952764601068"
+    },
+    {
+      "rank": 9,
+      "sales_rank": 59,
+      "product_name": "[新必奇]蒙脱石散 3g*15袋/盒",
+      "city": "厦门",
+      "barcode": "6920209687779"
+    },
+    {
+      "rank": 10,
+      "sales_rank": 62,
+      "product_name": "[托百士]妥布霉素滴眼液 0.3%*5ml/瓶/盒",
+      "city": "厦门",
+      "barcode": "9999900000697"
+    },
+    {
+      "rank": 11,
+      "sales_rank": 68,
+      "product_name": "[欧洁]医用碘伏棉棒(定量充填型)80mm*20支/盒",
+      "city": "厦门",
+      "barcode": "6920142800112"
+    },
+    {
+      "rank": 12,
+      "sales_rank": 106,
+      "product_name": "[信龙]开塞露(含甘油)20ml/支(整盒拆零)",
+      "city": "厦门",
+      "barcode": "69243645355481"
+    },
+    {
+      "rank": 13,
+      "sales_rank": 118,
+      "product_name": "[宝宝一贴灵]丁桂儿脐贴1.6g*5贴/盒",
+      "city": "厦门",
+      "barcode": "6916107519922"
+    },
+    {
+      "rank": 14,
+      "sales_rank": 119,
+      "product_name": "[拜敏]氯雷他定片 10mg*10片/盒",
+      "city": "厦门",
+      "barcode": "6935440201684"
+    },
+    {
+      "rank": 15,
+      "sales_rank": 121,
+      "product_name": "[奥美医疗]无菌棉签(Ⅱ型)(单头)(竹棒)10cm*50支/袋",
+      "city": "厦门",
+      "barcode": "6941558017536"
+    },
+    {
+      "rank": 16,
+      "sales_rank": 125,
+      "product_name": "[汤臣倍健]褪黑素片 24g(400mg*60片)/瓶",
+      "city": "厦门",
+      "barcode": "6940863607982"
+    },
+    {
+      "rank": 17,
+      "sales_rank": 129,
+      "product_name": "[洛芙]联苯苄唑溶液(25ml:250mg)*60ml/瓶/盒",
+      "city": "厦门",
+      "barcode": "6909401300105"
+    },
+    {
+      "rank": 18,
+      "sales_rank": 130,
+      "product_name": "[三力制药]开喉剑喷雾剂 20ml/瓶/盒",
+      "city": "厦门",
+      "barcode": null
+    }
+  ]
+}

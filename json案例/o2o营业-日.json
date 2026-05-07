@@ -1,0 +1,115 @@
+{
+  "page": {
+    "title": "O2O营业汇总:湖里分公司",
+    "module": "o2o_business_summary",
+    "viewType": "day",
+    "selectedDate": "2026-05-07",
+    "tabs": [
+      { "key": "7days", "label": "7日", "active": false },
+      { "key": "day", "label": "日", "active": true },
+      { "key": "month", "label": "月", "active": false }
+    ]
+  },
+  "businessTable": {
+    "title": "门店营业数据",
+    "granularity": "day",
+    "columns": [
+      { "key": "period", "label": "日期" },
+      { "key": "total_order_count", "label": "总单数", "unit": "单" },
+      { "key": "total_revenue", "label": "总营业额", "unit": "元" },
+      { "key": "gross_profit", "label": "毛利", "unit": "元" },
+      { "key": "gross_margin", "label": "总毛利率", "unit": "%" },
+      { "key": "meituan_order_count", "label": "美团单", "unit": "单" },
+      { "key": "eleme_order_count", "label": "饿了单", "unit": "单" },
+      { "key": "meituan_revenue", "label": "美团营业", "unit": "元" },
+      { "key": "eleme_revenue", "label": "饿了营业", "unit": "元" },
+      { "key": "avg_order_value", "label": "客单价", "unit": "元" }
+    ],
+    "rows": [
+      {
+        "period": "2026-05-01",
+        "total_order_count": 83,
+        "total_revenue": 2467.48,
+        "gross_profit": 465.51,
+        "gross_margin": 19,
+        "meituan_order_count": 65,
+        "eleme_order_count": 18,
+        "meituan_revenue": 1966.55,
+        "eleme_revenue": 500.93,
+        "avg_order_value": 29.73
+      },
+      {
+        "period": "2026-05-02",
+        "total_order_count": 92,
+        "total_revenue": 2793.98,
+        "gross_profit": 472.33,
+        "gross_margin": 17,
+        "meituan_order_count": 68,
+        "eleme_order_count": 24,
+        "meituan_revenue": 2023.23,
+        "eleme_revenue": 770.75,
+        "avg_order_value": 30.37
+      },
+      {
+        "period": "2026-05-03",
+        "total_order_count": 86,
+        "total_revenue": 2677.44,
+        "gross_profit": 477.77,
+        "gross_margin": 18,
+        "meituan_order_count": 67,
+        "eleme_order_count": 19,
+        "meituan_revenue": 2132.02,
+        "eleme_revenue": 545.42,
+        "avg_order_value": 31.13
+      },
+      {
+        "period": "2026-05-04",
+        "total_order_count": 84,
+        "total_revenue": 2706.56,
+        "gross_profit": 502.03,
+        "gross_margin": 19,
+        "meituan_order_count": 58,
+        "eleme_order_count": 26,
+        "meituan_revenue": 1895.47,
+        "eleme_revenue": 811.09,
+        "avg_order_value": 32.22
+      },
+      {
+        "period": "2026-05-05",
+        "total_order_count": 75,
+        "total_revenue": 2222.67,
+        "gross_profit": 429.03,
+        "gross_margin": 19,
+        "meituan_order_count": 51,
+        "eleme_order_count": 24,
+        "meituan_revenue": 1621.15,
+        "eleme_revenue": 601.52,
+        "avg_order_value": 29.64
+      },
+      {
+        "period": "2026-05-06",
+        "total_order_count": 58,
+        "total_revenue": 1666.37,
+        "gross_profit": 231.15,
+        "gross_margin": 14,
+        "meituan_order_count": 46,
+        "eleme_order_count": 12,
+        "meituan_revenue": 1315.27,
+        "eleme_revenue": 351.1,
+        "avg_order_value": 28.73
+      },
+      {
+        "period": "2026-05-07",
+        "total_order_count": 50,
+        "total_revenue": 1449.96,
+        "gross_profit": 266.95,
+        "gross_margin": 18,
+        "meituan_order_count": 37,
+        "eleme_order_count": 13,
+        "meituan_revenue": 1045.42,
+        "eleme_revenue": 404.54,
+        "avg_order_value": 29
+      }
+    ]
+  }
+}

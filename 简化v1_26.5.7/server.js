@@ -169,25 +169,29 @@ async function handleRun(req, res) {
         };
 
         const algoFlow = async () => {
-            const jsonDir = path.join(__dirname, '..', 'json案例');
-            const loadJson = (filename) => {
-                try { return JSON.parse(fs.readFileSync(path.join(jsonDir, filename), 'utf-8')); }
-                catch { return null; }
+            const pickModule = (module, viewType = null) => {
+                const list = (jsonList || []).filter(j => j?.page?.module === module);
+                if (list.length === 0) return null;
+                if (!viewType) return list[0];
+                return list.find(j => j?.page?.viewType === viewType) || null;
             };
 
             // ── alg1: 数据整理 ──
             sendStatus('alg1', 'active');
-            sendLog('alg1', '加载 JSON 数据源...');
+            sendLog('alg1', '从用户导入文件中加载 JSON 数据源...');
 
-            const overviewDay   = loadJson('概览-日.json');
-            const overviewMonth = loadJson('概览-月.json');
-            const hotToday      = loadJson('店热销-今.json');
-            const hotYesterday  = loadJson('店热销-昨.json');
-            const hotWeek       = loadJson('店热销-周.json');
-            const hotMonth      = loadJson('店热销.月.json');
-            const top500Out     = loadJson('热销500-缺货.json');
+            const overviewDay   = pickModule('business_overview', 'day');
+            const overviewMonth = pickModule('business_overview', 'month');
+            const o2oDay        = pickModule('o2o_business_summary', 'day');
+            const hotToday      = pickModule('operation_hot_products', 'today');
+            const hotYesterday  = pickModule('operation_hot_products', 'yesterday');
+            const hotWeek       = pickModule('operation_hot_products', '7days');
+            const hotMonth      = pickModule('operation_hot_products', '30days');
+            const top500Total   = pickModule('hot_sale_top500', 'top500');
+            const top500Out     = pickModule('hot_sale_top500', 'out_of_stock');
+            const top500Missing = pickModule('hot_sale_top500', 'missing_category');
 
-            const sources = { overviewDay, overviewMonth, hotToday, hotYesterday, hotWeek, hotMonth, top500Out };
+            const sources = { overviewDay, overviewMonth, o2oDay, hotToday, hotYesterday, hotWeek, hotMonth, top500Total, top500Out, top500Missing };
             const loadedCount = Object.values(sources).filter(Boolean).length;
             sendLog('alg1', `  成功加载 ${loadedCount}/${Object.keys(sources).length} 个数据源`);
 
@@ -202,6 +206,29 @@ async function handleRun(req, res) {
             if (hotWeek)      { hotNorm.week = metrics.normalizeHotProducts(hotWeek);           sendLog('alg1', '  ✓ 店热销-周 已规范化'); }
             if (hotMonth)     { hotNorm.month = metrics.normalizeHotProducts(hotMonth);         sendLog('alg1', '  ✓ 店热销-月 已规范化'); }
 
+            const o2oRows = o2oDay?.businessTable?.rows || [];
+            const latestO2ORow = o2oRows.length ? o2oRows[o2oRows.length - 1] : null;
+            const latestDayRow = dayRows?.[0] || null;
+            const previousDayRow = dayRows?.[1] || null;
+            const baselineAvgOrder = dayRows && dayRows.length > 1
+                ? dayRows.slice(1).reduce((sum, r) => sum + (r.visitorCount > 0 ? r.revenue / r.visitorCount : 0), 0) / (dayRows.length - 1)
+                : null;
+            const overallAvgOrder = latestDayRow && latestDayRow.visitorCount > 0 ? latestDayRow.revenue / latestDayRow.visitorCount : null;
+            const memberAvgOrder = (overviewDay?.summary?.metrics || []).find(m => m.key === 'member_avg_order_value')?.value ?? null;
+            const memberRevenue = (overviewDay?.summary?.metrics || []).find(m => m.key === 'member_revenue')?.value ?? latestDayRow?.memberAmount ?? null;
+            const totalRevenue = latestDayRow?.revenue ?? (overviewDay?.summary?.metrics || []).find(m => m.key === 'revenue')?.value ?? null;
+            const o2oRevenue = latestO2ORow?.total_revenue ?? null;
+            const top500TotalProducts = top500Total?.products || [];
+            const top500OutProducts = top500Out?.products || [];
+            const top500MissingProducts = top500Missing?.products || [];
+            const revenueChangeRes = metrics.calcRevenueChange(dayRows);
+            const revenueConsecutiveRes = metrics.calcConsecutiveChange(dayRows, 'revenue');
+            const o2oTrendRevenueRes = metrics.calcO2OTrend(o2oRows, 'total_revenue');
+            const o2oChangeValues = o2oTrendRevenueRes?.changes?.map(c => c.changePct) || [];
+            const o2oVolatility = o2oChangeValues.length > 1
+                ? Math.sqrt(o2oChangeValues.reduce((sum, v) => sum + (v ** 2), 0) / o2oChangeValues.length) / 100
+                : null;
+
             await sleep(200);
             sendStatus('alg1', 'success');
 
@@ -212,14 +239,48 @@ async function handleRun(req, res) {
             // 准备指标任务列表 — 全部注册，缺数据时函数自行返回 uncountable
             const metricTasks = [];
             const metricResults = {};
+            const metricResultsAll = {};
+            const metricsSkippedToNext = [];
 
             metricTasks.push({ name: 'calcChannelMix (渠道结构)', fn: () => metrics.calcChannelMix(overviewDay?.sourceDistribution) });
+            metricTasks.push({ name: 'calcGrossMargin (毛利率)', fn: () => metrics.calcGrossMargin(latestDayRow?.grossProfit, latestDayRow?.revenue) });
+            metricTasks.push({ name: 'calcAvgOrderValue (客单价)', fn: () => metrics.calcAvgOrderValue(latestDayRow?.revenue, latestDayRow?.visitorCount, baselineAvgOrder) });
+            metricTasks.push({ name: 'calcMemberPenetration (会员渗透率)', fn: () => metrics.calcMemberPenetration(memberRevenue, totalRevenue) });
+            metricTasks.push({ name: 'calcMemberVsOverall (会员客单价对比)', fn: () => metrics.calcMemberVsOverall(memberAvgOrder, overallAvgOrder) });
             metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-营收)', fn: () => metrics.calcConsecutiveChange(dayRows, 'revenue') });
             metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-来客)', fn: () => metrics.calcConsecutiveChange(dayRows, 'visitorCount') });
             metricTasks.push({ name: 'calcGrossMarginTrend (毛利率趋势)', fn: () => metrics.calcGrossMarginTrend(monthRows) });
+            metricTasks.push({ name: 'calcPlatformConcentration (平台集中度)', fn: () => metrics.calcPlatformConcentration(latestO2ORow) });
+            metricTasks.push({ name: 'calcO2OGrossMargin (O2O毛利率)', fn: () => metrics.calcO2OGrossMargin(latestO2ORow) });
+            metricTasks.push({ name: 'calcO2OTrend (O2O营收趋势)', fn: () => o2oTrendRevenueRes });
+            metricTasks.push({ name: 'calcO2OvsTotal (O2O占整体营收比)', fn: () => metrics.calcO2OvsTotal(o2oRevenue, totalRevenue) });
+            metricTasks.push({ name: 'calcHotProductConcentration (热销集中度)', fn: () => metrics.calcHotProductConcentration(hotNorm?.today) });
             metricTasks.push({ name: 'calcProductStability (爆品稳定性)', fn: () => metrics.calcProductStability(hotNorm) });
             metricTasks.push({ name: 'calcHighRankStockoutAlert (缺货预警)', fn: () => metrics.calcHighRankStockoutAlert(top500Out?.products) });
+            metricTasks.push({ name: 'calcStockoutRate (缺货率)', fn: () => metrics.calcStockoutRate(top500TotalProducts, top500OutProducts) });
+            metricTasks.push({ name: 'calcMissingCategoryRate (缺种率)', fn: () => metrics.calcMissingCategoryRate(top500TotalProducts, top500MissingProducts) });
+            metricTasks.push({ name: 'calcActiveSKUCount (动销SKU数)', fn: () => metrics.calcActiveSKUCount(hotNorm?.today) });
+            metricTasks.push({ name: 'detectConsecutiveDecline (连续下滑预警)', fn: () => metrics.detectConsecutiveDecline(dayRows, 'revenue') });
+            metricTasks.push({ name: 'detectLowMemberAlert (会员异常低预警)', fn: () => metrics.detectLowMemberAlert(memberRevenue, totalRevenue) });
+            metricTasks.push({ name: 'detectChannelImbalance (渠道失衡预警)', fn: () => metrics.detectChannelImbalance(metrics.calcChannelMix(overviewDay?.sourceDistribution)) });
+            metricTasks.push({ name: 'prepareStoreStatusLabel (门店状态标签预判)', fn: () => metrics.prepareStoreStatusLabel({
+                revenueChange: revenueChangeRes.status === 'uncountable' ? null : revenueChangeRes.changePct,
+                grossMarginChange: (latestDayRow?.revenue > 0 && previousDayRow?.revenue > 0)
+                    ? (((latestDayRow.grossProfit / latestDayRow.revenue) - (previousDayRow.grossProfit / previousDayRow.revenue)) * 100)
+                    : null,
+                visitorChange: previousDayRow?.visitorCount > 0 ? ((latestDayRow.visitorCount - previousDayRow.visitorCount) / previousDayRow.visitorCount) * 100 : null,
+                avgOrderChange: previousDayRow?.visitorCount > 0 && latestDayRow?.visitorCount > 0
+                    ? (((latestDayRow.revenue / latestDayRow.visitorCount) - (previousDayRow.revenue / previousDayRow.visitorCount)) / (previousDayRow.revenue / previousDayRow.visitorCount)) * 100
+                    : null,
+                memberPenetration: totalRevenue > 0 ? (memberRevenue / totalRevenue) * 100 : null,
+                ecommerceRatio: totalRevenue > 0 ? ((latestDayRow?.ecommerceAmount || 0) / totalRevenue) * 100 : null,
+                consecutiveDecline: revenueConsecutiveRes.status === 'uncountable'
+                    ? null
+                    : (revenueConsecutiveRes.direction === 'down' ? revenueConsecutiveRes.consecutiveDays : 0),
+                volatility: o2oTrendRevenueRes.status === 'uncountable' ? null : o2oVolatility
+            }) });
             // B类
+            metricTasks.push({ name: 'calcRevenueChange (营收环比)', fn: () => revenueChangeRes });
             metricTasks.push({ name: 'prepareGrowthDecomposition (增长拆解)', fn: () => metrics.prepareGrowthDecomposition(dayRows) });
             metricTasks.push({ name: 'prepareStockoutLossEstimate (缺货损失)', fn: () => metrics.prepareStockoutLossEstimate(top500Out?.products, 35) });
 
@@ -230,13 +291,21 @@ async function handleRun(req, res) {
                 const statusIcon = result.status === 'warning' ? '🔴' :
                                    result.status === 'attention' ? '🟡' :
                                    result.status === 'uncountable' ? '⚪' : '🟢';
-                metricResults[task.name] = result;
+                metricResultsAll[task.name] = result;
+                if (result.status !== 'uncountable') {
+                    metricResults[task.name] = result;
+                } else {
+                    metricsSkippedToNext.push(task.name);
+                }
                 sendLog('alg2', `  [${i + 1}/${total}] ${statusIcon} ${task.name} → ${result.status}`);
                 // 发送进度事件
                 sendProgress('alg2', i + 1, total);
                 await sleep(150);  // 略微延迟让前端看到逐条更新
             }
 
+            if (metricsSkippedToNext.length > 0) {
+                sendLog('alg2', `  ⚪ uncountable 不下传: ${metricsSkippedToNext.length} 项`);
+            }
             sendLog('alg2', `完成: ${total} 个指标已计算`);
             sendStatus('alg2', 'success');
 
@@ -247,7 +316,10 @@ async function handleRun(req, res) {
             // B3: prepareAnomalySummary — 整合所有结果
             const anomalySummary = metrics.prepareAnomalySummary(metricResults);
             anomalySummaryData = anomalySummary;
-            const tally = anomalySummary.aiPromptData?.tally || { pass: 0, attention: 0, warning: 0, uncountable: 0 };
+            const tally = {
+                ...(anomalySummary.aiPromptData?.tally || { pass: 0, attention: 0, warning: 0, uncountable: 0 }),
+                uncountable: Object.values(metricResultsAll).filter(r => r.status === 'uncountable').length
+            };
 
             sendLog('alg3', `  🟢 pass: ${tally.pass}`);
             sendLog('alg3', `  🟡 attention: ${tally.attention}`);

@@ -142,6 +142,12 @@ nav a.active {
     color: #b45309;
 }
 
+.node.uncountable {
+    background: #f8fafc;
+    border-color: #94a3b8;
+    color: #64748b;
+}
+
 .connector {
     height: 1px;
     background: var(--border);
@@ -349,6 +355,7 @@ nav a.active {
 .log-dot.dot-success { background: var(--success); }
 .log-dot.dot-simulated { background: #f59e0b; }
 .log-dot.dot-error { background: var(--error); }
+.log-dot.dot-uncountable { background: #94a3b8; }
 
 @keyframes pulse {
     0%, 100% { opacity: 1; }

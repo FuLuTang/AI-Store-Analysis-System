@@ -210,8 +210,11 @@ async function handleRun(req, res) {
             const latestO2ORow = o2oRows.length ? o2oRows[o2oRows.length - 1] : null;
             const latestDayRow = dayRows?.[0] || null;
             const previousDayRow = dayRows?.[1] || null;
-            const baselineAvgOrder = dayRows && dayRows.length > 1
-                ? dayRows.slice(1).reduce((sum, r) => sum + (r.visitorCount > 0 ? r.revenue / r.visitorCount : 0), 0) / (dayRows.length - 1)
+            const baselineRows = dayRows && dayRows.length > 1
+                ? dayRows.slice(1).filter(r => r?.visitorCount > 0)
+                : [];
+            const baselineAvgOrder = baselineRows.length > 0
+                ? baselineRows.reduce((sum, r) => sum + (r.revenue / r.visitorCount), 0) / baselineRows.length
                 : null;
             const overallAvgOrder = latestDayRow && latestDayRow.visitorCount > 0 ? latestDayRow.revenue / latestDayRow.visitorCount : null;
             const memberAvgOrder = (overviewDay?.summary?.metrics || []).find(m => m.key === 'member_avg_order_value')?.value ?? null;
@@ -318,6 +321,7 @@ async function handleRun(req, res) {
             anomalySummaryData = anomalySummary;
             const tally = {
                 ...(anomalySummary.aiPromptData?.tally || { pass: 0, attention: 0, warning: 0, uncountable: 0 }),
+                // uncountable 不下传到下一层，因此这里按全量指标重新统计用于监控展示
                 uncountable: Object.values(metricResultsAll).filter(r => r.status === 'uncountable').length
             };
 

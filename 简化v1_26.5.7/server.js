@@ -234,15 +234,42 @@ async function handleRun(req, res) {
                 ? baselineRows.reduce((sum, r) => sum + (r.revenue / r.visitorCount), 0) / baselineRows.length
                 : null;
             const overallAvgOrder = latestDayRow && latestDayRow.visitorCount > 0 ? latestDayRow.revenue / latestDayRow.visitorCount : null;
-            const memberAvgOrder = (overviewForRealtime?.summary?.metrics || []).find(m => m.key === 'member_avg_order_value')?.value ?? null;
-            const memberRevenue = (overviewForRealtime?.summary?.metrics || []).find(m => m.key === 'member_revenue')?.value ?? latestDayRow?.memberAmount ?? null;
-            const totalRevenue = latestDayRow?.revenue ?? (overviewForRealtime?.summary?.metrics || []).find(m => m.key === 'revenue')?.value ?? null;
+            const summaryMetrics = overviewForRealtime?.summary?.metrics || [];
+            const findMetric = key => summaryMetrics.find(m => m.key === key) || null;
+            const metricValue = key => findMetric(key)?.value ?? null;
+            const metricMom = key => {
+                const metric = findMetric(key);
+                return metric?.mom?.value ?? metric?.compare?.value ?? null;
+            };
+            const memberAvgOrder = metricValue('member_avg_order_value');
+            const memberRevenue = metricValue('member_revenue') ?? latestDayRow?.memberAmount ?? null;
+            const totalRevenue = latestDayRow?.revenue ?? metricValue('revenue') ?? null;
+            const previousMemberRevenue = previousDayRow?.memberAmount ?? null;
+            const memberChangePct = previousMemberRevenue > 0
+                ? ((memberRevenue - previousMemberRevenue) / previousMemberRevenue) * 100
+                : metricMom('member_revenue');
+            const memberOrderCount = metricValue('member_order_count');
+            const memberOrderChangePct = metricMom('member_order_count');
+            const memberGrossMarginPct = memberRevenue > 0 && latestDayRow?.memberGrossProfit != null
+                ? (latestDayRow.memberGrossProfit / memberRevenue) * 100
+                : metricValue('member_gross_margin');
+            const overallGrossMarginPct = latestDayRow?.revenue > 0
+                ? (latestDayRow.grossProfit / latestDayRow.revenue) * 100
+                : null;
+            const revenueChangePctForQuality = previousDayRow?.revenue > 0
+                ? ((latestDayRow.revenue - previousDayRow.revenue) / previousDayRow.revenue) * 100
+                : null;
+            const grossProfitChangePctForQuality = previousDayRow?.grossProfit > 0
+                ? ((latestDayRow.grossProfit - previousDayRow.grossProfit) / previousDayRow.grossProfit) * 100
+                : null;
             const o2oRevenue = latestO2ORow?.total_revenue ?? null;
             const top500TotalProducts = top500Total?.products || [];
             const top500OutProducts = top500Out?.products || [];
             const top500MissingProducts = top500Missing?.products || [];
             const revenueChangeRes = metrics.calcRevenueChange(realtimeRows);
             const revenueConsecutiveRes = metrics.calcConsecutiveChange(realtimeRows, 'revenue');
+            const channelMixRes = metrics.calcChannelMix(overviewForRealtime?.sourceDistribution);
+            const platformConcentrationRes = metrics.calcPlatformConcentration(latestO2ORow);
             const o2oTrendRevenueRes = metrics.calcO2OTrend(o2oRows, 'total_revenue');
             const o2oChangeValues = o2oTrendRevenueRes?.changes?.map(c => c.changePct) || [];
             const o2oVolatility = o2oChangeValues.length > 1
@@ -262,7 +289,7 @@ async function handleRun(req, res) {
             const metricResultsAll = {};
             const metricsSkippedToNext = [];
 
-            metricTasks.push({ name: 'calcChannelMix (渠道结构)', fn: () => metrics.calcChannelMix(overviewForRealtime?.sourceDistribution) });
+            metricTasks.push({ name: 'calcChannelMix (渠道结构)', fn: () => channelMixRes });
             metricTasks.push({ name: 'calcGrossMargin (毛利率)', fn: () => metrics.calcGrossMargin(latestDayRow?.grossProfit, latestDayRow?.revenue) });
             metricTasks.push({ name: 'calcAvgOrderValue (客单价)', fn: () => metrics.calcAvgOrderValue(latestDayRow?.revenue, latestDayRow?.visitorCount, baselineAvgOrder) });
             metricTasks.push({ name: 'calcMemberPenetration (会员渗透率)', fn: () => metrics.calcMemberPenetration(memberRevenue, totalRevenue) });
@@ -270,7 +297,7 @@ async function handleRun(req, res) {
             metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-营收)', fn: () => metrics.calcConsecutiveChange(realtimeRows, 'revenue') });
             metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-来客)', fn: () => metrics.calcConsecutiveChange(realtimeRows, 'visitorCount') });
             metricTasks.push({ name: 'calcGrossMarginTrend (毛利率趋势)', fn: () => metrics.calcGrossMarginTrend(trendRows) });
-            metricTasks.push({ name: 'calcPlatformConcentration (平台集中度)', fn: () => metrics.calcPlatformConcentration(latestO2ORow) });
+            metricTasks.push({ name: 'calcPlatformConcentration (平台集中度)', fn: () => platformConcentrationRes });
             metricTasks.push({ name: 'calcO2OGrossMargin (O2O毛利率)', fn: () => metrics.calcO2OGrossMargin(latestO2ORow) });
             metricTasks.push({ name: 'calcO2OTrend (O2O营收趋势)', fn: () => o2oTrendRevenueRes });
             metricTasks.push({ name: 'calcO2OvsTotal (O2O占整体营收比)', fn: () => metrics.calcO2OvsTotal(o2oRevenue, totalRevenue) });
@@ -282,7 +309,7 @@ async function handleRun(req, res) {
             metricTasks.push({ name: 'calcActiveSKUCount (动销SKU数)', fn: () => metrics.calcActiveSKUCount(hotNorm?.today) });
             metricTasks.push({ name: 'detectConsecutiveDecline (连续下滑预警)', fn: () => metrics.detectConsecutiveDecline(realtimeRows, 'revenue') });
             metricTasks.push({ name: 'detectLowMemberAlert (会员异常低预警)', fn: () => metrics.detectLowMemberAlert(memberRevenue, totalRevenue) });
-            metricTasks.push({ name: 'detectChannelImbalance (渠道失衡预警)', fn: () => metrics.detectChannelImbalance(metrics.calcChannelMix(overviewForRealtime?.sourceDistribution)) });
+            metricTasks.push({ name: 'detectChannelImbalance (渠道失衡预警)', fn: () => metrics.detectChannelImbalance(channelMixRes) });
             metricTasks.push({ name: 'prepareStoreStatusLabel (门店状态标签预判)', fn: () => metrics.prepareStoreStatusLabel({
                 revenueChange: revenueChangeRes.status === 'uncountable' ? null : revenueChangeRes.changePct,
                 grossMarginChange: (latestDayRow?.revenue > 0 && previousDayRow?.revenue > 0)
@@ -302,7 +329,29 @@ async function handleRun(req, res) {
             // B类
             metricTasks.push({ name: 'calcRevenueChange (营收环比)', fn: () => revenueChangeRes });
             metricTasks.push({ name: 'prepareGrowthDecomposition (增长拆解)', fn: () => metrics.prepareGrowthDecomposition(realtimeRows) });
+            metricTasks.push({ name: 'prepareSalesQualityCheck (销售质量)', fn: () => metrics.prepareSalesQualityCheck({
+                revenueChangePct: revenueChangePctForQuality,
+                grossProfitChangePct: grossProfitChangePctForQuality,
+                grossMarginCurrent: overallGrossMarginPct,
+                grossMarginPrevious: previousDayRow?.revenue > 0 ? (previousDayRow.grossProfit / previousDayRow.revenue) * 100 : null
+            }) });
+            metricTasks.push({ name: 'prepareMemberHealthCheck (会员健康)', fn: () => metrics.prepareMemberHealthCheck({
+                memberRevenue,
+                memberChangePct,
+                memberOrderCount,
+                memberOrderChangePct,
+                memberAvgOrder,
+                memberGrossMarginPct,
+                totalRevenue,
+                overallAvgOrder,
+                overallGrossMarginPct
+            }) });
             metricTasks.push({ name: 'prepareStockoutLossEstimate (缺货损失)', fn: () => metrics.prepareStockoutLossEstimate(top500Out?.products, 35) });
+            metricTasks.push({ name: 'prepareChannelRiskAssessment (渠道风险)', fn: () => metrics.prepareChannelRiskAssessment({
+                channelMix: channelMixRes,
+                o2oTrend: o2oTrendRevenueRes,
+                platformConcentration: platformConcentrationRes
+            }) });
 
             const total = metricTasks.length;
             for (let i = 0; i < total; i++) {

@@ -185,7 +185,7 @@ async function handleRun(req, res) {
 
             const overviewDay   = pickModule('business_overview', 'day');
             const overviewMonth = pickModule('business_overview', 'month');
-            const overviewDefault = pickModule('business_overview');
+            const overviewFallback = pickModule('business_overview');
             const o2oDay        = pickModule('o2o_business_summary', 'day');
             const hotToday      = pickModule('operation_hot_products', 'today');
             const hotYesterday  = pickModule('operation_hot_products', 'yesterday');
@@ -199,10 +199,10 @@ async function handleRun(req, res) {
             const loadedCount = Object.values(sources).filter(Boolean).length;
             sendLog('alg1', `  成功加载 ${loadedCount}/${Object.keys(sources).length} 个数据源`);
 
-            const overviewForRealtime = overviewDay || overviewMonth || overviewDefault;
-            const overviewForTrend = overviewMonth || overviewDay || overviewDefault;
-            const getOverviewGranularity = overview => overview?.page?.viewType || 'unknown';
-            if (!overviewDay && !overviewMonth && overviewDefault) {
+            const overviewForRealtime = overviewDay || overviewMonth || overviewFallback;
+            const overviewForTrend = overviewMonth || overviewDay || overviewFallback;
+            const getOverviewViewType = overview => overview?.page?.viewType || 'unknown';
+            if (!overviewDay && !overviewMonth && overviewFallback) {
                 sendLog('alg1', '  ⚠ 未找到概览-日/月，回退使用默认概览数据');
             }
 
@@ -210,11 +210,11 @@ async function handleRun(req, res) {
             let realtimeRows = null, trendRows = null;
             if (overviewForRealtime) {
                 realtimeRows = metrics.normalizeOverviewRows(overviewForRealtime);
-                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewGranularity(overviewForRealtime)} 数据`);
+                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewViewType(overviewForRealtime)} 数据`);
             }
             if (overviewForTrend) {
                 trendRows = metrics.normalizeOverviewRows(overviewForTrend);
-                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewGranularity(overviewForTrend)} 数据`);
+                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewViewType(overviewForTrend)} 数据`);
             }
 
             let hotNorm = {};

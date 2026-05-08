@@ -86,7 +86,7 @@ async function callAI(settings, cleanedDataTexts, algoData) {
                 ],
                 reasoning_effort: "medium",
                 temperature: 0.3,
-                max_tokens: 8192
+                max_tokens: 16384
             })
     });
 
@@ -107,12 +107,19 @@ const DETAILED_SYSTEM_PROMPT = `
 
 你的任务：
 基于这些融合信息，深度重写并输出一份【更详细、结构更严谨的最终经营诊断报告】。
+
+注意：
+- 初级报告中可能存在谬误，请务必结合评审意见进行核对
+- “指标”是用来补充初级报告中未发现的问题的，主要是看给出的数据和二次计算出的信息。
+- “指标”中的结果很可能和初级报告有冲突，请自行判断并融合
+
 你需要：
 - 纠正初级报告中被“错误评审”指出的逻辑或计算谬误。
 - 结合“异常检测日志”，挖掘更深层次的业务根因。
 - 提供更加具体、可落地的优化行动方案。
 - 保持专业的商业分析语调。
 - 格式化输出，采用合适的标题、列表和加粗，让重点一目了然。
+- 结尾不需要“如果你愿意，我可以帮你...”等字样
 `;
 
 async function callDetailedAI(settings, fusedReportText) {
@@ -147,7 +154,7 @@ async function callDetailedAI(settings, fusedReportText) {
             ],
             reasoning_effort: "medium",
             temperature: 0.4,
-            max_tokens: 8192
+            max_tokens: 16384
         })
     });
 
@@ -160,4 +167,73 @@ async function callDetailedAI(settings, fusedReportText) {
     return data;
 }
 
-module.exports = { callAI, callDetailedAI };
+const SIMPLIFIED_SYSTEM_PROMPT = `
+你是一位资深连锁药店经营分析顾问，你的任务是为管理层（老板）提供一份“一眼定真问题”的【精简诊断报告】。
+你将收到一份经过深度分析的详细报告。请提取最核心的信息，并严格按照以下 JSON 格式输出，不要包含任何其他字符或 Markdown 格式（不要包含 \`\`\`json）：
+
+{
+  "health_status": "这里填1-2个词的整体状态，如：健康 / 波动下 / 季节性影响 / 需紧急干预",
+  "overview_text": "用一句大白话总结门店当前的整体经营状况，突出最关键的结论。",
+  "cards": [
+    {
+      "title": "问题标题（如：客流严重下滑问题；需要紧急补货；注意毛利下降；爆品的连带效应）",
+      "explanation": "大白话大概说说怎么回事，发生了什么，为什么。",
+      "suggestion": "咋办（具体的行动建议）。",
+      "evidence": "相关数据（解释来由，怎么分析出来的，给出证据，可以是带重点数据的一句话或列表）。",
+      "color": "体现问题严重性，可选值：red(严重警告), yellow(需要注意), green(表现良好), blue(中性信息)"
+    }
+  ]
+}
+
+要求：
+1. cards 最多只能有 7 个，提取最严重或最值得关注的点。没问题的不需要强行凑数展示。
+2. 语言必须是大白话，让老板能看懂。
+3. color 的选择：跌得很惨/缺货用 red，轻微下滑/潜在风险用 yellow，涨得好用 green，正常情况介绍用 blue。
+`;
+
+async function callSimplifiedAI(settings, detailedReportText) {
+    const { baseUrl, apiKey, model } = settings;
+
+    // 构建基础上下文信息
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+    const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+    const contextHeader = `【当前分析环境】
+- 城市：福州
+- 日期：${dateStr}
+- 时间：${timeStr}
+`;
+
+    const userContent = contextHeader + '\n\n【详细报告内容】\n' + detailedReportText;
+
+    const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model,
+            messages: [
+                { role: 'system', content: SIMPLIFIED_SYSTEM_PROMPT },
+                { role: 'user', content: userContent }
+            ],
+            response_format: { type: "json_object" },
+            temperature: 0.3,
+            max_tokens: 4000
+        })
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`精简报告 AI API 调用失败 (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    return data;
+}
+
+module.exports = { callAI, callDetailedAI, callSimplifiedAI };

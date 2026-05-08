@@ -66,6 +66,10 @@ async function handleRun(req, res) {
         // 1. JSON 传入
         sendStatus('input', 'active');
         sendLog('input', `收到 ${jsonList.length} 个 JSON 文件`);
+        
+        // 每次重新生成之前，先清理缓存
+        sendLog('input', '清理旧缓存目录...');
+        cleaner.clearCache(CACHE_DIR);
         jsonList.forEach((j, i) => {
             sendLog('input', `  [${i}] ${j.page?.module || '?'} - ${j.page?.title || ''}`);
         });
@@ -79,8 +83,6 @@ async function handleRun(req, res) {
         const aiFlow = async () => {
             // 2. 清洗
             sendStatus('clean', 'active');
-            sendLog('clean', '清理缓存目录...');
-            cleaner.clearCache(CACHE_DIR);
             let cleanCount = 0;
 
             jsonList.forEach((rawJson, index) => {
@@ -118,9 +120,10 @@ async function handleRun(req, res) {
 
             // 3. API 调用
             sendStatus('api', 'active');
+            let cleanedTexts = [];
             if (settings && settings.apiKey) {
                 const cacheFiles = fs.readdirSync(CACHE_DIR).filter(f => f.endsWith('.json'));
-                const cleanedTexts = cacheFiles.map(f => fs.readFileSync(path.join(CACHE_DIR, f), 'utf8'));
+                cleanedTexts = cacheFiles.map(f => fs.readFileSync(path.join(CACHE_DIR, f), 'utf8'));
                 const totalChars = cleanedTexts.reduce((s, t) => s + t.length, 0);
 
                 sendLog('api', `模型: ${settings.model}`);
@@ -162,7 +165,7 @@ async function handleRun(req, res) {
 
             // 5. 报告明显错误评审
             sendStatus('review', 'active');
-            reviewResult = errorReviewer.reviewError(aiReport);
+            reviewResult = await errorReviewer.reviewError(settings, aiReport, cleanedTexts);
             sendLog('review', `完成错误审核: ${reviewResult}`);
             await sleep(300);
             sendStatus('review', 'success');
@@ -402,12 +405,47 @@ async function handleRun(req, res) {
         }
 
         sendStatus('rep2', 'active');
-        sendLog('rep2', '输出简化报告（未实现）');
-        await sleep(300);
-        sendStatus('rep2', 'simulated');
+        sendLog('rep2', '调用AI输出精简报告...');
+        
+        let simplifiedReport = null;
+        if (settings && settings.apiKey) {
+            try {
+                const t0 = Date.now();
+                const simpleRes = await aiCaller.callSimplifiedAI(settings, detailedReport);
+                const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+                simplifiedReport = simpleRes.choices[0].message.content; // It should be a string of JSON
+                sendLog('rep2', `精简报告生成完成 (${elapsed}s)`);
+                sendStatus('rep2', 'success');
+            } catch (err) {
+                sendLog('rep2', `AI调用失败: ${err.message}`);
+                simplifiedReport = JSON.stringify({ 
+                    health_status: "获取失败", 
+                    overview_text: "精简报告生成失败: " + err.message,
+                    cards: []
+                });
+                sendStatus('rep2', 'error');
+            }
+        } else {
+            sendLog('rep2', '未配置 API Key，模拟精简报告输出');
+            await sleep(500);
+            simplifiedReport = JSON.stringify({
+                health_status: "模拟模式",
+                overview_text: "当前处于模拟模式，未连接大模型。请配置 API Key 获得真实的经营诊断。",
+                cards: [
+                    {
+                        title: "配置缺失",
+                        explanation: "系统未能请求到真实大模型。",
+                        suggestion: "点击右上角设置图标，填写你的 API Key 和接口地址。",
+                        evidence: "系统检测到 settings 中 apiKey 为空。",
+                        color: "yellow"
+                    }
+                ]
+            });
+            sendStatus('rep2', 'simulated');
+        }
 
-        const report = ""; // 简化报告
-        const fullReport = detailedReport;
+        const report = simplifiedReport; // 这是精简报告 (JSON string)
+        const fullReport = detailedReport; // 这是完整报告 (Markdown)
 
         res.json({ status: 'success', report, fullReport });
 

@@ -120,11 +120,81 @@
             const contentDiv = document.getElementById('reportContent');
             const cardDiv = contentDiv.closest('.report-card');
             
-            if (rep.trim() === '') {
+            if (!rep || rep.trim() === '') {
                 cardDiv.style.display = 'none';
-            } else {
-                cardDiv.style.display = 'block';
+                return;
+            }
+            
+            cardDiv.style.display = 'block';
+
+            if (isFull) {
+                // 完整报告直接用 markdown 渲染
                 contentDiv.innerHTML = marked.parse(rep);
+                contentDiv.className = 'markdown-body';
+            } else {
+                // 精简报告（JSON 卡片化）
+                try {
+                    let jsonStr = rep;
+                    if (jsonStr.startsWith('```json')) {
+                        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                    } else if (jsonStr.startsWith('```')) {
+                        jsonStr = jsonStr.replace(/```/g, '').trim();
+                    }
+                    
+                    const data = JSON.parse(jsonStr);
+                    
+                    // 构建大卡片（概览）
+                    const overviewHtml = `
+                        <div class="dashboard-overview">
+                            <h2>
+                                <i class="fas fa-heartbeat"></i> 经营状态：${data.health_status || '未知'}
+                            </h2>
+                            <p>${data.overview_text || '暂无概览信息'}</p>
+                        </div>
+                    `;
+
+                    // 构建小卡片（瀑布流/网格）
+                    let cardsHtml = '';
+                    if (data.cards && data.cards.length > 0) {
+                        const cardsList = data.cards.map(c => {
+                            let icon = 'fa-info-circle';
+                            let iconColor = 'var(--primary)';
+                            if (c.color === 'red') { icon = 'fa-exclamation-triangle'; iconColor = 'var(--error)'; }
+                            if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = '#f59e0b'; }
+                            if (c.color === 'green') { icon = 'fa-check-circle'; iconColor = 'var(--success)'; }
+
+                            return `
+                                <div class="issue-card" data-color="${c.color || 'blue'}">
+                                    <div class="issue-title">
+                                        <i class="fas ${icon}" style="color: ${iconColor};"></i>
+                                        ${c.title}
+                                    </div>
+                                    <div class="issue-explanation">${c.explanation}</div>
+                                    <div class="issue-suggestion">
+                                        <i class="fas fa-lightbulb"></i>
+                                        <span>${c.suggestion}</span>
+                                    </div>
+                                    ${c.evidence ? `
+                                    <div class="evidence-wrapper">
+                                        <i class="fas fa-chart-line evidence-icon"></i>
+                                        <div class="evidence-tooltip">${c.evidence}</div>
+                                    </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                        }).join('');
+                        cardsHtml = `<div class="masonry-grid">${cardsList}</div>`;
+                    }
+
+                    contentDiv.className = ''; // 移除 markdown-body 样式
+                    contentDiv.innerHTML = overviewHtml + cardsHtml;
+
+                } catch (e) {
+                    console.error("JSON 解析失败:", e);
+                    // 降级处理
+                    contentDiv.className = 'markdown-body';
+                    contentDiv.innerHTML = `<h3><i class="fas fa-exclamation-triangle" style="color:orange;"></i> 数据解析异常</h3><p>AI 返回的格式不符合预期，以下为原始内容：</p><br>` + marked.parse(rep);
+                }
             }
         }
 

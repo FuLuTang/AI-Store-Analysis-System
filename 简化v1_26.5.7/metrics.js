@@ -663,6 +663,212 @@ function prepareSalesQualityCheck(params) {
 
 
 /**
+ * B1.8. prepareMemberHealthCheck — 会员健康度评估
+ *
+ * 输入: {
+ *   memberRevenue, memberChangePct, memberOrderCount, memberOrderChangePct,
+ *   memberAvgOrder, memberGrossMarginPct, totalRevenue, overallAvgOrder, overallGrossMarginPct
+ * }
+ * 输出: { penetrationPct, memberAvgVsOverall, memberGrossMarginVsOverall, healthScore, signals, aiPromptData, status }
+ */
+function prepareMemberHealthCheck(params) {
+  // 会员健康规则（单位说明）
+  // - *Threshold / *Gap: 百分比阈值（%）
+  // - *Penalty: 对 healthScore 的扣分值（分）
+  // - warningScore/attentionScore: 最终健康分阈值（分）
+  const MEMBER_HEALTH_RULES = {
+    penetrationCritical: 3,
+    penetrationLow: 8,
+    penetrationPenaltyCritical: 45,
+    penetrationPenaltyLow: 25,
+    revenueChangeDropCritical: -10,
+    revenueChangeDropLow: -3,
+    revenuePenaltyCritical: 18,
+    revenuePenaltyLow: 10,
+    orderChangeDropCritical: -10,
+    orderChangeDropLow: -3,
+    orderPenaltyCritical: 15,
+    orderPenaltyLow: 8,
+    avgOrderGapCritical: -20,
+    avgOrderGapLow: -8,
+    avgOrderPenaltyCritical: 12,
+    avgOrderPenaltyLow: 6,
+    marginGapCritical: -4,
+    marginGapLow: -2,
+    marginPenaltyCritical: 10,
+    marginPenaltyLow: 5,
+    warningScore: 55,
+    attentionScore: 75,
+  };
+
+  const {
+    memberRevenue,
+    memberChangePct = null,
+    memberOrderCount = null,
+    memberOrderChangePct = null,
+    memberAvgOrder = null,
+    memberGrossMarginPct = null,
+    totalRevenue,
+    overallAvgOrder = null,
+    overallGrossMarginPct = null,
+  } = params || {};
+
+  if (!isValidNumber(memberRevenue) || !isValidNumber(totalRevenue) || totalRevenue <= 0) {
+    return {
+      penetrationPct: 0,
+      memberAvgVsOverall: null,
+      memberGrossMarginVsOverall: null,
+      healthScore: 0,
+      signals: [],
+      aiPromptData: null,
+      status: 'uncountable',
+    };
+  }
+
+  const penetrationPct = roundTo((memberRevenue / totalRevenue) * 100, 1);
+  const memberAvgVsOverall = isValidNumber(memberAvgOrder) && isValidNumber(overallAvgOrder) && overallAvgOrder > 0
+    ? roundTo(((memberAvgOrder - overallAvgOrder) / overallAvgOrder) * 100, 1)
+    : null;
+  const memberGrossMarginVsOverall = isValidNumber(memberGrossMarginPct) && isValidNumber(overallGrossMarginPct)
+    ? roundTo(memberGrossMarginPct - overallGrossMarginPct, 1)
+    : null;
+
+  const signals = [];
+  let healthScore = 100;
+
+  if (penetrationPct < MEMBER_HEALTH_RULES.penetrationCritical) { signals.push('会员渗透率过低'); healthScore -= MEMBER_HEALTH_RULES.penetrationPenaltyCritical; }
+  else if (penetrationPct < MEMBER_HEALTH_RULES.penetrationLow) { signals.push('会员渗透率偏低'); healthScore -= MEMBER_HEALTH_RULES.penetrationPenaltyLow; }
+
+  if (isValidNumber(memberChangePct) && memberChangePct < MEMBER_HEALTH_RULES.revenueChangeDropCritical) { signals.push('会员营收明显下滑'); healthScore -= MEMBER_HEALTH_RULES.revenuePenaltyCritical; }
+  else if (isValidNumber(memberChangePct) && memberChangePct < MEMBER_HEALTH_RULES.revenueChangeDropLow) { signals.push('会员营收轻度下滑'); healthScore -= MEMBER_HEALTH_RULES.revenuePenaltyLow; }
+
+  if (isValidNumber(memberOrderChangePct) && memberOrderChangePct < MEMBER_HEALTH_RULES.orderChangeDropCritical) { signals.push('会员订单明显下滑'); healthScore -= MEMBER_HEALTH_RULES.orderPenaltyCritical; }
+  else if (isValidNumber(memberOrderChangePct) && memberOrderChangePct < MEMBER_HEALTH_RULES.orderChangeDropLow) { signals.push('会员订单轻度下滑'); healthScore -= MEMBER_HEALTH_RULES.orderPenaltyLow; }
+
+  if (isValidNumber(memberAvgVsOverall) && memberAvgVsOverall < MEMBER_HEALTH_RULES.avgOrderGapCritical) { signals.push('会员客单明显低于整体'); healthScore -= MEMBER_HEALTH_RULES.avgOrderPenaltyCritical; }
+  else if (isValidNumber(memberAvgVsOverall) && memberAvgVsOverall < MEMBER_HEALTH_RULES.avgOrderGapLow) { signals.push('会员客单偏低'); healthScore -= MEMBER_HEALTH_RULES.avgOrderPenaltyLow; }
+
+  if (isValidNumber(memberGrossMarginVsOverall) && memberGrossMarginVsOverall < MEMBER_HEALTH_RULES.marginGapCritical) { signals.push('会员毛利率明显偏低'); healthScore -= MEMBER_HEALTH_RULES.marginPenaltyCritical; }
+  else if (isValidNumber(memberGrossMarginVsOverall) && memberGrossMarginVsOverall < MEMBER_HEALTH_RULES.marginGapLow) { signals.push('会员毛利率偏低'); healthScore -= MEMBER_HEALTH_RULES.marginPenaltyLow; }
+
+  healthScore = Math.max(0, Math.min(100, Math.round(healthScore)));
+  if (signals.length === 0) signals.push('会员结构整体稳定');
+
+  const aiPromptData = {
+    penetrationPct,
+    memberRevenue,
+    totalRevenue,
+    memberChangePct,
+    memberOrderCount,
+    memberOrderChangePct,
+    memberAvgOrder,
+    memberAvgVsOverall,
+    memberGrossMarginPct,
+    overallGrossMarginPct,
+    memberGrossMarginVsOverall,
+    healthScore,
+    signals,
+    summary: `会员渗透率${penetrationPct}%，健康分${healthScore}，核心信号：${signals.slice(0, 3).join('、')}`,
+  };
+
+  const status = healthScore < MEMBER_HEALTH_RULES.warningScore || penetrationPct < MEMBER_HEALTH_RULES.penetrationCritical ? 'warning' :
+                 healthScore < MEMBER_HEALTH_RULES.attentionScore || signals.length >= 2 ? 'attention' : 'pass';
+
+  return { penetrationPct, memberAvgVsOverall, memberGrossMarginVsOverall, healthScore, signals, aiPromptData, status };
+}
+
+/**
+ * B2.5. prepareChannelRiskAssessment — 渠道依赖风险评估
+ *
+ * 输入: { channelMix, o2oTrend, platformConcentration }
+ * 输出: { riskFactors, riskScore, aiPromptData, status }
+ */
+function prepareChannelRiskAssessment(params) {
+  // 渠道风险规则（单位说明）
+  // - dominant*/platform*: 占比阈值（%）
+  // - score*: 风险得分增量（分）
+  // - warningScore/attentionScore: 最终风险分阈值（分）
+  const CHANNEL_RISK_RULES = {
+    dominantHigh: 85,
+    dominantMedium: 72,
+    platformHigh: 88,
+    platformMedium: 78,
+    scoreDominantHigh: 38,
+    scoreDominantMedium: 22,
+    scorePlatformHigh: 28,
+    scorePlatformMedium: 16,
+    scoreTrendContinuousFalling: 28,
+    scoreTrendFalling: 15,
+    scoreCoupledDecline: 10,
+    warningScore: 70,
+    attentionScore: 35,
+  };
+
+  const { channelMix, o2oTrend, platformConcentration } = params || {};
+  if (!channelMix || channelMix.status === 'uncountable') {
+    return { riskFactors: [], riskScore: 0, aiPromptData: null, status: 'uncountable' };
+  }
+
+  const riskFactors = [];
+  let riskScore = 0;
+
+  if (isValidNumber(channelMix.dominantPct) && channelMix.dominantPct > CHANNEL_RISK_RULES.dominantHigh) {
+    riskFactors.push(`渠道高度集中(${channelMix.dominant || '未知'}:${channelMix.dominantPct}%)`);
+    riskScore += CHANNEL_RISK_RULES.scoreDominantHigh;
+  } else if (isValidNumber(channelMix.dominantPct) && channelMix.dominantPct > CHANNEL_RISK_RULES.dominantMedium) {
+    riskFactors.push(`渠道偏集中(${channelMix.dominant || '未知'}:${channelMix.dominantPct}%)`);
+    riskScore += CHANNEL_RISK_RULES.scoreDominantMedium;
+  }
+
+  if (platformConcentration && platformConcentration.status !== 'uncountable') {
+    if (platformConcentration.concentrationPct > CHANNEL_RISK_RULES.platformHigh) {
+      riskFactors.push(`平台单边依赖(${platformConcentration.dominantPlatform}:${platformConcentration.concentrationPct}%)`);
+      riskScore += CHANNEL_RISK_RULES.scorePlatformHigh;
+    } else if (platformConcentration.concentrationPct > CHANNEL_RISK_RULES.platformMedium) {
+      riskFactors.push(`平台集中度偏高(${platformConcentration.dominantPlatform}:${platformConcentration.concentrationPct}%)`);
+      riskScore += CHANNEL_RISK_RULES.scorePlatformMedium;
+    }
+  }
+
+  if (o2oTrend && o2oTrend.status !== 'uncountable') {
+    const tail = (o2oTrend.changes || []).slice(-3);
+    const allFalling = tail.length === 3 && tail.every(c => c.changePct < 0);
+    if (o2oTrend.overallTrend === 'falling' && allFalling) {
+      riskFactors.push('O2O连续走弱(近3期均下降)');
+      riskScore += CHANNEL_RISK_RULES.scoreTrendContinuousFalling;
+    } else if (o2oTrend.overallTrend === 'falling') {
+      riskFactors.push('O2O整体走弱');
+      riskScore += CHANNEL_RISK_RULES.scoreTrendFalling;
+    }
+  }
+
+  if (channelMix.dominant === '电商' && riskFactors.some(f => f.includes('O2O'))) {
+    riskFactors.push('高依赖渠道同步下滑');
+    riskScore += CHANNEL_RISK_RULES.scoreCoupledDecline;
+  }
+
+  riskScore = Math.max(0, Math.min(100, Math.round(riskScore)));
+  const status = riskScore >= CHANNEL_RISK_RULES.warningScore ? 'warning' :
+                 riskScore >= CHANNEL_RISK_RULES.attentionScore ? 'attention' : 'pass';
+
+  const aiPromptData = {
+    dominantChannel: channelMix.dominant || null,
+    dominantPct: channelMix.dominantPct || 0,
+    o2oTrend: o2oTrend?.overallTrend || 'unknown',
+    platform: platformConcentration?.dominantPlatform || null,
+    platformConcentrationPct: platformConcentration?.concentrationPct || null,
+    riskScore,
+    riskFactors,
+    summary: riskFactors.length > 0
+      ? `渠道风险分${riskScore}，关键风险：${riskFactors.slice(0, 3).join('；')}`
+      : `渠道风险分${riskScore}，结构总体稳定`,
+  };
+
+  return { riskFactors, riskScore, aiPromptData, status };
+}
+
+
+/**
  * B2. prepareStockoutLossEstimate — 缺货损失估算
  * 
  * 根据缺货商品的销售排名反推日均单量，估算日均损失
@@ -882,6 +1088,12 @@ function extractAlertDetail(metricName, result) {
   if (metricName.includes('SalesQualityCheck')) {
     return `销售质量分${result.qualityScore}，营收增速(${result.aiPromptData?.revenueChangePct}%) vs 毛利增速(${result.aiPromptData?.grossProfitChangePct}%)`;
   }
+  if (metricName.includes('MemberHealthCheck')) {
+    return `会员健康分${result.healthScore}，渗透率${result.penetrationPct}%`;
+  }
+  if (metricName.includes('ChannelRiskAssessment')) {
+    return `渠道风险分${result.riskScore}，风险项${result.riskFactors?.length || 0}个`;
+  }
   // 通用 fallback
   return JSON.stringify(result).substring(0, 100);
 }
@@ -1049,6 +1261,32 @@ function runDemo() {
   console.log(`   状态: ${salesQuality.status}`);
   console.log();
 
+  // --- B1.8：会员健康度评估 ---
+  const memberRevenue = dayRows[0]?.memberAmount || 0;
+  const totalRevenue = dayRows[0]?.revenue || 0;
+  const prevMemberRevenue = dayRows[1]?.memberAmount || 0;
+  const memberChangePct = prevMemberRevenue > 0 ? ((memberRevenue - prevMemberRevenue) / prevMemberRevenue) * 100 : null;
+  const memberAvgOrder = overviewDay.summary?.metrics?.find(m => m.key === 'member_avg_order_value')?.value ?? null;
+  const overallAvgOrder = totalRevenue > 0 && dayRows[0]?.visitorCount > 0 ? totalRevenue / dayRows[0].visitorCount : null;
+  const memberGrossMarginPct = memberRevenue > 0 && dayRows[0]?.memberGrossProfit > 0 ? (dayRows[0].memberGrossProfit / memberRevenue) * 100 : null;
+  const overallGrossMarginPct = totalRevenue > 0 && dayRows[0]?.grossProfit > 0 ? (dayRows[0].grossProfit / totalRevenue) * 100 : null;
+  const memberHealth = prepareMemberHealthCheck({
+    memberRevenue,
+    memberChangePct: isValidNumber(memberChangePct) ? roundTo(memberChangePct, 1) : null,
+    memberAvgOrder,
+    memberGrossMarginPct: isValidNumber(memberGrossMarginPct) ? roundTo(memberGrossMarginPct, 1) : null,
+    totalRevenue,
+    overallAvgOrder: isValidNumber(overallAvgOrder) ? roundTo(overallAvgOrder, 2) : null,
+    overallGrossMarginPct: isValidNumber(overallGrossMarginPct) ? roundTo(overallGrossMarginPct, 1) : null,
+  });
+  console.log('【B1.8. 会员健康度 prepareMemberHealthCheck】');
+  console.log(`   健康分: ${memberHealth.healthScore}`);
+  if (memberHealth.aiPromptData) {
+    console.log(`   📋 AI摘要: ${memberHealth.aiPromptData.summary}`);
+  }
+  console.log(`   状态: ${memberHealth.status}`);
+  console.log();
+
   // --- B2：缺货损失估算 ---
   const stockoutLoss = prepareStockoutLossEstimate(top500Out.products, 35);
   console.log('【B2. 缺货损失估算 prepareStockoutLossEstimate】');
@@ -1063,6 +1301,22 @@ function runDemo() {
   console.log(`   状态: ${stockoutLoss.status}`);
   console.log();
 
+  // --- B2.5：渠道风险评估 ---
+  const platformConcentration = calcPlatformConcentration(o2oDay.businessTable?.rows?.[0] || null);
+  const o2oTrend = calcO2OTrend(o2oDay.businessTable?.rows || [], 'total_revenue');
+  const channelRisk = prepareChannelRiskAssessment({
+    channelMix,
+    o2oTrend,
+    platformConcentration,
+  });
+  console.log('【B2.5. 渠道风险评估 prepareChannelRiskAssessment】');
+  console.log(`   风险分: ${channelRisk.riskScore}`);
+  if (channelRisk.aiPromptData) {
+    console.log(`   📋 AI摘要: ${channelRisk.aiPromptData.summary}`);
+  }
+  console.log(`   状态: ${channelRisk.status}`);
+  console.log();
+
   // --- B3：异常汇总 ---
   const allResults = {
     'calcChannelMix (渠道结构)': channelMix,
@@ -1074,7 +1328,9 @@ function runDemo() {
     'calcHighRankStockoutAlert (缺货预警)': stockoutAlert,
     'prepareGrowthDecomposition (增长拆解)': growth,
     'prepareSalesQualityCheck (销售质量)': salesQuality,
+    'prepareMemberHealthCheck (会员健康)': memberHealth,
     'prepareStockoutLossEstimate (缺货损失)': stockoutLoss,
+    'prepareChannelRiskAssessment (渠道风险)': channelRisk,
   };
   const anomalySummary = prepareAnomalySummary(allResults);
   console.log('【B3. 异常汇总 prepareAnomalySummary】');
@@ -1125,7 +1381,9 @@ module.exports = {
   prepareStoreStatusLabel,
   prepareGrowthDecomposition,
   prepareSalesQualityCheck,
+  prepareMemberHealthCheck,
   prepareStockoutLossEstimate,
+  prepareChannelRiskAssessment,
   prepareAnomalySummary,
 };
 

@@ -185,6 +185,7 @@ async function handleRun(req, res) {
 
             const overviewDay   = pickModule('business_overview', 'day');
             const overviewMonth = pickModule('business_overview', 'month');
+            const overviewFallback = pickModule('business_overview');
             const o2oDay        = pickModule('o2o_business_summary', 'day');
             const hotToday      = pickModule('operation_hot_products', 'today');
             const hotYesterday  = pickModule('operation_hot_products', 'yesterday');
@@ -198,10 +199,23 @@ async function handleRun(req, res) {
             const loadedCount = Object.values(sources).filter(Boolean).length;
             sendLog('alg1', `  成功加载 ${loadedCount}/${Object.keys(sources).length} 个数据源`);
 
+            const realtimeOverviewSource = overviewDay || overviewMonth || overviewFallback;
+            const trendOverviewSource = overviewMonth || overviewDay || overviewFallback;
+            const getOverviewViewType = overview => overview?.page?.viewType || 'unknown';
+            if (!overviewDay && !overviewMonth && overviewFallback) {
+                sendLog('alg1', '  ⚠ 未找到概览-日/月，回退使用默认概览数据');
+            }
+
             // Normalize
-            let dayRows = null, monthRows = null;
-            if (overviewDay)   { dayRows = metrics.normalizeOverviewRows(overviewDay);   sendLog('alg1', '  ✓ 概览-日 已规范化'); }
-            if (overviewMonth) { monthRows = metrics.normalizeOverviewRows(overviewMonth); sendLog('alg1', '  ✓ 概览-月 已规范化'); }
+            let realtimeRows = null, trendRows = null;
+            if (realtimeOverviewSource) {
+                realtimeRows = metrics.normalizeOverviewRows(realtimeOverviewSource);
+                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewViewType(realtimeOverviewSource)} 数据`);
+            }
+            if (trendOverviewSource) {
+                trendRows = metrics.normalizeOverviewRows(trendOverviewSource);
+                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewViewType(trendOverviewSource)} 数据`);
+            }
 
             let hotNorm = {};
             if (hotToday)     { hotNorm.today = metrics.normalizeHotProducts(hotToday);         sendLog('alg1', '  ✓ 店热销-今 已规范化'); }
@@ -211,24 +225,51 @@ async function handleRun(req, res) {
 
             const o2oRows = o2oDay?.businessTable?.rows || [];
             const latestO2ORow = o2oRows.length ? o2oRows[o2oRows.length - 1] : null;
-            const latestDayRow = dayRows?.[0] || null;
-            const previousDayRow = dayRows?.[1] || null;
-            const baselineRows = dayRows && dayRows.length > 1
-                ? dayRows.slice(1).filter(r => r?.visitorCount > 0)
+            const latestDayRow = realtimeRows?.[0] || null;
+            const previousDayRow = realtimeRows?.[1] || null;
+            const baselineRows = realtimeRows && realtimeRows.length > 1
+                ? realtimeRows.slice(1).filter(r => r?.visitorCount > 0)
                 : [];
             const baselineAvgOrder = baselineRows.length > 0
                 ? baselineRows.reduce((sum, r) => sum + (r.revenue / r.visitorCount), 0) / baselineRows.length
                 : null;
             const overallAvgOrder = latestDayRow && latestDayRow.visitorCount > 0 ? latestDayRow.revenue / latestDayRow.visitorCount : null;
-            const memberAvgOrder = (overviewDay?.summary?.metrics || []).find(m => m.key === 'member_avg_order_value')?.value ?? null;
-            const memberRevenue = (overviewDay?.summary?.metrics || []).find(m => m.key === 'member_revenue')?.value ?? latestDayRow?.memberAmount ?? null;
-            const totalRevenue = latestDayRow?.revenue ?? (overviewDay?.summary?.metrics || []).find(m => m.key === 'revenue')?.value ?? null;
+            const summaryMetrics = realtimeOverviewSource?.summary?.metrics || [];
+            const findMetric = key => summaryMetrics.find(m => m.key === key) || null;
+            const metricValue = key => findMetric(key)?.value ?? null;
+            const getMetricComparisonValue = key => {
+                const metric = findMetric(key);
+                return metric?.mom?.value ?? metric?.compare?.value ?? null;
+            };
+            const memberAvgOrder = metricValue('member_avg_order_value');
+            const memberRevenue = metricValue('member_revenue') ?? latestDayRow?.memberAmount ?? null;
+            const totalRevenue = latestDayRow?.revenue ?? metricValue('revenue') ?? null;
+            const previousMemberRevenue = previousDayRow?.memberAmount ?? null;
+            const memberChangePct = previousMemberRevenue > 0
+                ? ((memberRevenue - previousMemberRevenue) / previousMemberRevenue) * 100
+                : getMetricComparisonValue('member_revenue');
+            const memberOrderCount = metricValue('member_order_count');
+            const memberOrderChangePct = getMetricComparisonValue('member_order_count');
+            const memberGrossMarginPct = memberRevenue > 0 && latestDayRow?.memberGrossProfit != null
+                ? (latestDayRow.memberGrossProfit / memberRevenue) * 100
+                : metricValue('member_gross_margin');
+            const overallGrossMarginPct = latestDayRow?.revenue > 0
+                ? (latestDayRow.grossProfit / latestDayRow.revenue) * 100
+                : null;
+            const revenueChangePctForQuality = previousDayRow?.revenue > 0
+                ? ((latestDayRow.revenue - previousDayRow.revenue) / previousDayRow.revenue) * 100
+                : null;
+            const grossProfitChangePctForQuality = previousDayRow?.grossProfit > 0
+                ? ((latestDayRow.grossProfit - previousDayRow.grossProfit) / previousDayRow.grossProfit) * 100
+                : null;
             const o2oRevenue = latestO2ORow?.total_revenue ?? null;
             const top500TotalProducts = top500Total?.products || [];
             const top500OutProducts = top500Out?.products || [];
             const top500MissingProducts = top500Missing?.products || [];
-            const revenueChangeRes = metrics.calcRevenueChange(dayRows);
-            const revenueConsecutiveRes = metrics.calcConsecutiveChange(dayRows, 'revenue');
+            const revenueChangeRes = metrics.calcRevenueChange(realtimeRows);
+            const revenueConsecutiveRes = metrics.calcConsecutiveChange(realtimeRows, 'revenue');
+            const channelMixRes = metrics.calcChannelMix(realtimeOverviewSource?.sourceDistribution);
+            const platformConcentrationRes = metrics.calcPlatformConcentration(latestO2ORow);
             const o2oTrendRevenueRes = metrics.calcO2OTrend(o2oRows, 'total_revenue');
             const o2oChangeValues = o2oTrendRevenueRes?.changes?.map(c => c.changePct) || [];
             const o2oVolatility = o2oChangeValues.length > 1
@@ -248,15 +289,15 @@ async function handleRun(req, res) {
             const metricResultsAll = {};
             const metricsSkippedToNext = [];
 
-            metricTasks.push({ name: 'calcChannelMix (渠道结构)', fn: () => metrics.calcChannelMix(overviewDay?.sourceDistribution) });
+            metricTasks.push({ name: 'calcChannelMix (渠道结构)', fn: () => channelMixRes });
             metricTasks.push({ name: 'calcGrossMargin (毛利率)', fn: () => metrics.calcGrossMargin(latestDayRow?.grossProfit, latestDayRow?.revenue) });
             metricTasks.push({ name: 'calcAvgOrderValue (客单价)', fn: () => metrics.calcAvgOrderValue(latestDayRow?.revenue, latestDayRow?.visitorCount, baselineAvgOrder) });
             metricTasks.push({ name: 'calcMemberPenetration (会员渗透率)', fn: () => metrics.calcMemberPenetration(memberRevenue, totalRevenue) });
             metricTasks.push({ name: 'calcMemberVsOverall (会员客单价对比)', fn: () => metrics.calcMemberVsOverall(memberAvgOrder, overallAvgOrder) });
-            metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-营收)', fn: () => metrics.calcConsecutiveChange(dayRows, 'revenue') });
-            metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-来客)', fn: () => metrics.calcConsecutiveChange(dayRows, 'visitorCount') });
-            metricTasks.push({ name: 'calcGrossMarginTrend (毛利率趋势)', fn: () => metrics.calcGrossMarginTrend(monthRows) });
-            metricTasks.push({ name: 'calcPlatformConcentration (平台集中度)', fn: () => metrics.calcPlatformConcentration(latestO2ORow) });
+            metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-营收)', fn: () => metrics.calcConsecutiveChange(realtimeRows, 'revenue') });
+            metricTasks.push({ name: 'calcConsecutiveChange (连续涨跌-来客)', fn: () => metrics.calcConsecutiveChange(realtimeRows, 'visitorCount') });
+            metricTasks.push({ name: 'calcGrossMarginTrend (毛利率趋势)', fn: () => metrics.calcGrossMarginTrend(trendRows) });
+            metricTasks.push({ name: 'calcPlatformConcentration (平台集中度)', fn: () => platformConcentrationRes });
             metricTasks.push({ name: 'calcO2OGrossMargin (O2O毛利率)', fn: () => metrics.calcO2OGrossMargin(latestO2ORow) });
             metricTasks.push({ name: 'calcO2OTrend (O2O营收趋势)', fn: () => o2oTrendRevenueRes });
             metricTasks.push({ name: 'calcO2OvsTotal (O2O占整体营收比)', fn: () => metrics.calcO2OvsTotal(o2oRevenue, totalRevenue) });
@@ -266,9 +307,9 @@ async function handleRun(req, res) {
             metricTasks.push({ name: 'calcStockoutRate (缺货率)', fn: () => metrics.calcStockoutRate(top500TotalProducts, top500OutProducts) });
             metricTasks.push({ name: 'calcMissingCategoryRate (缺种率)', fn: () => metrics.calcMissingCategoryRate(top500TotalProducts, top500MissingProducts) });
             metricTasks.push({ name: 'calcActiveSKUCount (动销SKU数)', fn: () => metrics.calcActiveSKUCount(hotNorm?.today) });
-            metricTasks.push({ name: 'detectConsecutiveDecline (连续下滑预警)', fn: () => metrics.detectConsecutiveDecline(dayRows, 'revenue') });
+            metricTasks.push({ name: 'detectConsecutiveDecline (连续下滑预警)', fn: () => metrics.detectConsecutiveDecline(realtimeRows, 'revenue') });
             metricTasks.push({ name: 'detectLowMemberAlert (会员异常低预警)', fn: () => metrics.detectLowMemberAlert(memberRevenue, totalRevenue) });
-            metricTasks.push({ name: 'detectChannelImbalance (渠道失衡预警)', fn: () => metrics.detectChannelImbalance(metrics.calcChannelMix(overviewDay?.sourceDistribution)) });
+            metricTasks.push({ name: 'detectChannelImbalance (渠道失衡预警)', fn: () => metrics.detectChannelImbalance(channelMixRes) });
             metricTasks.push({ name: 'prepareStoreStatusLabel (门店状态标签预判)', fn: () => metrics.prepareStoreStatusLabel({
                 revenueChange: revenueChangeRes.status === 'uncountable' ? null : revenueChangeRes.changePct,
                 grossMarginChange: (latestDayRow?.revenue > 0 && previousDayRow?.revenue > 0)
@@ -287,8 +328,30 @@ async function handleRun(req, res) {
             }) });
             // B类
             metricTasks.push({ name: 'calcRevenueChange (营收环比)', fn: () => revenueChangeRes });
-            metricTasks.push({ name: 'prepareGrowthDecomposition (增长拆解)', fn: () => metrics.prepareGrowthDecomposition(dayRows) });
+            metricTasks.push({ name: 'prepareGrowthDecomposition (增长拆解)', fn: () => metrics.prepareGrowthDecomposition(realtimeRows) });
+            metricTasks.push({ name: 'prepareSalesQualityCheck (销售质量)', fn: () => metrics.prepareSalesQualityCheck({
+                revenueChangePct: revenueChangePctForQuality,
+                grossProfitChangePct: grossProfitChangePctForQuality,
+                grossMarginCurrent: overallGrossMarginPct,
+                grossMarginPrevious: previousDayRow?.revenue > 0 ? (previousDayRow.grossProfit / previousDayRow.revenue) * 100 : null
+            }) });
+            metricTasks.push({ name: 'prepareMemberHealthCheck (会员健康)', fn: () => metrics.prepareMemberHealthCheck({
+                memberRevenue,
+                memberChangePct,
+                memberOrderCount,
+                memberOrderChangePct,
+                memberAvgOrder,
+                memberGrossMarginPct,
+                totalRevenue,
+                overallAvgOrder,
+                overallGrossMarginPct
+            }) });
             metricTasks.push({ name: 'prepareStockoutLossEstimate (缺货损失)', fn: () => metrics.prepareStockoutLossEstimate(top500Out?.products, 35) });
+            metricTasks.push({ name: 'prepareChannelRiskAssessment (渠道风险)', fn: () => metrics.prepareChannelRiskAssessment({
+                channelMix: channelMixRes,
+                o2oTrend: o2oTrendRevenueRes,
+                platformConcentration: platformConcentrationRes
+            }) });
 
             const total = metricTasks.length;
             for (let i = 0; i < total; i++) {

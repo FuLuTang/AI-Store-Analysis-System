@@ -182,6 +182,7 @@ async function handleRun(req, res) {
 
             const overviewDay   = pickModule('business_overview', 'day');
             const overviewMonth = pickModule('business_overview', 'month');
+            const overviewAny   = pickModule('business_overview');
             const o2oDay        = pickModule('o2o_business_summary', 'day');
             const hotToday      = pickModule('operation_hot_products', 'today');
             const hotYesterday  = pickModule('operation_hot_products', 'yesterday');
@@ -195,10 +196,19 @@ async function handleRun(req, res) {
             const loadedCount = Object.values(sources).filter(Boolean).length;
             sendLog('alg1', `  成功加载 ${loadedCount}/${Object.keys(sources).length} 个数据源`);
 
+            const overviewForRealtime = overviewDay || overviewMonth || overviewAny;
+            const overviewForTrend = overviewMonth || overviewDay || overviewAny;
+
             // Normalize
             let dayRows = null, monthRows = null;
-            if (overviewDay)   { dayRows = metrics.normalizeOverviewRows(overviewDay);   sendLog('alg1', '  ✓ 概览-日 已规范化'); }
-            if (overviewMonth) { monthRows = metrics.normalizeOverviewRows(overviewMonth); sendLog('alg1', '  ✓ 概览-月 已规范化'); }
+            if (overviewForRealtime) {
+                dayRows = metrics.normalizeOverviewRows(overviewForRealtime);
+                sendLog('alg1', `  ✓ 即时指标使用概览-${overviewForRealtime?.page?.viewType || 'unknown'} 数据`);
+            }
+            if (overviewForTrend) {
+                monthRows = metrics.normalizeOverviewRows(overviewForTrend);
+                sendLog('alg1', `  ✓ 趋势指标使用概览-${overviewForTrend?.page?.viewType || 'unknown'} 数据`);
+            }
 
             let hotNorm = {};
             if (hotToday)     { hotNorm.today = metrics.normalizeHotProducts(hotToday);         sendLog('alg1', '  ✓ 店热销-今 已规范化'); }
@@ -217,9 +227,9 @@ async function handleRun(req, res) {
                 ? baselineRows.reduce((sum, r) => sum + (r.revenue / r.visitorCount), 0) / baselineRows.length
                 : null;
             const overallAvgOrder = latestDayRow && latestDayRow.visitorCount > 0 ? latestDayRow.revenue / latestDayRow.visitorCount : null;
-            const memberAvgOrder = (overviewDay?.summary?.metrics || []).find(m => m.key === 'member_avg_order_value')?.value ?? null;
-            const memberRevenue = (overviewDay?.summary?.metrics || []).find(m => m.key === 'member_revenue')?.value ?? latestDayRow?.memberAmount ?? null;
-            const totalRevenue = latestDayRow?.revenue ?? (overviewDay?.summary?.metrics || []).find(m => m.key === 'revenue')?.value ?? null;
+            const memberAvgOrder = (overviewForRealtime?.summary?.metrics || []).find(m => m.key === 'member_avg_order_value')?.value ?? null;
+            const memberRevenue = (overviewForRealtime?.summary?.metrics || []).find(m => m.key === 'member_revenue')?.value ?? latestDayRow?.memberAmount ?? null;
+            const totalRevenue = latestDayRow?.revenue ?? (overviewForRealtime?.summary?.metrics || []).find(m => m.key === 'revenue')?.value ?? null;
             const o2oRevenue = latestO2ORow?.total_revenue ?? null;
             const top500TotalProducts = top500Total?.products || [];
             const top500OutProducts = top500Out?.products || [];
@@ -245,7 +255,7 @@ async function handleRun(req, res) {
             const metricResultsAll = {};
             const metricsSkippedToNext = [];
 
-            metricTasks.push({ name: 'calcChannelMix (渠道结构)', fn: () => metrics.calcChannelMix(overviewDay?.sourceDistribution) });
+            metricTasks.push({ name: 'calcChannelMix (渠道结构)', fn: () => metrics.calcChannelMix(overviewForRealtime?.sourceDistribution) });
             metricTasks.push({ name: 'calcGrossMargin (毛利率)', fn: () => metrics.calcGrossMargin(latestDayRow?.grossProfit, latestDayRow?.revenue) });
             metricTasks.push({ name: 'calcAvgOrderValue (客单价)', fn: () => metrics.calcAvgOrderValue(latestDayRow?.revenue, latestDayRow?.visitorCount, baselineAvgOrder) });
             metricTasks.push({ name: 'calcMemberPenetration (会员渗透率)', fn: () => metrics.calcMemberPenetration(memberRevenue, totalRevenue) });
@@ -265,7 +275,7 @@ async function handleRun(req, res) {
             metricTasks.push({ name: 'calcActiveSKUCount (动销SKU数)', fn: () => metrics.calcActiveSKUCount(hotNorm?.today) });
             metricTasks.push({ name: 'detectConsecutiveDecline (连续下滑预警)', fn: () => metrics.detectConsecutiveDecline(dayRows, 'revenue') });
             metricTasks.push({ name: 'detectLowMemberAlert (会员异常低预警)', fn: () => metrics.detectLowMemberAlert(memberRevenue, totalRevenue) });
-            metricTasks.push({ name: 'detectChannelImbalance (渠道失衡预警)', fn: () => metrics.detectChannelImbalance(metrics.calcChannelMix(overviewDay?.sourceDistribution)) });
+            metricTasks.push({ name: 'detectChannelImbalance (渠道失衡预警)', fn: () => metrics.detectChannelImbalance(metrics.calcChannelMix(overviewForRealtime?.sourceDistribution)) });
             metricTasks.push({ name: 'prepareStoreStatusLabel (门店状态标签预判)', fn: () => metrics.prepareStoreStatusLabel({
                 revenueChange: revenueChangeRes.status === 'uncountable' ? null : revenueChangeRes.changePct,
                 grossMarginChange: (latestDayRow?.revenue > 0 && previousDayRow?.revenue > 0)

@@ -619,7 +619,7 @@ input:checked + .slider:before {
     font-size: 1.1rem;
 }
 
-.evidence-wrapper:hover .evidence-icon {
+.issue-card:hover .evidence-icon {
     color: var(--primary);
 }
 
@@ -627,23 +627,57 @@ input:checked + .slider:before {
     visibility: hidden;
     opacity: 0;
     position: absolute;
-    bottom: 130%;
-    right: -10px;
-    width: 280px;
+    bottom: 105%; /* 离卡片近一点 */
+    right: 0;
+    width: 100%; /* 宽度与卡片一致，看起来更整齐 */
+    min-width: 280px;
     background: #1e293b;
     color: #f8fafc;
     text-align: left;
-    padding: 0.875rem;
+    padding: 1rem;
     border-radius: 0.5rem;
-    font-size: 0.8rem;
-    box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-    transition: opacity 0.2s, visibility 0.2s;
-    z-index: 10;
-    line-height: 1.5;
+    font-size: 0.85rem;
+    box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2);
+    z-index: 100;
+    line-height: 1.6;
     pointer-events: none;
+    border: 1px solid rgba(255,255,255,0.1);
 }
 
-.evidence-wrapper:hover .evidence-tooltip {
+/* Markdown 表格在悬浮窗内的样式 */
+.evidence-tooltip table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+    font-size: 0.75rem;
+}
+
+.evidence-tooltip th, 
+.evidence-tooltip td {
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+}
+
+.evidence-tooltip th {
+    background: rgba(255,255,255,0.05);
+    color: var(--primary);
+}
+
+.evidence-tooltip tr:nth-child(even) {
+    background: rgba(255,255,255,0.02);
+}
+
+.evidence-tooltip p {
+    margin-bottom: 0.5rem;
+}
+
+.evidence-tooltip ul, .evidence-tooltip ol {
+    padding-left: 1.2rem;
+    margin-bottom: 0.5rem;
+}
+
+.issue-card:hover .evidence-tooltip {
     visibility: visible;
     opacity: 1;
 }

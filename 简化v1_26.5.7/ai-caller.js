@@ -87,11 +87,17 @@ async function callAI(settings, cleanedDataTexts, algoData) {
                 reasoning_effort: "medium",
                 temperature: 0.3,
                 max_tokens: 16384
-            })
+            }),
+            signal: settings.signal
     });
 
     if (!response.ok) {
-        const errText = await response.text();
+        let errText = await response.text();
+        if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
+            errText = `网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`;
+        } else {
+            errText = errText.substring(0, 300);
+        }
         throw new Error(`AI API 调用失败 (${response.status}): ${errText}`);
     }
 
@@ -109,6 +115,7 @@ const DETAILED_SYSTEM_PROMPT = `
 基于这些融合信息，深度重写并输出一份【更详细、结构更严谨的最终经营诊断报告】。
 
 注意：
+- 不需要复述那些能通过原始json/ERP系统里能直接看出来的浅层信息（虽然可以作为“表象”提一嘴带过），也不需要复述是人都能注意到的注意点和常识
 - 初级报告中可能存在谬误，请务必结合评审意见进行核对
 - “指标”是用来补充初级报告中未发现的问题的，主要是看给出的数据和二次计算出的信息。
 - “指标”中的结果很可能和初级报告有冲突，请自行判断并融合
@@ -120,6 +127,7 @@ const DETAILED_SYSTEM_PROMPT = `
 - 保持专业的商业分析语调。
 - 格式化输出，采用合适的标题、列表和加粗，让重点一目了然。
 - 结尾不需要“如果你愿意，我可以帮你...”等字样
+- 不要使用“不是，而是”句式
 `;
 
 async function callDetailedAI(settings, fusedReportText) {
@@ -154,17 +162,60 @@ async function callDetailedAI(settings, fusedReportText) {
             ],
             reasoning_effort: "medium",
             temperature: 0.4,
-            max_tokens: 16384
-        })
+            max_tokens: 16384,
+            stream: true // 开启流式输出以绕过 CF 100秒超时限制
+        }),
+        signal: settings.signal
     });
 
     if (!response.ok) {
-        const errText = await response.text();
+        let errText = await response.text();
+        if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
+            errText = `网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`;
+        } else {
+            errText = errText.substring(0, 300);
+        }
         throw new Error(`详细报告 AI API 调用失败 (${response.status}): ${errText}`);
     }
 
-    const data = await response.json();
-    return data;
+    // 处理流式输出，将文字拼接到一起
+    let fullText = '';
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        let lines = buffer.split('\n');
+        // 保留最后一行（可能不完整）在 buffer 中
+        buffer = lines.pop();
+
+        for (let line of lines) {
+            line = line.trim();
+            if (line.startsWith('data:')) {
+                const dataStr = line.substring(5).trim();
+                if (dataStr === '[DONE]') continue;
+                try {
+                    const dataObj = JSON.parse(dataStr);
+                    if (dataObj.choices && dataObj.choices[0].delta && dataObj.choices[0].delta.content) {
+                        fullText += dataObj.choices[0].delta.content;
+                    }
+                } catch (e) {
+                    // 忽略不完整的 JSON 解析错误
+                }
+            }
+        }
+    }
+
+    // 伪装成普通的非流式返回格式，保证外部 server.js 调用的兼容性
+    return {
+        choices: [
+            { message: { content: fullText } }
+        ]
+    };
 }
 
 const SIMPLIFIED_SYSTEM_PROMPT = `
@@ -179,8 +230,8 @@ const SIMPLIFIED_SYSTEM_PROMPT = `
       "title": "问题标题（如：客流严重下滑问题；需要紧急补货；注意毛利下降；爆品的连带效应）",
       "explanation": "大白话大概说说怎么回事，发生了什么，为什么。",
       "suggestion": "咋办（具体的行动建议）。",
-      "evidence": "相关数据（解释来由，怎么分析出来的，给出证据，可以是带重点数据的一句话或列表）。",
-      "color": "体现问题严重性，可选值：red(严重警告), yellow(需要注意), green(表现良好), blue(中性信息)"
+      "evidence": "相关数据证据。若是多项数据对比或对账，请务必优先使用 Markdown 迷你表格展示（简洁美观，优先瘦高表格），不要写成一大堆数字堆叠的长句子。",
+      "color": "体现问题严重性，可选值：red(严重警告), yellow(需要注意), green(表现良好), blue(中性信息), pink(数据口径/数据源不一致/统计存疑)"
     }
   ]
 }
@@ -189,6 +240,8 @@ const SIMPLIFIED_SYSTEM_PROMPT = `
 1. cards 最多只能有 7 个，提取最严重或最值得关注的点。没问题的不需要强行凑数展示。
 2. 语言必须是大白话，让老板能看懂。
 3. color 的选择：跌得很惨/缺货用 red，轻微下滑/潜在风险用 yellow，涨得好用 green，正常情况介绍用 blue。
+4. 如果发现数据口径不一致、表间数据冲突、或者营收/来客骤降到极不符合常理的程度（疑似漏单、POS故障、统计错误或停业），请务必使用 pink 颜色，并在标题中注明“需排查”或“口径存疑”。
+5. 禁止“不是，而是”句式
 `;
 
 async function callSimplifiedAI(settings, detailedReportText) {
@@ -222,13 +275,20 @@ async function callSimplifiedAI(settings, detailedReportText) {
                 { role: 'user', content: userContent }
             ],
             response_format: { type: "json_object" },
+            reasoning_effort: "medium",
             temperature: 0.3,
-            max_tokens: 4000
-        })
+            max_tokens: 8192
+        }),
+        signal: settings.signal
     });
 
     if (!response.ok) {
-        const errText = await response.text();
+        let errText = await response.text();
+        if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
+            errText = `网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`;
+        } else {
+            errText = errText.substring(0, 300);
+        }
         throw new Error(`精简报告 AI API 调用失败 (${response.status}): ${errText}`);
     }
 

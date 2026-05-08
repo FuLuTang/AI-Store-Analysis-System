@@ -146,8 +146,24 @@
                 updateProgress(data.nodeId, data.current, data.total);
             } else if (data.type === 'tally') {
                 updateTally(data.nodeId, data.tally);
+            } else if (data.type === 'reset') {
+                resetAllNodes();
             }
         };
+
+        function resetAllNodes() {
+            const nodes = document.querySelectorAll('.node');
+            nodes.forEach(node => {
+                node.className = 'node pending';
+                const logEl = node.querySelector('.node-log');
+                if (logEl) logEl.innerHTML = '';
+            });
+            const progress = document.getElementById('alg2-progress');
+            if (progress) { progress.style.display = 'none'; progress.textContent = '0/0'; }
+            const tally = document.getElementById('alg3-tally');
+            if (tally) { tally.style.display = 'none'; tally.innerHTML = ''; }
+            timeDisplay.innerText = '等待任务...';
+        }
 
         function updateNode(nodeId, status, time) {
             const node = document.getElementById(nodeId);

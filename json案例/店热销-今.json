@@ -3,10 +3,7 @@
     "title": "运营热销品种",
     "module": "operation_hot_products",
     "viewType": "today",
-    "search": {
-      "enabled": true,
-      "keyword": ""
-    },
+    "search": { "enabled": true, "keyword": "" },
     "tabs": [
       { "key": "today", "label": "今天", "active": true },
       { "key": "yesterday", "label": "昨天", "active": false },
@@ -17,85 +14,85 @@
   "ranking": [
     {
       "rank": 1,
-      "product_name": "[芬必得]布洛芬缓释胶囊 0.3g*10粒*2板/盒",
-      "barcode": "6913991300322",
-      "sales_receipt_count": 3,
-      "sales_quantity": 3
+      "product_name": "[汤臣倍健]褪黑素片 12g(400mg*30片)/瓶",
+      "barcode": "6940863615291",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
     },
     {
       "rank": 2,
-      "product_name": "[农夫山泉]饮用天然水 550ml/瓶",
-      "barcode": "6921168509256",
-      "sales_receipt_count": 3,
-      "sales_quantity": 6
+      "product_name": "[保仕婷]左炔诺孕酮片(紧急避孕药)1.5mg/片/板/盒",
+      "barcode": "5997001360484",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
     },
     {
       "rank": 3,
-      "product_name": "[维福佳]维生素 C片 0.1g*100片/瓶",
-      "barcode": "9999900117075",
+      "product_name": "金毓婷 左炔诺孕酮片 1.5mg*1片/盒",
+      "barcode": "6922887440332",
       "sales_receipt_count": 2,
       "sales_quantity": 2
     },
     {
       "rank": 4,
-      "product_name": "[三金]西瓜霜润喉片 0.6g*36片/盒",
-      "barcode": "6939261900788",
+      "product_name": "[京新]苯磺酸氨氯地平片 5mg*14片*2板/盒",
+      "barcode": "6910853810272",
       "sales_receipt_count": 2,
-      "sales_quantity": 2
+      "sales_quantity": 3
     },
     {
       "rank": 5,
-      "product_name": "[葵花]人工牛黄甲硝唑胶囊 12粒*2板/盒",
-      "barcode": "6934366600854",
+      "product_name": "[海氏海诺]医用棉签 10cm*50支/袋",
+      "barcode": "69259237800341",
       "sales_receipt_count": 2,
       "sales_quantity": 2
     },
     {
       "rank": 6,
-      "product_name": "艾纳香 咽立爽口含滴丸 0.025g*60丸瓶/盒",
-      "barcode": "6921746900994",
+      "product_name": "[芬必得]布洛芬缓释胶囊 0.3g*10粒*2板/盒",
+      "barcode": "6913991300322",
       "sales_receipt_count": 2,
       "sales_quantity": 2
     },
     {
       "rank": 7,
-      "product_name": "[晶明]更昔洛韦滴眼液 (8ml:8mg)*8ml/瓶/盒",
-      "barcode": "6935899804191",
-      "sales_receipt_count": 1,
-      "sales_quantity": 1
+      "product_name": "[小葵花]小儿咽扁颗粒 4g*9袋/盒",
+      "barcode": "6922308787053",
+      "sales_receipt_count": 2,
+      "sales_quantity": 3
     },
     {
       "rank": 8,
-      "product_name": "[毓婷]左炔诺孕酮片 (72小时紧急避孕药)0.75mg*2片/板/盒",
-      "barcode": "6922887440448",
-      "sales_receipt_count": 1,
-      "sales_quantity": 1
+      "product_name": "[连花]连花清瘟胶囊 0.35g*12粒*3板/盒",
+      "barcode": "6920855052082",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
     },
     {
       "rank": 9,
-      "product_name": "[整肠生]地衣芽孢杆菌活菌胶囊 0.25g*20粒/瓶/盒",
-      "barcode": "6905227000526",
-      "sales_receipt_count": 1,
-      "sales_quantity": 1
+      "product_name": "[999]盐酸氨溴索口服溶液 (100ml:0.6g)*100ml/瓶/盒",
+      "barcode": "6926720800918",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
     },
     {
       "rank": 10,
-      "product_name": "[金双歧]双歧杆菌乳杆菌三联活菌片 0.5g*12片*3板/盒",
-      "barcode": "6922146871464",
-      "sales_receipt_count": 1,
-      "sales_quantity": 1
+      "product_name": "[可孚]玻璃体温计(内标式)*1支/盒(整盒拆零)",
+      "barcode": "69436734001631",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
     },
     {
       "rank": 11,
-      "product_name": "金毓婷 左炔诺孕酮片 1.5mg*2片/盒",
-      "barcode": "6922887441131",
+      "product_name": "[云南白药]小儿清咽颗粒 6g*10袋/盒",
+      "barcode": "6901070394058",
       "sales_receipt_count": 1,
       "sales_quantity": 1
     },
     {
       "rank": 12,
-      "product_name": "酒川芎 10克",
-      "barcode": null,
+      "product_name": "[海氏海诺]医用退热贴(成人型)50*120mm*2片/盒",
+      "barcode": "6925923794406",
       "sales_receipt_count": null,
       "sales_quantity": null
     }

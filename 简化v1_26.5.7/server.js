@@ -16,7 +16,16 @@ const CACHE_DIR = path.join(__dirname, 'data_cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR);
 
 let sseClients = [];
-let aiReportCache = null;
+
+const globalJobState = {
+    status: 'idle', // idle, running, completed, error
+    result: null,
+    fullResult: null,
+    errorMessage: '',
+    logs: [],
+    forceStop: false,
+    abortController: null
+};
 
 // SSE 端点
 app.get('/api/stream', (req, res) => {
@@ -24,6 +33,13 @@ app.get('/api/stream', (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     sseClients.push(res);
+    
+    // 发送 reset 以清空客户端状态，然后倒出历史日志
+    res.write(`data: ${JSON.stringify({ type: 'reset', time: new Date().toLocaleTimeString() })}\n\n`);
+    globalJobState.logs.forEach(payload => {
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    });
+
     req.on('close', () => {
         sseClients = sseClients.filter(c => c !== res);
     });
@@ -35,7 +51,11 @@ const sendEvent = (type, data) => {
         time: new Date().toLocaleTimeString(),
         ...data
     };
-    // Send as unnamed event so eventSource.onmessage catches it
+    if (type === 'reset') {
+        globalJobState.logs = [];
+    } else {
+        globalJobState.logs.push(payload);
+    }
     sseClients.forEach(client => client.write(`data: ${JSON.stringify(payload)}\n\n`));
 };
 
@@ -46,20 +66,80 @@ const sendProgress = (nodeId, current, total) => sendEvent('progress', { nodeId,
 const sendTally = (nodeId, tally) => sendEvent('tally', { nodeId, tally });
 const resetNodes = () => sendEvent('reset', {});
 
+async function withTimerLog(nodeId, nodeName, promiseFn) {
+    const startTime = Date.now();
+    const intervalId = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        sendLog(nodeId, `⏳ ${nodeName} 正在思考中... 已耗时 ${elapsed} 秒`);
+    }, 5000);
+
+    try {
+        return await promiseFn();
+    } finally {
+        clearInterval(intervalId);
+    }
+}
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// 分析接口（旧接口别名）
-app.post('/analyze', (req, res) => {
-    // 转发给 /api/run 逻辑或直接复用
-    return handleRun(req, res);
+app.get('/api/status', (req, res) => {
+    res.json({
+        status: globalJobState.status,
+        result: globalJobState.result,
+        fullResult: globalJobState.fullResult,
+        errorMessage: globalJobState.errorMessage
+    });
 });
 
+app.post('/api/stop', (req, res) => {
+    if (globalJobState.status === 'running') {
+        globalJobState.forceStop = true;
+        if (globalJobState.abortController) {
+            globalJobState.abortController.abort();
+        }
+        globalJobState.status = 'aborted';
+        globalJobState.errorMessage = '任务被用户强行终止。';
+        sendLog('fusion', '⚠️ 用户强制终止了任务！');
+    }
+    res.json({ success: true });
+});
+
+// 分析接口（旧接口别名）
+app.post('/analyze', handleRun);
 app.post('/api/run', handleRun);
 
-async function handleRun(req, res) {
+function handleRun(req, res) {
+    if (globalJobState.status === 'running') {
+        return res.status(400).json({ error: '系统当前有任务正在运行，请等待或停止它。' });
+    }
+
     const jsonList = Array.isArray(req.body) ? req.body : req.body.files;
     const settings = req.body.settings || null;
 
+    globalJobState.status = 'running';
+    globalJobState.result = null;
+    globalJobState.fullResult = null;
+    globalJobState.errorMessage = '';
+    globalJobState.forceStop = false;
+    globalJobState.abortController = new AbortController();
+
+    if (settings) {
+        settings.signal = globalJobState.abortController.signal;
+    }
+
+    // 启动异步任务
+    runWorker(jsonList, settings).catch(err => {
+        console.error("Worker error:", err);
+        if (!globalJobState.forceStop) {
+            globalJobState.status = 'error';
+            globalJobState.errorMessage = err.message;
+        }
+    });
+
+    res.json({ status: 'started' });
+}
+
+async function runWorker(jsonList, settings) {
     try {
         resetNodes();
 
@@ -82,6 +162,7 @@ async function handleRun(req, res) {
 
         const aiFlow = async () => {
             // 2. 清洗
+            if (globalJobState.forceStop) throw new Error('Aborted');
             sendStatus('clean', 'active');
             let cleanCount = 0;
 
@@ -119,6 +200,7 @@ async function handleRun(req, res) {
             sendStatus('clean', 'success');
 
             // 3. API 调用
+            if (globalJobState.forceStop) throw new Error('Aborted');
             sendStatus('api', 'active');
             let cleanedTexts = [];
             if (settings && settings.apiKey) {
@@ -131,7 +213,7 @@ async function handleRun(req, res) {
                 sendLog('api', `请求 ${settings.baseUrl} ...`);
 
                 const t0 = Date.now();
-                const aiFullResponse = await aiCaller.callAI(settings, cleanedTexts);
+                const aiFullResponse = await withTimerLog('api', '初级诊断分析 AI', () => aiCaller.callAI(settings, cleanedTexts));
                 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 
                 // 打印原始 JSON 到监控日志
@@ -154,6 +236,7 @@ async function handleRun(req, res) {
             }
 
             // 4. 输出
+            if (globalJobState.forceStop) throw new Error('Aborted');
             sendStatus('output', 'active');
             if (aiReport) {
                 sendLog('output', `报告内容: ${aiReport.length} 字符`);
@@ -163,9 +246,25 @@ async function handleRun(req, res) {
             await sleep(300);
             sendStatus('output', aiReport ? 'success' : 'simulated');
 
-            // 5. 报告明显错误评审
+            // 5. 报告明显错误评审 (静默流式，防止超时)
+            if (globalJobState.forceStop) throw new Error('Aborted');
             sendStatus('review', 'active');
-            reviewResult = await errorReviewer.reviewError(settings, aiReport, cleanedTexts);
+            const reviewFullRes = await withTimerLog('review', '错误评审 AI', () => errorReviewer.reviewError(
+                settings, 
+                aiReport, 
+                cleanedTexts, 
+                null // 不传回调，不实时打印
+            ));
+            
+            // 结束后统一处理
+            if (typeof reviewFullRes === 'object') {
+                reviewResult = reviewFullRes.choices[0].message.content;
+                sendLog('review', '--- 原始错误评审 AI 响应 JSON ---');
+                sendLog('review', JSON.stringify(reviewFullRes, null, 2));
+            } else {
+                reviewResult = reviewFullRes;
+            }
+
             sendLog('review', `完成错误审核: ${reviewResult}`);
             await sleep(300);
             sendStatus('review', 'success');
@@ -180,6 +279,7 @@ async function handleRun(req, res) {
             };
 
             // ── alg1: 数据整理 ──
+            if (globalJobState.forceStop) throw new Error('Aborted');
             sendStatus('alg1', 'active');
             sendLog('alg1', '从用户导入文件中加载 JSON 数据源...');
 
@@ -280,6 +380,7 @@ async function handleRun(req, res) {
             sendStatus('alg1', 'success');
 
             // ── alg2: 算指标 ──
+            if (globalJobState.forceStop) throw new Error('Aborted');
             sendStatus('alg2', 'active');
             sendLog('alg2', '开始逐项计算指标...');
 
@@ -355,6 +456,7 @@ async function handleRun(req, res) {
 
             const total = metricTasks.length;
             for (let i = 0; i < total; i++) {
+                if (globalJobState.forceStop) throw new Error('Aborted');
                 const task = metricTasks[i];
                 const result = task.fn();
                 const statusIcon = result.status === 'warning' ? '🔴' :
@@ -379,6 +481,7 @@ async function handleRun(req, res) {
             sendStatus('alg2', 'success');
 
             // ── alg3: 检查异常（含 B3 异常汇总） ──
+            if (globalJobState.forceStop) throw new Error('Aborted');
             sendStatus('alg3', 'active');
             sendLog('alg3', '汇总异常检测结果...');
 
@@ -400,7 +503,9 @@ async function handleRun(req, res) {
 
             // 输出排序后的异常清单
             anomalySummary.sortedAlerts.forEach(a => {
-                const icon = a.status === 'warning' ? '🔴' : '🟡';
+                let icon = '🟡';
+                if (a.status === 'warning') icon = '🔴';
+                if (a.status === 'pass') icon = '✅';
                 sendLog('alg3', `  ${icon} [${a.status}] ${a.metric}: ${a.detail}`);
             });
 
@@ -423,16 +528,19 @@ async function handleRun(req, res) {
 
         await Promise.all([aiFlow(), algoFlow()]);
 
+        if (globalJobState.forceStop) throw new Error('Aborted');
         sendStatus('fusion', 'active');
         sendLog('fusion', '数据融合：合并初级报告、错误评审、异常日志...');
         
         const aiReportData = aiReport || `## 现状分析报告 (基于 ${jsonList.length} 个数据源)\n\n- **数据清洗**：已完成自动识别与结构化处理。\n\n> ⚠️ 模拟报告。请在设置中配置 API。\n\n## 优化建议\n\n> ⚠️ 模拟建议。配置 API 后将获得个性化建议。`;
         const finalReviewStr = reviewResult || errorReviewer.reviewError(aiReport);
         
-        let anomalyLogsStr = "### 算法检查异常日志\n\n";
+        let anomalyLogsStr = "### 算法检查异常日志 (全量)\n\n";
         if (anomalySummaryData && anomalySummaryData.sortedAlerts && anomalySummaryData.sortedAlerts.length > 0) {
             anomalySummaryData.sortedAlerts.forEach(a => {
-                const icon = a.status === 'warning' ? '🔴' : '🟡';
+                let icon = '🟡';
+                if (a.status === 'warning') icon = '🔴';
+                if (a.status === 'pass') icon = '✅';
                 anomalyLogsStr += `${icon} **${a.metric}** (${a.status}): ${a.detail}\n\n`;
             });
         } else {
@@ -444,38 +552,50 @@ async function handleRun(req, res) {
         sendStatus('fusion', 'success');
 
         sendStatus('rep1', 'active');
-        sendLog('rep1', '调用AI输出详细完整报告...');
+        sendLog('rep1', '调用AI输出完整报告...');
+        if (globalJobState.forceStop) throw new Error('Aborted');
         
         let detailedReport = null;
         if (settings && settings.apiKey) {
             try {
                 const t0 = Date.now();
-                const detailedRes = await aiCaller.callDetailedAI(settings, fusedReportText);
+                const detailedRes = await withTimerLog('rep1', '完整报告 AI', () => aiCaller.callDetailedAI(settings, fusedReportText));
                 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+                // 打印原始 JSON 到监控日志
+                sendLog('rep1', '--- 原始完整报告 AI 响应 JSON ---');
+                sendLog('rep1', JSON.stringify(detailedRes, null, 2));
+
                 detailedReport = detailedRes.choices[0].message.content;
-                sendLog('rep1', `详细报告生成完成 (${elapsed}s)`);
+                sendLog('rep1', `完整报告生成完成 (${elapsed}s)`);
                 sendStatus('rep1', 'success');
             } catch (err) {
                 sendLog('rep1', `AI调用失败: ${err.message}`);
-                detailedReport = fusedReportText + "\n\n> ⚠️ 详细报告生成失败: " + err.message;
+                detailedReport = fusedReportText + "\n\n> ⚠️ 完整报告生成失败: " + err.message;
                 sendStatus('rep1', 'error');
             }
         } else {
-            sendLog('rep1', '未配置 API Key，模拟详细报告输出');
+            sendLog('rep1', '未配置 API Key，模拟完整报告输出');
             await sleep(500);
-            detailedReport = fusedReportText + "\n\n> ⚠️ 模拟详细报告。请在设置中配置 API。\n";
+            detailedReport = fusedReportText + "\n\n> ⚠️ 模拟完整报告。请在设置中配置 API。\n";
             sendStatus('rep1', 'simulated');
         }
 
         sendStatus('rep2', 'active');
         sendLog('rep2', '调用AI输出精简报告...');
+        if (globalJobState.forceStop) throw new Error('Aborted');
         
         let simplifiedReport = null;
         if (settings && settings.apiKey) {
             try {
                 const t0 = Date.now();
-                const simpleRes = await aiCaller.callSimplifiedAI(settings, detailedReport);
+                const simpleRes = await withTimerLog('rep2', '精简报告 AI', () => aiCaller.callSimplifiedAI(settings, detailedReport));
                 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+                
+                // 打印原始 JSON 到监控日志
+                sendLog('rep2', '--- 原始精简报告 AI 响应 JSON ---');
+                sendLog('rep2', JSON.stringify(simpleRes, null, 2));
+
                 simplifiedReport = simpleRes.choices[0].message.content; // It should be a string of JSON
                 sendLog('rep2', `精简报告生成完成 (${elapsed}s)`);
                 sendStatus('rep2', 'success');
@@ -510,11 +630,19 @@ async function handleRun(req, res) {
         const report = simplifiedReport; // 这是精简报告 (JSON string)
         const fullReport = detailedReport; // 这是完整报告 (Markdown)
 
-        res.json({ status: 'success', report, fullReport });
+        if (!globalJobState.forceStop) {
+            globalJobState.status = 'completed';
+            globalJobState.result = report;
+            globalJobState.fullResult = fullReport;
+        }
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: error.message });
+        if (error.message === 'Aborted') {
+            console.log("Worker execution was aborted.");
+        } else {
+            console.error(error);
+            throw error; // Let the caller catch and set error status
+        }
     }
 }
 

@@ -3,10 +3,7 @@
     "title": "运营热销品种",
     "module": "operation_hot_products",
     "viewType": "7days",
-    "search": {
-      "enabled": true,
-      "keyword": ""
-    },
+    "search": { "enabled": true, "keyword": "" },
     "tabs": [
       { "key": "today", "label": "今天", "active": false },
       { "key": "yesterday", "label": "昨天", "active": false },
@@ -17,45 +14,87 @@
   "ranking": [
     {
       "rank": 1,
-      "product_name": "[芬必得]布洛芬缓释胶囊 0.3g*10粒*2板/盒",
-      "barcode": "6913991300322",
-      "sales_receipt_count": 19,
-      "sales_quantity": 19
+      "product_name": "[丹南泰]和胃整肠丸 0.2g*50丸/瓶/盒",
+      "barcode": "8851445907117",
+      "sales_receipt_count": 18,
+      "sales_quantity": 18
     },
     {
       "rank": 2,
-      "product_name": "[丹南泰]和胃整肠丸 0.2g*50丸/瓶/盒",
-      "barcode": "8851445907117",
-      "sales_receipt_count": 16,
-      "sales_quantity": 16
+      "product_name": "[芬必得]布洛芬缓释胶囊 0.3g*10粒*2板/盒",
+      "barcode": "6913991300322",
+      "sales_receipt_count": 18,
+      "sales_quantity": 18
     },
     {
       "rank": 3,
       "product_name": "[农夫山泉]饮用天然水 550ml/瓶",
       "barcode": "6921168509256",
-      "sales_receipt_count": 14,
-      "sales_quantity": 35
+      "sales_receipt_count": 16,
+      "sales_quantity": 37
     },
     {
       "rank": 4,
-      "product_name": "[金双歧]双歧杆菌乳杆菌三联活菌片 0.5g*12片*3板/盒",
-      "barcode": "6922146871464",
-      "sales_receipt_count": 12,
-      "sales_quantity": 14
+      "product_name": "[海氏海诺]医用棉签 10cm*50支/袋",
+      "barcode": "69259237800341",
+      "sales_receipt_count": 14,
+      "sales_quantity": 16
     },
     {
       "rank": 5,
       "product_name": "[都乐]金嗓子喉片 2g*6片*2板/盒",
       "barcode": "6920560420268",
-      "sales_receipt_count": 12,
-      "sales_quantity": 12
+      "sales_receipt_count": 14,
+      "sales_quantity": 14
     },
     {
       "rank": 6,
-      "product_name": "[海氏海诺]医用棉签 10cm*50支/袋",
-      "barcode": "69259237800341",
-      "sales_receipt_count": 12,
-      "sales_quantity": 14
+      "product_name": "金毓婷 左炔诺孕酮片 1.5mg*1片/盒",
+      "barcode": "6922887440332",
+      "sales_receipt_count": 11,
+      "sales_quantity": 12
+    },
+    {
+      "rank": 7,
+      "product_name": "[金双歧]双歧杆菌乳杆菌三联活菌片 0.5g*12片*3板/盒",
+      "barcode": "6922146871464",
+      "sales_receipt_count": 11,
+      "sales_quantity": 13
+    },
+    {
+      "rank": 8,
+      "product_name": "[开瑞坦]氯雷他定片 10mg*6片/板/盒",
+      "barcode": "6936225120015",
+      "sales_receipt_count": 10,
+      "sales_quantity": 10
+    },
+    {
+      "rank": 9,
+      "product_name": "[江中]健胃消食片(薄膜衣片)0.8g*8片*4板/盒",
+      "barcode": "6903757998054",
+      "sales_receipt_count": 10,
+      "sales_quantity": 10
+    },
+    {
+      "rank": 10,
+      "product_name": "稳健 医用棉签 A1型 通用型 10cm*50支/袋",
+      "barcode": "6932593099717",
+      "sales_receipt_count": 9,
+      "sales_quantity": 9
+    },
+    {
+      "rank": 11,
+      "product_name": "[康恩贝]肠炎宁片 0.42g*12片*2板/盒",
+      "barcode": "6946572600078",
+      "sales_receipt_count": 9,
+      "sales_quantity": 9
+    },
+    {
+      "rank": 12,
+      "product_name": "[三金]西瓜霜润喉片 0.6g*36片/盒",
+      "barcode": "6939261900788",
+      "sales_receipt_count": 8,
+      "sales_quantity": 9
     }
   ]
 }

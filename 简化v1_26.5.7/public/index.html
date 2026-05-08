@@ -31,10 +31,26 @@
                 <input type="file" id="fileInput" hidden accept=".json" multiple>
             </div>
 
-            <div style="text-align: center;">
+            <div style="text-align: center; display: flex; justify-content: center; gap: 1rem;">
                 <button id="startBtn" class="btn" disabled>
                     <i class="fas fa-magic"></i> 开始多维 AI 诊断
                 </button>
+                <button id="stopBtn" class="btn btn-secondary" style="display: none; background: #ef4444; color: white; border-color: #ef4444;">
+                    <i class="fas fa-stop-circle"></i> 强制停止
+                </button>
+            </div>
+
+            <div id="loading" class="loading" style="display: none; justify-content: center; align-items: center; gap: 0.5rem;">
+                <div class="spinner" style="width: 20px; height: 20px;"></div>
+                <span id="statusText" style="color: #666;">任务正在后台运行，请等待...</span>
+            </div>
+
+            <div id="globalLogContainer" style="display: none; max-width: 800px; margin: 20px auto; background: #1e1e1e; color: #a3be8c; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 250px; overflow-y: auto; text-align: left; box-shadow: inset 0 0 10px rgba(0,0,0,0.5);">
+                <div style="color: #88c0d0; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #4c566a; padding-bottom: 5px; display: flex; justify-content: space-between;">
+                    <span><i class="fas fa-terminal"></i> 总后台运行日志</span>
+                    <a href="monitor.html" target="_blank" style="color: #81a1c1; text-decoration: none; font-weight: normal;"><i class="fas fa-external-link-alt"></i> 详细监控视图</a>
+                </div>
+                <div id="globalLogContent"></div>
             </div>
 
             <div style="text-align: center; margin-top: 1rem; display: flex; justify-content: center; align-items: center; gap: 0.5rem;">
@@ -46,10 +62,7 @@
                 <span id="labelFull" style="font-size: 0.9rem; color: var(--text-muted);">完整</span>
             </div>
 
-            <div id="loading" class="loading">
-                <div class="spinner"></div>
-                <p id="statusText">正在并行处理数据流...</p>
-            </div>
+
 
             <div id="result" class="report-section">
                 <div class="report-card">
@@ -88,9 +101,12 @@
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
         const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
         const fileListDisplay = document.getElementById('fileList');
         const loading = document.getElementById('loading');
         const statusText = document.getElementById('statusText');
+        const globalLogContainer = document.getElementById('globalLogContainer');
+        const globalLogContent = document.getElementById('globalLogContent');
         const resultSection = document.getElementById('result');
         const reportToggle = document.getElementById('reportToggle');
         const labelSimple = document.getElementById('labelSimple');
@@ -99,6 +115,92 @@
         let jsonFilesData = [];
         let currentReport = null;
         let currentFullReport = null;
+        let pollingInterval = null;
+        let sseSource = null;
+
+        function connectSSE() {
+            if (sseSource) return;
+            sseSource = new EventSource('/api/stream');
+            sseSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'log') {
+                    const div = document.createElement('div');
+                    div.style.marginBottom = '2px';
+                    div.innerText = `[${data.time}] ${data.message}`;
+                    globalLogContent.appendChild(div);
+                    globalLogContainer.scrollTop = globalLogContainer.scrollHeight;
+                } else if (data.type === 'reset') {
+                    globalLogContent.innerHTML = '';
+                }
+            };
+        }
+
+        function disconnectSSE() {
+            if (sseSource) {
+                sseSource.close();
+                sseSource = null;
+            }
+        }
+
+        window.onload = async () => {
+            await checkStatus();
+        };
+
+        async function checkStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                
+                if (data.status === 'running') {
+                    startBtn.disabled = true;
+                    stopBtn.style.display = 'inline-flex';
+                    loading.style.display = 'flex';
+                    statusText.innerText = '任务正在后台运行，请等待...';
+                    globalLogContainer.style.display = 'block';
+                    connectSSE();
+                    resultSection.classList.remove('visible');
+                    
+                    if (!pollingInterval) {
+                        pollingInterval = setInterval(checkStatus, 2000);
+                    }
+                } else if (data.status === 'completed') {
+                    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
+                    disconnectSSE();
+                    startBtn.disabled = jsonFilesData.length === 0;
+                    stopBtn.style.display = 'none';
+                    loading.style.display = 'none';
+                    globalLogContainer.style.display = 'none';
+                    
+                    if (data.result && data.fullResult) {
+                        currentReport = data.result;
+                        currentFullReport = data.fullResult;
+                        renderReport();
+                        resultSection.classList.add('visible');
+                    }
+                } else if (data.status === 'error' || data.status === 'aborted') {
+                    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
+                    disconnectSSE();
+                    startBtn.disabled = jsonFilesData.length === 0;
+                    stopBtn.style.display = 'none';
+                    loading.style.display = 'none';
+                    globalLogContainer.style.display = 'none';
+                    
+                    if (data.errorMessage && data.errorMessage.length > 0 && currentReport == null) {
+                        alert('运行结束: ' + (data.errorMessage || data.status));
+                    }
+                } else {
+                    // idle
+                    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
+                    disconnectSSE();
+                    startBtn.disabled = jsonFilesData.length === 0;
+                    stopBtn.style.display = 'none';
+                    loading.style.display = 'none';
+                    globalLogContainer.style.display = 'none';
+                }
+            } catch (e) {
+                console.error("Status fetch error", e);
+            }
+        }
 
         reportToggle.addEventListener('change', () => {
             if (reportToggle.checked) {
@@ -162,6 +264,7 @@
                             if (c.color === 'red') { icon = 'fa-exclamation-triangle'; iconColor = 'var(--error)'; }
                             if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = '#f59e0b'; }
                             if (c.color === 'green') { icon = 'fa-check-circle'; iconColor = 'var(--success)'; }
+                            if (c.color === 'pink') { icon = 'fa-question-circle'; iconColor = '#ff6b9d'; }
 
                             return `
                                 <div class="issue-card" data-color="${c.color || 'blue'}">
@@ -174,12 +277,10 @@
                                         <i class="fas fa-lightbulb"></i>
                                         <span>${c.suggestion}</span>
                                     </div>
-                                    ${c.evidence ? `
                                     <div class="evidence-wrapper">
                                         <i class="fas fa-chart-line evidence-icon"></i>
-                                        <div class="evidence-tooltip">${c.evidence}</div>
+                                        <div class="evidence-tooltip markdown-body">${marked.parse(c.evidence || '')}</div>
                                     </div>
-                                    ` : ''}
                                 </div>
                             `;
                         }).join('');
@@ -282,10 +383,13 @@
             const settings = loadSettings();
 
             startBtn.disabled = true;
+            stopBtn.style.display = 'inline-flex';
             loading.style.display = 'flex';
+            globalLogContainer.style.display = 'block';
+            connectSSE();
             resultSection.classList.remove('visible');
             statusText.innerText = settings.apiKey
-                ? '正在调用 AI 进行深度分析...'
+                ? '正在提交分析任务...'
                 : '正在使用模拟模式（未配置 API）...';
 
             try {
@@ -300,21 +404,28 @@
 
                 const data = await response.json();
                 
-                if (data.status === 'success') {
-                    currentReport = data.report;
-                    currentFullReport = data.fullReport;
-                    
-                    renderReport();
-                    
-                    loading.style.display = 'none';
-                    resultSection.classList.add('visible');
+                if (data.status === 'started' || data.status === 'success') {
+                    if (!pollingInterval) {
+                        pollingInterval = setInterval(checkStatus, 2000);
+                    }
                 } else {
-                    throw new Error(data.message);
+                    throw new Error(data.error || '启动失败');
                 }
             } catch (err) {
                 alert('分析出错: ' + err.message);
                 loading.style.display = 'none';
                 startBtn.disabled = false;
+                stopBtn.style.display = 'none';
+            }
+        };
+
+        stopBtn.onclick = async () => {
+            if (!confirm('确认要强制停止当前正在运行的后台分析任务吗？')) return;
+            try {
+                await fetch('/api/stop', { method: 'POST' });
+                await checkStatus();
+            } catch(e) {
+                console.error(e);
             }
         };
     </script>

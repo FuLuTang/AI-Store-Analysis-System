@@ -959,10 +959,9 @@ function prepareAnomalySummary(metricResults) {
 
   const priorityMap = { warning: 3, attention: 2, pass: 1, uncountable: 0 };
 
-  // 提取所有非 pass 且非 uncountable 的条目
   const alerts = [];
   for (const [name, result] of Object.entries(metricResults)) {
-    if (result.status === 'pass' || result.status === 'uncountable') continue;
+    if (result.status === 'uncountable') continue; // 仅跳过无法计算的
     alerts.push({
       metric: name,
       status: result.status,

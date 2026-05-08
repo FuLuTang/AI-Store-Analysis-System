@@ -3,10 +3,7 @@
     "title": "运营热销品种",
     "module": "operation_hot_products",
     "viewType": "yesterday",
-    "search": {
-      "enabled": true,
-      "keyword": ""
-    },
+    "search": { "enabled": true, "keyword": "" },
     "tabs": [
       { "key": "today", "label": "今天", "active": false },
       { "key": "yesterday", "label": "昨天", "active": true },
@@ -17,43 +14,85 @@
   "ranking": [
     {
       "rank": 1,
-      "product_name": "[丹南泰]和胃整肠丸 0.2g*50丸/瓶/盒",
-      "barcode": "8851445907117",
-      "sales_receipt_count": 4,
-      "sales_quantity": 4
+      "product_name": "[芬必得]布洛芬缓释胶囊 0.3g*10粒*2板/盒",
+      "barcode": "6913991300322",
+      "sales_receipt_count": 5,
+      "sales_quantity": 5
     },
     {
       "rank": 2,
-      "product_name": "[康恩贝]肠炎宁片 0.42g*12片*2板/盒",
-      "barcode": "6946572600078",
-      "sales_receipt_count": 3,
-      "sales_quantity": 3
+      "product_name": "[农夫山泉]饮用天然水 550ml/瓶",
+      "barcode": "6921168509256",
+      "sales_receipt_count": 4,
+      "sales_quantity": 7
     },
     {
       "rank": 3,
-      "product_name": "[金双歧]双歧杆菌乳杆菌三联活菌片 0.5g*12片*3板/盒",
-      "barcode": "6922146871464",
+      "product_name": "[丹南泰]和胃整肠丸 0.2g*50丸/瓶/盒",
+      "barcode": "8851445907117",
       "sales_receipt_count": 3,
       "sales_quantity": 3
     },
     {
       "rank": 4,
-      "product_name": "[恩威]洁尔阴洗液 160ml/瓶",
-      "barcode": "6932556900029",
+      "product_name": "艾纳香 咽立爽口含滴丸 0.025g*60丸瓶/盒",
+      "barcode": "6921746900994",
+      "sales_receipt_count": 3,
+      "sales_quantity": 3
+    },
+    {
+      "rank": 5,
+      "product_name": "[维福佳]维生素 C片 0.1g*100片/瓶",
+      "barcode": "9999900117075",
       "sales_receipt_count": 2,
       "sales_quantity": 2
     },
     {
-      "rank": 5,
-      "product_name": "连花 连花清瘟胶囊 0.35g*36粒/盒",
-      "barcode": "6920855052082",
+      "rank": 6,
+      "product_name": "[息斯敏]氯雷他定片 10mg*6片/板/盒",
+      "barcode": "6921184500060",
       "sales_receipt_count": 2,
-      "sales_quantity": 3
+      "sales_quantity": 2
     },
     {
-      "rank": 6,
-      "product_name": "[苏春]珍珠明目滴眼液 8ml/支/盒",
-      "barcode": "6900508175702",
+      "rank": 7,
+      "product_name": "福元 红霉素软膏 1%*10g/支/盒",
+      "barcode": "6928623003793",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 8,
+      "product_name": "[利尔康]碘伏消毒液 100ml/瓶",
+      "barcode": "6926378900350",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 9,
+      "product_name": "[三金]西瓜霜润喉片 0.6g*36片/盒",
+      "barcode": "6939261900788",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 10,
+      "product_name": "[葵花]人工牛黄甲硝唑胶囊 12粒*2板/盒",
+      "barcode": "6934366600854",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 11,
+      "product_name": "[鱼跃]医用电子体温计 YT312*1支/盒",
+      "barcode": "6933257916388",
+      "sales_receipt_count": 2,
+      "sales_quantity": 2
+    },
+    {
+      "rank": 12,
+      "product_name": "[午时]金银花露(含糖型)300ml/瓶",
+      "barcode": "6911011120233",
       "sales_receipt_count": 2,
       "sales_quantity": 2
     }

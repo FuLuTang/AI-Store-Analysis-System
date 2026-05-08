@@ -108,6 +108,25 @@ app.post('/api/stop', (req, res) => {
 app.post('/analyze', handleRun);
 app.post('/api/run', handleRun);
 
+// 获取案例 JSON 文件内容
+app.get('/api/examples', (req, res) => {
+    const examplesDir = path.join(__dirname, '..', 'json案例');
+    if (!fs.existsSync(examplesDir)) {
+        return res.status(404).json({ error: '未找到案例目录' });
+    }
+    
+    try {
+        const files = fs.readdirSync(examplesDir).filter(f => f.endsWith('.json'));
+        const contents = files.map(f => {
+            const content = fs.readFileSync(path.join(examplesDir, f), 'utf8');
+            return JSON.parse(content);
+        });
+        res.json({ files: contents, count: contents.length });
+    } catch (err) {
+        res.status(500).json({ error: '读取案例文件失败: ' + err.message });
+    }
+});
+
 function handleRun(req, res) {
     if (globalJobState.status === 'running') {
         return res.status(400).json({ error: '系统当前有任务正在运行，请等待或停止它。' });

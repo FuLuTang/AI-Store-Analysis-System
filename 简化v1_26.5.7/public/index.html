@@ -31,7 +31,10 @@
                 <input type="file" id="fileInput" hidden accept=".json" multiple>
             </div>
 
-            <div style="text-align: center; display: flex; justify-content: center; gap: 1rem;">
+            <div style="text-align: center; display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
+                <button id="exampleBtn" class="btn btn-secondary" style="background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
+                    <i class="fas fa-vial"></i> 使用案例 JSON 文件
+                </button>
                 <button id="startBtn" class="btn" disabled>
                     <i class="fas fa-magic"></i> 开始多维 AI 诊断
                 </button>
@@ -111,6 +114,7 @@
         const reportToggle = document.getElementById('reportToggle');
         const labelSimple = document.getElementById('labelSimple');
         const labelFull = document.getElementById('labelFull');
+        const exampleBtn = document.getElementById('exampleBtn');
         
         let jsonFilesData = [];
         let currentReport = null;
@@ -426,6 +430,31 @@
                 await checkStatus();
             } catch(e) {
                 console.error(e);
+            }
+        };
+
+        exampleBtn.onclick = async () => {
+            try {
+                exampleBtn.disabled = true;
+                const res = await fetch('/api/examples');
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                
+                jsonFilesData = data.files;
+                fileListDisplay.innerHTML = '';
+                jsonFilesData.forEach((f, i) => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    item.innerHTML = `<i class="fas fa-file-code"></i> 案例文件 ${i + 1} (${f.page?.title || '未命名'})`;
+                    fileListDisplay.appendChild(item);
+                });
+                
+                startBtn.disabled = false;
+                document.getElementById('fileName').innerText = `已加载 ${jsonFilesData.length} 个案例文件`;
+            } catch (err) {
+                alert('加载案例失败: ' + err.message);
+            } finally {
+                exampleBtn.disabled = false;
             }
         };
     </script>

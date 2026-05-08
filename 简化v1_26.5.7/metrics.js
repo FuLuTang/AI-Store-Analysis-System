@@ -53,6 +53,25 @@ function normalizeHotProducts(raw) {
     }));
 }
 
+function isValidNumber(v) {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function roundTo(v, digits = 1) {
+  if (!isValidNumber(v)) return 0;
+  const factor = 10 ** digits;
+  return Math.round(v * factor) / factor;
+}
+
+function toTally(results) {
+  const tally = { warning: 0, attention: 0, pass: 0, uncountable: 0 };
+  Object.values(results || {}).forEach(result => {
+    const k = result?.status;
+    if (k && tally[k] != null) tally[k]++;
+  });
+  return tally;
+}
+
 // ============================================================
 // alg2: 算指标 — 5 个核心指标函数
 // ============================================================
@@ -68,8 +87,14 @@ function calcChannelMix(sourceDistribution) {
     return { total: 0, channels: [], dominant: null, dominantPct: 0, status: 'uncountable' };
   }
 
-  const items = sourceDistribution.items;
+  const items = sourceDistribution.items.filter(item => isValidNumber(item?.value));
+  if (items.length === 0) {
+    return { total: 0, channels: [], dominant: null, dominantPct: 0, status: 'uncountable' };
+  }
   const total = items.reduce((sum, item) => sum + item.value, 0);
+  if (total <= 0) {
+    return { total: 0, channels: [], dominant: null, dominantPct: 0, status: 'uncountable' };
+  }
 
   const channels = items.map(item => ({
     key:   item.key,
@@ -86,7 +111,7 @@ function calcChannelMix(sourceDistribution) {
     channels,
     dominant:    dominant.label,
     dominantPct: dominant.pct,
-    status:      dominant.pct > 80 ? 'warning' : dominant.pct > 60 ? 'attention' : 'pass',
+    status:      dominant.pct > 85 ? 'warning' : dominant.pct > 70 ? 'attention' : 'pass',
   };
 }
 
@@ -112,7 +137,7 @@ function calcRevenueChange(rows) {
   const direction = changePct > 0 ? 'up' : changePct < 0 ? 'down' : 'flat';
   
   const absChange = Math.abs(changePct);
-  const status = absChange > 50 ? 'warning' : absChange > 20 ? 'attention' : 'pass';
+  const status = absChange > 65 ? 'warning' : absChange > 30 ? 'attention' : 'pass';
   
   return { current, previous, changePct, direction, status };
 }
@@ -125,12 +150,12 @@ function calcRevenueChange(rows) {
  * 输出: { ratioPct, status }
  */
 function calcO2OvsTotal(o2oRevenue, overviewRevenue) {
-  if (overviewRevenue == null || overviewRevenue === 0 || o2oRevenue == null) {
+  if (!isValidNumber(overviewRevenue) || overviewRevenue <= 0 || !isValidNumber(o2oRevenue)) {
     return { ratioPct: 0, status: 'uncountable' };
   }
   
   const ratioPct = Math.round((o2oRevenue / overviewRevenue) * 1000) / 10;
-  const status = ratioPct > 80 ? 'warning' : ratioPct > 60 ? 'attention' : 'pass';
+  const status = ratioPct > 88 ? 'warning' : ratioPct > 70 ? 'attention' : 'pass';
   
   return { ratioPct, status };
 }
@@ -182,8 +207,8 @@ function calcConsecutiveChange(rows, field) {
     startValue,
     endValue,
     totalChangePct,
-    status: currentDirection === 'down' && count >= 5 ? 'warning' :
-            currentDirection === 'down' && count >= 3 ? 'attention' : 'pass',
+    status: currentDirection === 'down' && count >= 6 ? 'warning' :
+            currentDirection === 'down' && count >= 4 ? 'attention' : 'pass',
   };
 }
 
@@ -232,7 +257,7 @@ function calcGrossMarginTrend(rows) {
     latestMargin: margins[0].marginPct,
     trend,
     slope:        Math.round(slope * 100) / 100,
-    status:       trend === 'declining' && margins[0].marginPct < avg ? 'warning' :
+    status:       trend === 'declining' && margins[0].marginPct < (avg - 3) ? 'warning' :
                   trend === 'declining' ? 'attention' : 'pass',
   };
 }
@@ -294,7 +319,7 @@ function calcProductStability(hotData) {
       fadingCount:    fading.length,
       todayOnlyCount: todayOnly.length,
     },
-    status: fading.length > 3 ? 'warning' : fading.length > 1 ? 'attention' : 'pass',
+    status: fading.length > 4 ? 'warning' : fading.length > 2 ? 'attention' : 'pass',
   };
 }
 
@@ -318,7 +343,7 @@ function calcHighRankStockoutAlert(outOfStockProducts, threshold = 50) {
     }))
     .sort((a, b) => a.salesRank - b.salesRank);
 
-  const hasHighRank = alerts.some(a => a.salesRank <= 20);
+  const hasHighRank = alerts.some(a => a.salesRank <= 15);
   const hasMedRank  = alerts.some(a => a.salesRank <= 35);
 
   return {
@@ -328,6 +353,193 @@ function calcHighRankStockoutAlert(outOfStockProducts, threshold = 50) {
     mediumCount:   alerts.filter(a => a.salesRank > 20 && a.salesRank <= 35).length,
     status:        hasHighRank ? 'warning' : hasMedRank ? 'attention' : 'pass',
   };
+}
+
+function calcGrossMargin(grossProfit, revenue) {
+  if (!isValidNumber(grossProfit) || !isValidNumber(revenue) || revenue <= 0) {
+    return { marginPct: 0, status: 'uncountable' };
+  }
+  const marginPct = roundTo((grossProfit / revenue) * 100, 1);
+  const status = marginPct < 12 ? 'warning' : marginPct < 18 ? 'attention' : 'pass';
+  return { marginPct, status };
+}
+
+function calcAvgOrderValue(revenue, visitorCount, baselineAvgOrder = null) {
+  if (!isValidNumber(revenue) || !isValidNumber(visitorCount) || visitorCount <= 0) {
+    return { avgOrderValue: 0, baselineAvgOrder: 0, deviationPct: 0, status: 'uncountable' };
+  }
+  const avgOrderValue = roundTo(revenue / visitorCount, 2);
+  if (!isValidNumber(baselineAvgOrder) || baselineAvgOrder <= 0) {
+    return { avgOrderValue, baselineAvgOrder: 0, deviationPct: 0, status: 'uncountable' };
+  }
+  const deviationPct = roundTo(((avgOrderValue - baselineAvgOrder) / baselineAvgOrder) * 100, 1);
+  const absDev = Math.abs(deviationPct);
+  const status = absDev > 50 ? 'warning' : absDev > 25 ? 'attention' : 'pass';
+  return { avgOrderValue, baselineAvgOrder: roundTo(baselineAvgOrder, 2), deviationPct, status };
+}
+
+function calcMemberPenetration(memberRevenue, totalRevenue) {
+  if (!isValidNumber(memberRevenue) || !isValidNumber(totalRevenue) || totalRevenue <= 0) {
+    return { penetrationPct: 0, status: 'uncountable' };
+  }
+  const penetrationPct = roundTo((memberRevenue / totalRevenue) * 100, 1);
+  const status = penetrationPct < 3 ? 'warning' : penetrationPct < 10 ? 'attention' : 'pass';
+  return { penetrationPct, status };
+}
+
+function calcMemberVsOverall(memberAvgOrder, overallAvgOrder) {
+  if (!isValidNumber(memberAvgOrder) || !isValidNumber(overallAvgOrder) || overallAvgOrder <= 0) {
+    return { memberAvg: 0, overallAvg: 0, diffPct: 0, status: 'uncountable' };
+  }
+  const diffPct = roundTo(((memberAvgOrder - overallAvgOrder) / overallAvgOrder) * 100, 1);
+  const status = diffPct < -60 ? 'warning' : diffPct < -20 ? 'attention' : 'pass';
+  return { memberAvg: roundTo(memberAvgOrder, 2), overallAvg: roundTo(overallAvgOrder, 2), diffPct, status };
+}
+
+function calcPlatformConcentration(row) {
+  if (!row || !isValidNumber(row.total_revenue) || row.total_revenue <= 0) {
+    return { dominantPlatform: null, concentrationPct: 0, status: 'uncountable' };
+  }
+  const mt = isValidNumber(row.meituan_revenue) ? row.meituan_revenue : 0;
+  const el = isValidNumber(row.eleme_revenue) ? row.eleme_revenue : 0;
+  const dominantPlatform = mt >= el ? 'meituan' : 'eleme';
+  const concentrationPct = roundTo((Math.max(mt, el) / row.total_revenue) * 100, 1);
+  const status = concentrationPct > 88 ? 'warning' : concentrationPct > 78 ? 'attention' : 'pass';
+  return { dominantPlatform, concentrationPct, status };
+}
+
+function calcO2OGrossMargin(row) {
+  if (!row || !isValidNumber(row.total_revenue) || row.total_revenue <= 0 || !isValidNumber(row.gross_profit)) {
+    return { marginPct: 0, status: 'uncountable' };
+  }
+  const marginPct = roundTo((row.gross_profit / row.total_revenue) * 100, 1);
+  const status = marginPct < 8 ? 'warning' : marginPct < 13 ? 'attention' : 'pass';
+  return { marginPct, status };
+}
+
+function calcO2OTrend(rows, field) {
+  if (!rows || rows.length < 2) {
+    return { changes: [], overallTrend: 'stable', status: 'uncountable' };
+  }
+  const changes = [];
+  for (let i = 1; i < rows.length; i++) {
+    const prev = rows[i - 1]?.[field];
+    const curr = rows[i]?.[field];
+    if (!isValidNumber(prev) || !isValidNumber(curr) || prev === 0) continue;
+    changes.push({
+      period: rows[i].period,
+      changePct: roundTo(((curr - prev) / prev) * 100, 1),
+    });
+  }
+  if (changes.length === 0) {
+    return { changes: [], overallTrend: 'stable', status: 'uncountable' };
+  }
+  const avg = changes.reduce((sum, c) => sum + c.changePct, 0) / changes.length;
+  const overallTrend = avg > 3 ? 'rising' : avg < -3 ? 'falling' : 'stable';
+  const tail = changes.slice(-3);
+  const consecutiveFalling = tail.length === 3 && tail.every(c => c.changePct < 0);
+  const status = overallTrend === 'falling' && consecutiveFalling ? 'warning' :
+                 overallTrend === 'falling' ? 'attention' : 'pass';
+  return { changes, overallTrend, status };
+}
+
+function calcHotProductConcentration(ranking, topN = 3) {
+  if (!ranking || ranking.length === 0) {
+    return { topNReceiptCount: 0, totalReceiptCount: 0, concentrationPct: 0, status: 'uncountable' };
+  }
+  const valid = ranking.filter(p => isValidNumber(p.receiptCount) || isValidNumber(p.sales_receipt_count));
+  if (valid.length === 0) {
+    return { topNReceiptCount: 0, totalReceiptCount: 0, concentrationPct: 0, status: 'uncountable' };
+  }
+  const values = valid.map(p => p.receiptCount ?? p.sales_receipt_count);
+  const totalReceiptCount = values.reduce((sum, v) => sum + v, 0);
+  if (totalReceiptCount <= 0) {
+    return { topNReceiptCount: 0, totalReceiptCount: 0, concentrationPct: 0, status: 'uncountable' };
+  }
+  const topNReceiptCount = values.slice(0, topN).reduce((sum, v) => sum + v, 0);
+  const concentrationPct = roundTo((topNReceiptCount / totalReceiptCount) * 100, 1);
+  const status = concentrationPct > 78 ? 'warning' : concentrationPct > 58 ? 'attention' : 'pass';
+  return { topNReceiptCount, totalReceiptCount, concentrationPct, status };
+}
+
+function calcStockoutRate(top500Total, outOfStock) {
+  const totalCount = top500Total?.length || 0;
+  const stockoutCount = outOfStock?.length || 0;
+  if (totalCount <= 0) {
+    return { stockoutCount, stockoutPct: 0, status: 'uncountable' };
+  }
+  const stockoutPct = roundTo((stockoutCount / totalCount) * 100, 1);
+  const status = stockoutPct > 18 ? 'warning' : stockoutPct > 8 ? 'attention' : 'pass';
+  return { stockoutCount, stockoutPct, status };
+}
+
+function calcMissingCategoryRate(top500Total, missingCategory) {
+  const totalCount = top500Total?.length || 0;
+  const missingCount = missingCategory?.length || 0;
+  if (totalCount <= 0) {
+    return { missingCount, missingPct: 0, status: 'uncountable' };
+  }
+  const missingPct = roundTo((missingCount / totalCount) * 100, 1);
+  const status = missingPct > 12 ? 'warning' : missingPct > 5 ? 'attention' : 'pass';
+  return { missingCount, missingPct, status };
+}
+
+function calcActiveSKUCount(ranking) {
+  if (!ranking || ranking.length === 0) {
+    return { activeSKUs: 0, status: 'uncountable' };
+  }
+  const activeSKUs = ranking.filter(p => p?.barcode || p?.name || p?.product_name).length;
+  const status = activeSKUs < 4 ? 'warning' : activeSKUs < 8 ? 'attention' : 'pass';
+  return { activeSKUs, status };
+}
+
+function detectConsecutiveDecline(rows, field, alertDays = 3) {
+  const base = calcConsecutiveChange(rows, field);
+  if (base.status === 'uncountable') {
+    return { declineDays: 0, totalDeclinePct: 0, status: 'uncountable' };
+  }
+  const declineDays = base.direction === 'down' ? base.consecutiveDays : 0;
+  const totalDeclinePct = base.direction === 'down' ? base.totalChangePct : 0;
+  const status = declineDays >= (alertDays + 3) ? 'warning' :
+                 declineDays >= alertDays ? 'attention' : 'pass';
+  return { declineDays, totalDeclinePct, status };
+}
+
+function detectLowMemberAlert(memberRevenue, totalRevenue, threshold = 5) {
+  const penetration = calcMemberPenetration(memberRevenue, totalRevenue);
+  if (penetration.status === 'uncountable') return penetration;
+  const status = penetration.penetrationPct < Math.max(1, threshold - 2) ? 'warning' :
+                 penetration.penetrationPct < threshold ? 'attention' : 'pass';
+  return { penetrationPct: penetration.penetrationPct, status };
+}
+
+function detectChannelImbalance(channelMix) {
+  if (!channelMix || channelMix.status === 'uncountable') {
+    return { dominantChannel: null, dominantPct: 0, status: 'uncountable' };
+  }
+  return {
+    dominantChannel: channelMix.dominant,
+    dominantPct: channelMix.dominantPct,
+    status: channelMix.dominantPct > 86 ? 'warning' : channelMix.dominantPct > 72 ? 'attention' : 'pass',
+  };
+}
+
+function prepareStoreStatusLabel(params) {
+  const needed = ['revenueChange', 'grossMarginChange', 'visitorChange', 'avgOrderChange', 'memberPenetration', 'ecommerceRatio', 'consecutiveDecline', 'volatility'];
+  if (!params || needed.some(k => !isValidNumber(params[k]))) {
+    return { suggestedLabels: [], rawData: params || null, status: 'uncountable' };
+  }
+  const labels = [];
+  if (params.revenueChange > 0 && params.grossMarginChange > 0) labels.push('稳步增长');
+  if (params.revenueChange > 0 && params.grossMarginChange < 0) labels.push('假增长');
+  if (params.visitorChange < 0 && params.avgOrderChange > 0) labels.push('流量下滑但客单补偿');
+  if (params.consecutiveDecline >= 5) labels.push('衰退');
+  if (params.volatility > 0.45) labels.push('波动式增长');
+  if (params.ecommerceRatio > 85) labels.push('促销依赖');
+  if (labels.length === 0) labels.push('瓶颈');
+  const status = labels.includes('衰退') || labels.includes('假增长') ? 'warning' :
+                 labels.length > 1 ? 'attention' : 'pass';
+  return { suggestedLabels: labels, rawData: params, status };
 }
 
 
@@ -402,8 +614,8 @@ function prepareGrowthDecomposition(rows) {
   };
 
   // status: 下降且超5%→warning, 下降→attention, else pass
-  const status = revenueChangePct < -5 ? 'warning' :
-                 revenueChangePct < 0 ? 'attention' : 'pass';
+  const status = revenueChangePct < -8 ? 'warning' :
+                 revenueChangePct < -3 ? 'attention' : 'pass';
 
   return { revenueChange: round1(revenueChange), decomposition, aiPromptData, status };
 }
@@ -440,9 +652,9 @@ function prepareSalesQualityCheck(params) {
   };
   
   let status = 'pass';
-  if (revenueChangePct > 0 && grossProfitChangePct < 0) {
+  if (revenueChangePct > 0 && grossProfitChangePct < -5) {
     status = 'warning'; // 增收不增利
-  } else if (revenueChangePct - grossProfitChangePct > 20) {
+  } else if (revenueChangePct - grossProfitChangePct > 25) {
     status = 'attention'; // 增速背离
   }
   
@@ -513,8 +725,8 @@ function prepareStockoutLossEstimate(outOfStockProducts, avgOrderValue) {
   };
 
   // status: 日损失>500→warning, 有高影响品→attention, else pass
-  const status = estimatedDailyLoss > 500 ? 'warning' :
-                 highImpactItems.length > 0 ? 'attention' : 'pass';
+  const status = estimatedDailyLoss > 900 ? 'warning' :
+                 highImpactItems.length > 1 ? 'attention' : 'pass';
 
   return { estimatedDailyLoss, highImpactItems, aiPromptData, status };
 }
@@ -558,10 +770,7 @@ function prepareAnomalySummary(metricResults) {
   alerts.sort((a, b) => b.priority - a.priority);
 
   // 统计
-  const tally = { warning: 0, attention: 0, pass: 0, uncountable: 0 };
-  for (const result of Object.values(metricResults)) {
-    tally[result.status]++;
-  }
+  const tally = toTally(metricResults);
 
   const aiPromptData = {
     totalMetrics: Object.keys(metricResults).length,
@@ -648,6 +857,24 @@ function extractAlertDetail(metricName, result) {
   }
   if (metricName.includes('RevenueChange')) {
     return `营收${result.direction === 'down' ? '下降' : '增长'} ${Math.abs(result.changePct)}%`;
+  }
+  if (metricName.includes('GrossMargin')) {
+    return `毛利率${result.marginPct ?? result.latestMargin ?? 0}%`;
+  }
+  if (metricName.includes('MemberPenetration')) {
+    return `会员渗透率 ${result.penetrationPct}%`;
+  }
+  if (metricName.includes('MemberVsOverall')) {
+    return `会员客单较整体 ${result.diffPct}%`;
+  }
+  if (metricName.includes('PlatformConcentration')) {
+    return `${result.dominantPlatform || '平台'}占比 ${result.concentrationPct}%`;
+  }
+  if (metricName.includes('StockoutRate')) {
+    return `缺货率 ${result.stockoutPct}% (${result.stockoutCount}个)`;
+  }
+  if (metricName.includes('MissingCategoryRate')) {
+    return `缺种率 ${result.missingPct}% (${result.missingCount}个)`;
   }
   if (metricName.includes('O2OvsTotal')) {
     return `O2O营收占比达 ${result.ratioPct}%`;
@@ -880,7 +1107,22 @@ module.exports = {
   calcGrossMarginTrend,
   calcProductStability,
   calcHighRankStockoutAlert,
+  calcGrossMargin,
+  calcAvgOrderValue,
+  calcMemberPenetration,
+  calcMemberVsOverall,
+  calcPlatformConcentration,
+  calcO2OGrossMargin,
+  calcO2OTrend,
+  calcHotProductConcentration,
+  calcStockoutRate,
+  calcMissingCategoryRate,
+  calcActiveSKUCount,
+  detectConsecutiveDecline,
+  detectLowMemberAlert,
+  detectChannelImbalance,
   // B类：算法+AI辅助指标
+  prepareStoreStatusLabel,
   prepareGrowthDecomposition,
   prepareSalesQualityCheck,
   prepareStockoutLossEstimate,

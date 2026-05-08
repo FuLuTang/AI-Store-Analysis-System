@@ -185,7 +185,7 @@
         function updateNode(nodeId, status, time) {
             const node = document.getElementById(nodeId);
             if (node) {
-                node.classList.remove('pending', 'active', 'success', 'error', 'simulated');
+                node.classList.remove('pending', 'active', 'success', 'error', 'simulated', 'uncountable');
                 node.classList.add(status);
             }
             

@@ -1,6 +1,8 @@
 # 缓存
 /data_cache
 /cache
+/简化v1_26.5.7/data_cache
+/简化v1_26.5.7/cache
 
 # 运行文件
 */node_modules

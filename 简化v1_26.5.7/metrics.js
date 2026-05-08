@@ -672,6 +672,10 @@ function prepareSalesQualityCheck(params) {
  * 输出: { penetrationPct, memberAvgVsOverall, memberGrossMarginVsOverall, healthScore, signals, aiPromptData, status }
  */
 function prepareMemberHealthCheck(params) {
+  // 会员健康规则（单位说明）
+  // - *Threshold / *Gap: 百分比阈值（%）
+  // - *Penalty: 对 healthScore 的扣分值（分）
+  // - warningScore/attentionScore: 最终健康分阈值（分）
   const MEMBER_HEALTH_RULES = {
     penetrationCritical: 3,
     penetrationLow: 8,
@@ -780,6 +784,10 @@ function prepareMemberHealthCheck(params) {
  * 输出: { riskFactors, riskScore, aiPromptData, status }
  */
 function prepareChannelRiskAssessment(params) {
+  // 渠道风险规则（单位说明）
+  // - dominant*/platform*: 占比阈值（%）
+  // - score*: 风险得分增量（分）
+  // - warningScore/attentionScore: 最终风险分阈值（分）
   const CHANNEL_RISK_RULES = {
     dominantHigh: 85,
     dominantMedium: 72,

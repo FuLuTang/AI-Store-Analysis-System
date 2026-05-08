@@ -201,17 +201,20 @@ async function handleRun(req, res) {
 
             const overviewForRealtime = overviewDay || overviewMonth || overviewDefault;
             const overviewForTrend = overviewMonth || overviewDay || overviewDefault;
-            const getOverviewViewType = overview => overview?.page?.viewType || 'unknown';
+            const getOverviewGranularity = overview => overview?.page?.viewType || 'unknown';
+            if (!overviewDay && !overviewMonth && overviewDefault) {
+                sendLog('alg1', '  ⚠ 未找到概览-日/月，回退使用默认概览数据');
+            }
 
             // Normalize
             let realtimeRows = null, trendRows = null;
             if (overviewForRealtime) {
                 realtimeRows = metrics.normalizeOverviewRows(overviewForRealtime);
-                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewViewType(overviewForRealtime)} 数据`);
+                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewGranularity(overviewForRealtime)} 数据`);
             }
             if (overviewForTrend) {
                 trendRows = metrics.normalizeOverviewRows(overviewForTrend);
-                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewViewType(overviewForTrend)} 数据`);
+                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewGranularity(overviewForTrend)} 数据`);
             }
 
             let hotNorm = {};

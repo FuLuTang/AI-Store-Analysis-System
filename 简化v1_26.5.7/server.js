@@ -182,7 +182,7 @@ async function handleRun(req, res) {
 
             const overviewDay   = pickModule('business_overview', 'day');
             const overviewMonth = pickModule('business_overview', 'month');
-            const overviewAny   = pickModule('business_overview');
+            const overviewDefault = pickModule('business_overview');
             const o2oDay        = pickModule('o2o_business_summary', 'day');
             const hotToday      = pickModule('operation_hot_products', 'today');
             const hotYesterday  = pickModule('operation_hot_products', 'yesterday');
@@ -196,18 +196,19 @@ async function handleRun(req, res) {
             const loadedCount = Object.values(sources).filter(Boolean).length;
             sendLog('alg1', `  成功加载 ${loadedCount}/${Object.keys(sources).length} 个数据源`);
 
-            const overviewForRealtime = overviewDay || overviewMonth || overviewAny;
-            const overviewForTrend = overviewMonth || overviewDay || overviewAny;
+            const overviewForRealtime = overviewDay || overviewMonth || overviewDefault;
+            const overviewForTrend = overviewMonth || overviewDay || overviewDefault;
+            const getOverviewTag = overview => overview?.page?.viewType || 'unknown';
 
             // Normalize
             let dayRows = null, monthRows = null;
             if (overviewForRealtime) {
                 dayRows = metrics.normalizeOverviewRows(overviewForRealtime);
-                sendLog('alg1', `  ✓ 即时指标使用概览-${overviewForRealtime?.page?.viewType || 'unknown'} 数据`);
+                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewTag(overviewForRealtime)} 数据`);
             }
             if (overviewForTrend) {
                 monthRows = metrics.normalizeOverviewRows(overviewForTrend);
-                sendLog('alg1', `  ✓ 趋势指标使用概览-${overviewForTrend?.page?.viewType || 'unknown'} 数据`);
+                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewTag(overviewForTrend)} 数据`);
             }
 
             let hotNorm = {};

@@ -199,8 +199,8 @@ async function handleRun(req, res) {
             const loadedCount = Object.values(sources).filter(Boolean).length;
             sendLog('alg1', `  成功加载 ${loadedCount}/${Object.keys(sources).length} 个数据源`);
 
-            const overviewForRealtime = overviewDay || overviewMonth || overviewFallback;
-            const overviewForTrend = overviewMonth || overviewDay || overviewFallback;
+            const realtimeOverviewSource = overviewDay || overviewMonth || overviewFallback;
+            const trendOverviewSource = overviewMonth || overviewDay || overviewFallback;
             const getOverviewViewType = overview => overview?.page?.viewType || 'unknown';
             if (!overviewDay && !overviewMonth && overviewFallback) {
                 sendLog('alg1', '  ⚠ 未找到概览-日/月，回退使用默认概览数据');
@@ -208,13 +208,13 @@ async function handleRun(req, res) {
 
             // Normalize
             let realtimeRows = null, trendRows = null;
-            if (overviewForRealtime) {
-                realtimeRows = metrics.normalizeOverviewRows(overviewForRealtime);
-                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewViewType(overviewForRealtime)} 数据`);
+            if (realtimeOverviewSource) {
+                realtimeRows = metrics.normalizeOverviewRows(realtimeOverviewSource);
+                sendLog('alg1', `  ✓ 即时指标使用概览-${getOverviewViewType(realtimeOverviewSource)} 数据`);
             }
-            if (overviewForTrend) {
-                trendRows = metrics.normalizeOverviewRows(overviewForTrend);
-                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewViewType(overviewForTrend)} 数据`);
+            if (trendOverviewSource) {
+                trendRows = metrics.normalizeOverviewRows(trendOverviewSource);
+                sendLog('alg1', `  ✓ 趋势指标使用概览-${getOverviewViewType(trendOverviewSource)} 数据`);
             }
 
             let hotNorm = {};
@@ -234,10 +234,10 @@ async function handleRun(req, res) {
                 ? baselineRows.reduce((sum, r) => sum + (r.revenue / r.visitorCount), 0) / baselineRows.length
                 : null;
             const overallAvgOrder = latestDayRow && latestDayRow.visitorCount > 0 ? latestDayRow.revenue / latestDayRow.visitorCount : null;
-            const summaryMetrics = overviewForRealtime?.summary?.metrics || [];
+            const summaryMetrics = realtimeOverviewSource?.summary?.metrics || [];
             const findMetric = key => summaryMetrics.find(m => m.key === key) || null;
             const metricValue = key => findMetric(key)?.value ?? null;
-            const metricMom = key => {
+            const getMetricComparisonValue = key => {
                 const metric = findMetric(key);
                 return metric?.mom?.value ?? metric?.compare?.value ?? null;
             };
@@ -247,9 +247,9 @@ async function handleRun(req, res) {
             const previousMemberRevenue = previousDayRow?.memberAmount ?? null;
             const memberChangePct = previousMemberRevenue > 0
                 ? ((memberRevenue - previousMemberRevenue) / previousMemberRevenue) * 100
-                : metricMom('member_revenue');
+                : getMetricComparisonValue('member_revenue');
             const memberOrderCount = metricValue('member_order_count');
-            const memberOrderChangePct = metricMom('member_order_count');
+            const memberOrderChangePct = getMetricComparisonValue('member_order_count');
             const memberGrossMarginPct = memberRevenue > 0 && latestDayRow?.memberGrossProfit != null
                 ? (latestDayRow.memberGrossProfit / memberRevenue) * 100
                 : metricValue('member_gross_margin');
@@ -268,7 +268,7 @@ async function handleRun(req, res) {
             const top500MissingProducts = top500Missing?.products || [];
             const revenueChangeRes = metrics.calcRevenueChange(realtimeRows);
             const revenueConsecutiveRes = metrics.calcConsecutiveChange(realtimeRows, 'revenue');
-            const channelMixRes = metrics.calcChannelMix(overviewForRealtime?.sourceDistribution);
+            const channelMixRes = metrics.calcChannelMix(realtimeOverviewSource?.sourceDistribution);
             const platformConcentrationRes = metrics.calcPlatformConcentration(latestO2ORow);
             const o2oTrendRevenueRes = metrics.calcO2OTrend(o2oRows, 'total_revenue');
             const o2oChangeValues = o2oTrendRevenueRes?.changes?.map(c => c.changePct) || [];

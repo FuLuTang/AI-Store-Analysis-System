@@ -672,6 +672,31 @@ function prepareSalesQualityCheck(params) {
  * 输出: { penetrationPct, memberAvgVsOverall, memberGrossMarginVsOverall, healthScore, signals, aiPromptData, status }
  */
 function prepareMemberHealthCheck(params) {
+  const MEMBER_HEALTH_RULES = {
+    penetrationCritical: 3,
+    penetrationLow: 8,
+    penetrationPenaltyCritical: 45,
+    penetrationPenaltyLow: 25,
+    revenueChangeDropCritical: -10,
+    revenueChangeDropLow: -3,
+    revenuePenaltyCritical: 18,
+    revenuePenaltyLow: 10,
+    orderChangeDropCritical: -10,
+    orderChangeDropLow: -3,
+    orderPenaltyCritical: 15,
+    orderPenaltyLow: 8,
+    avgOrderGapCritical: -20,
+    avgOrderGapLow: -8,
+    avgOrderPenaltyCritical: 12,
+    avgOrderPenaltyLow: 6,
+    marginGapCritical: -4,
+    marginGapLow: -2,
+    marginPenaltyCritical: 10,
+    marginPenaltyLow: 5,
+    warningScore: 55,
+    attentionScore: 75,
+  };
+
   const {
     memberRevenue,
     memberChangePct = null,
@@ -707,20 +732,20 @@ function prepareMemberHealthCheck(params) {
   const signals = [];
   let healthScore = 100;
 
-  if (penetrationPct < 3) { signals.push('会员渗透率过低'); healthScore -= 45; }
-  else if (penetrationPct < 8) { signals.push('会员渗透率偏低'); healthScore -= 25; }
+  if (penetrationPct < MEMBER_HEALTH_RULES.penetrationCritical) { signals.push('会员渗透率过低'); healthScore -= MEMBER_HEALTH_RULES.penetrationPenaltyCritical; }
+  else if (penetrationPct < MEMBER_HEALTH_RULES.penetrationLow) { signals.push('会员渗透率偏低'); healthScore -= MEMBER_HEALTH_RULES.penetrationPenaltyLow; }
 
-  if (isValidNumber(memberChangePct) && memberChangePct < -10) { signals.push('会员营收明显下滑'); healthScore -= 18; }
-  else if (isValidNumber(memberChangePct) && memberChangePct < -3) { signals.push('会员营收轻度下滑'); healthScore -= 10; }
+  if (isValidNumber(memberChangePct) && memberChangePct < MEMBER_HEALTH_RULES.revenueChangeDropCritical) { signals.push('会员营收明显下滑'); healthScore -= MEMBER_HEALTH_RULES.revenuePenaltyCritical; }
+  else if (isValidNumber(memberChangePct) && memberChangePct < MEMBER_HEALTH_RULES.revenueChangeDropLow) { signals.push('会员营收轻度下滑'); healthScore -= MEMBER_HEALTH_RULES.revenuePenaltyLow; }
 
-  if (isValidNumber(memberOrderChangePct) && memberOrderChangePct < -10) { signals.push('会员订单明显下滑'); healthScore -= 15; }
-  else if (isValidNumber(memberOrderChangePct) && memberOrderChangePct < -3) { signals.push('会员订单轻度下滑'); healthScore -= 8; }
+  if (isValidNumber(memberOrderChangePct) && memberOrderChangePct < MEMBER_HEALTH_RULES.orderChangeDropCritical) { signals.push('会员订单明显下滑'); healthScore -= MEMBER_HEALTH_RULES.orderPenaltyCritical; }
+  else if (isValidNumber(memberOrderChangePct) && memberOrderChangePct < MEMBER_HEALTH_RULES.orderChangeDropLow) { signals.push('会员订单轻度下滑'); healthScore -= MEMBER_HEALTH_RULES.orderPenaltyLow; }
 
-  if (isValidNumber(memberAvgVsOverall) && memberAvgVsOverall < -20) { signals.push('会员客单明显低于整体'); healthScore -= 12; }
-  else if (isValidNumber(memberAvgVsOverall) && memberAvgVsOverall < -8) { signals.push('会员客单偏低'); healthScore -= 6; }
+  if (isValidNumber(memberAvgVsOverall) && memberAvgVsOverall < MEMBER_HEALTH_RULES.avgOrderGapCritical) { signals.push('会员客单明显低于整体'); healthScore -= MEMBER_HEALTH_RULES.avgOrderPenaltyCritical; }
+  else if (isValidNumber(memberAvgVsOverall) && memberAvgVsOverall < MEMBER_HEALTH_RULES.avgOrderGapLow) { signals.push('会员客单偏低'); healthScore -= MEMBER_HEALTH_RULES.avgOrderPenaltyLow; }
 
-  if (isValidNumber(memberGrossMarginVsOverall) && memberGrossMarginVsOverall < -4) { signals.push('会员毛利率明显偏低'); healthScore -= 10; }
-  else if (isValidNumber(memberGrossMarginVsOverall) && memberGrossMarginVsOverall < -2) { signals.push('会员毛利率偏低'); healthScore -= 5; }
+  if (isValidNumber(memberGrossMarginVsOverall) && memberGrossMarginVsOverall < MEMBER_HEALTH_RULES.marginGapCritical) { signals.push('会员毛利率明显偏低'); healthScore -= MEMBER_HEALTH_RULES.marginPenaltyCritical; }
+  else if (isValidNumber(memberGrossMarginVsOverall) && memberGrossMarginVsOverall < MEMBER_HEALTH_RULES.marginGapLow) { signals.push('会员毛利率偏低'); healthScore -= MEMBER_HEALTH_RULES.marginPenaltyLow; }
 
   healthScore = Math.max(0, Math.min(100, Math.round(healthScore)));
   if (signals.length === 0) signals.push('会员结构整体稳定');
@@ -742,8 +767,8 @@ function prepareMemberHealthCheck(params) {
     summary: `会员渗透率${penetrationPct}%，健康分${healthScore}，核心信号：${signals.slice(0, 3).join('、')}`,
   };
 
-  const status = healthScore < 55 || penetrationPct < 3 ? 'warning' :
-                 healthScore < 75 || signals.length >= 2 ? 'attention' : 'pass';
+  const status = healthScore < MEMBER_HEALTH_RULES.warningScore || penetrationPct < MEMBER_HEALTH_RULES.penetrationCritical ? 'warning' :
+                 healthScore < MEMBER_HEALTH_RULES.attentionScore || signals.length >= 2 ? 'attention' : 'pass';
 
   return { penetrationPct, memberAvgVsOverall, memberGrossMarginVsOverall, healthScore, signals, aiPromptData, status };
 }
@@ -755,6 +780,22 @@ function prepareMemberHealthCheck(params) {
  * 输出: { riskFactors, riskScore, aiPromptData, status }
  */
 function prepareChannelRiskAssessment(params) {
+  const CHANNEL_RISK_RULES = {
+    dominantHigh: 85,
+    dominantMedium: 72,
+    platformHigh: 88,
+    platformMedium: 78,
+    scoreDominantHigh: 38,
+    scoreDominantMedium: 22,
+    scorePlatformHigh: 28,
+    scorePlatformMedium: 16,
+    scoreTrendContinuousFalling: 28,
+    scoreTrendFalling: 15,
+    scoreCoupledDecline: 10,
+    warningScore: 70,
+    attentionScore: 35,
+  };
+
   const { channelMix, o2oTrend, platformConcentration } = params || {};
   if (!channelMix || channelMix.status === 'uncountable') {
     return { riskFactors: [], riskScore: 0, aiPromptData: null, status: 'uncountable' };
@@ -763,21 +804,21 @@ function prepareChannelRiskAssessment(params) {
   const riskFactors = [];
   let riskScore = 0;
 
-  if (isValidNumber(channelMix.dominantPct) && channelMix.dominantPct > 85) {
+  if (isValidNumber(channelMix.dominantPct) && channelMix.dominantPct > CHANNEL_RISK_RULES.dominantHigh) {
     riskFactors.push(`渠道高度集中(${channelMix.dominant || '未知'}:${channelMix.dominantPct}%)`);
-    riskScore += 38;
-  } else if (isValidNumber(channelMix.dominantPct) && channelMix.dominantPct > 72) {
+    riskScore += CHANNEL_RISK_RULES.scoreDominantHigh;
+  } else if (isValidNumber(channelMix.dominantPct) && channelMix.dominantPct > CHANNEL_RISK_RULES.dominantMedium) {
     riskFactors.push(`渠道偏集中(${channelMix.dominant || '未知'}:${channelMix.dominantPct}%)`);
-    riskScore += 22;
+    riskScore += CHANNEL_RISK_RULES.scoreDominantMedium;
   }
 
   if (platformConcentration && platformConcentration.status !== 'uncountable') {
-    if (platformConcentration.concentrationPct > 88) {
+    if (platformConcentration.concentrationPct > CHANNEL_RISK_RULES.platformHigh) {
       riskFactors.push(`平台单边依赖(${platformConcentration.dominantPlatform}:${platformConcentration.concentrationPct}%)`);
-      riskScore += 28;
-    } else if (platformConcentration.concentrationPct > 78) {
+      riskScore += CHANNEL_RISK_RULES.scorePlatformHigh;
+    } else if (platformConcentration.concentrationPct > CHANNEL_RISK_RULES.platformMedium) {
       riskFactors.push(`平台集中度偏高(${platformConcentration.dominantPlatform}:${platformConcentration.concentrationPct}%)`);
-      riskScore += 16;
+      riskScore += CHANNEL_RISK_RULES.scorePlatformMedium;
     }
   }
 
@@ -786,21 +827,21 @@ function prepareChannelRiskAssessment(params) {
     const allFalling = tail.length === 3 && tail.every(c => c.changePct < 0);
     if (o2oTrend.overallTrend === 'falling' && allFalling) {
       riskFactors.push('O2O连续走弱(近3期均下降)');
-      riskScore += 28;
+      riskScore += CHANNEL_RISK_RULES.scoreTrendContinuousFalling;
     } else if (o2oTrend.overallTrend === 'falling') {
       riskFactors.push('O2O整体走弱');
-      riskScore += 15;
+      riskScore += CHANNEL_RISK_RULES.scoreTrendFalling;
     }
   }
 
   if (channelMix.dominant === '电商' && riskFactors.some(f => f.includes('O2O'))) {
     riskFactors.push('高依赖渠道同步下滑');
-    riskScore += 10;
+    riskScore += CHANNEL_RISK_RULES.scoreCoupledDecline;
   }
 
   riskScore = Math.max(0, Math.min(100, Math.round(riskScore)));
-  const status = riskScore >= 70 ? 'warning' :
-                 riskScore >= 35 ? 'attention' : 'pass';
+  const status = riskScore >= CHANNEL_RISK_RULES.warningScore ? 'warning' :
+                 riskScore >= CHANNEL_RISK_RULES.attentionScore ? 'attention' : 'pass';
 
   const aiPromptData = {
     dominantChannel: channelMix.dominant || null,

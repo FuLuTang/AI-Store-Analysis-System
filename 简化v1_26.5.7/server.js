@@ -12,6 +12,30 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+
+app.get('/api/config', (req, res) => {
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            const data = fs.readFileSync(CONFIG_FILE, 'utf8');
+            res.json(JSON.parse(data));
+        } else {
+            res.json({});
+        }
+    } catch (err) {
+        res.status(500).json({ error: '读取配置失败' });
+    }
+});
+
+app.post('/api/config', (req, res) => {
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(req.body, null, 2));
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: '保存配置失败' });
+    }
+});
+
 const CACHE_DIR = path.join(__dirname, 'data_cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR);
 

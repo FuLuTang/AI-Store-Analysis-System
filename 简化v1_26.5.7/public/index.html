@@ -387,13 +387,22 @@
             }
         }
 
+        let currentSettings = {
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: '',
+            model: 'gpt-4o'
+        };
+
+        // 页面加载时获取云端设置
+        fetch('/api/config').then(res => res.json()).then(data => {
+            if (data.baseUrl) currentSettings.baseUrl = data.baseUrl;
+            if (data.apiKey) currentSettings.apiKey = data.apiKey;
+            if (data.model) currentSettings.model = data.model;
+        }).catch(e => console.error('获取配置失败', e));
+
         // === 设置相关 ===
         function loadSettings() {
-            return {
-                baseUrl: localStorage.getItem('ai_baseUrl') || 'https://api.openai.com/v1',
-                apiKey: localStorage.getItem('ai_apiKey') || '',
-                model: localStorage.getItem('ai_model') || 'gpt-4o'
-            };
+            return currentSettings;
         }
 
         function openSettings() {
@@ -408,11 +417,25 @@
             document.getElementById('settingsModal').classList.remove('open');
         }
 
-        function saveSettings() {
-            localStorage.setItem('ai_baseUrl', document.getElementById('settingBaseUrl').value.trim());
-            localStorage.setItem('ai_apiKey', document.getElementById('settingApiKey').value.trim());
-            localStorage.setItem('ai_model', document.getElementById('settingModel').value.trim());
-            closeSettings();
+        async function saveSettings() {
+            const newSettings = {
+                baseUrl: document.getElementById('settingBaseUrl').value.trim(),
+                apiKey: document.getElementById('settingApiKey').value.trim(),
+                model: document.getElementById('settingModel').value.trim()
+            };
+            
+            try {
+                await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newSettings)
+                });
+                currentSettings = newSettings;
+                closeSettings();
+            } catch (err) {
+                alert('保存配置到云端失败！');
+                console.error(err);
+            }
         }
 
         // === 文件上传 ===

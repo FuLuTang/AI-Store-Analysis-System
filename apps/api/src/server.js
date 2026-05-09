@@ -2,15 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const cleaner = require('./cleaner');
-const aiCaller = require('./ai-caller');
-const metrics = require('./metrics');
-const errorReviewer = require('./error-reviewer');
+const cleaner = require('../../../packages/core/cleaner');
+const aiCaller = require('../../../packages/ai/ai-caller');
+const metrics = require('../../../packages/core/metrics');
+const errorReviewer = require('../../../packages/ai/error-reviewer');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, '../../web/public')));
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
@@ -36,7 +36,7 @@ app.post('/api/config', (req, res) => {
     }
 });
 
-const CACHE_DIR = path.join(__dirname, 'data_cache');
+const CACHE_DIR = path.join(__dirname, '../../../storage/cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR);
 
 let sseClients = [];
@@ -134,7 +134,7 @@ app.post('/api/run', handleRun);
 
 // 获取案例 JSON 文件内容
 app.get('/api/examples', (req, res) => {
-    const examplesDir = path.join(__dirname, '..', 'json案例');
+    const examplesDir = path.join(__dirname, '../../../data/samples');
     if (!fs.existsSync(examplesDir)) {
         return res.status(404).json({ error: '未找到案例目录' });
     }

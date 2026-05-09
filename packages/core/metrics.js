@@ -1121,7 +1121,7 @@ function translateFactor(key) {
 // ============================================================
 
 function runDemo() {
-  const jsonDir = path.join(__dirname, '..', 'json案例');
+  const jsonDir = path.join(__dirname, '../../data/samples');
 
   // 加载数据
   const load = (filename) => JSON.parse(fs.readFileSync(path.join(jsonDir, filename), 'utf-8'));

@@ -1,11 +1,10 @@
-# 缓存
-/data_cache
-/cache
-/简化v1_26.5.7/data_cache
-/简化v1_26.5.7/cache
+# 依赖
+node_modules/
 
-# 运行文件
-*/node_modules
+# 缓存与数据
+/data_cache/
+/cache/
 
 # 无用文件
 .DS_Store
+.env

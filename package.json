@@ -1,0 +1,19 @@
+{
+  "name": "ai-store-analysis-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fuzhou Store AI Analysis System Monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "node apps/api/src/server.js",
+    "start": "npm run dev:api"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.18.2",
+    "openai": "^4.20.1"
+  }
+}

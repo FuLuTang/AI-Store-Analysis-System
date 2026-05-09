@@ -75,6 +75,9 @@ async function reviewError(settings, report, cleanedDataTexts, onChunk) {
 
         if (!response.ok) {
             const errText = await response.text();
+            if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
+                throw new Error(`网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`);
+            }
             throw new Error(`HTTP ${response.status}: ${errText}`);
         }
 
@@ -82,7 +85,7 @@ async function reviewError(settings, report, cleanedDataTexts, onChunk) {
         const decoder = new TextDecoder('utf-8');
         let fullText = '';
         let buffer = '';
-        let finalJson = null;
+        let usage = null;
 
         while (true) {
             const { done, value } = await reader.read();
@@ -90,7 +93,7 @@ async function reviewError(settings, report, cleanedDataTexts, onChunk) {
             
             buffer += decoder.decode(value, { stream: true });
             let lines = buffer.split('\n');
-            buffer = lines.pop(); // 保持最后一行不完整的在 buffer 中
+            buffer = lines.pop();
 
             for (let line of lines) {
                 line = line.trim();
@@ -100,23 +103,22 @@ async function reviewError(settings, report, cleanedDataTexts, onChunk) {
                     try {
                         const dataObj = JSON.parse(dataStr);
                         if (dataObj.choices && dataObj.choices[0].delta && dataObj.choices[0].delta.content) {
-                            fullText += dataObj.choices[0].delta.content;
+                            const content = dataObj.choices[0].delta.content;
+                            fullText += content;
+                            if (onChunk) onChunk(content);
                         }
-                        if (dataObj.usage) finalJson = dataObj;
-                        else if (!finalJson) finalJson = dataObj;
+                        if (dataObj.usage) usage = dataObj.usage;
                     } catch (e) {
-                        // 忽略不完整的 JSON 解析错误
+                        // 忽略解析错误
                     }
                 }
             }
         }
 
-        // 构造一个兼容旧逻辑的返回结构
-        if (finalJson) {
-            finalJson.choices = [{ message: { content: fullText } }];
-            return finalJson;
-        }
-        return fullText;
+        return {
+            choices: [{ message: { content: fullText } }],
+            usage: usage
+        };
     } catch (err) {
         clearTimeout(timeoutId);
         let errMsg = err.message;

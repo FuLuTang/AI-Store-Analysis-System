@@ -48,13 +48,7 @@
                 <span id="statusText" style="color: #666;">任务正在后台运行，请等待...</span>
             </div>
 
-            <div id="globalLogContainer" style="display: none; max-width: 800px; margin: 20px auto; background: #1e1e1e; color: #a3be8c; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 250px; overflow-y: auto; text-align: left; box-shadow: inset 0 0 10px rgba(0,0,0,0.5);">
-                <div style="color: #88c0d0; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #4c566a; padding-bottom: 5px; display: flex; justify-content: space-between;">
-                    <span><i class="fas fa-terminal"></i> 总后台运行日志</span>
-                    <a href="monitor.html" target="_blank" style="color: #81a1c1; text-decoration: none; font-weight: normal;"><i class="fas fa-external-link-alt"></i> 详细监控视图</a>
-                </div>
-                <div id="globalLogContent"></div>
-            </div>
+
 
             <div style="text-align: center; margin-top: 1rem; display: flex; justify-content: center; align-items: center; gap: 0.5rem;">
                 <span id="labelSimple" style="font-size: 0.9rem; color: var(--text-muted); font-weight: bold;">精简</span>
@@ -71,6 +65,25 @@
                 <div class="report-card">
                     <div id="reportContent" class="markdown-body"></div>
                 </div>
+            </div>
+
+            <!-- 底部日志与进度 -->
+            <div id="progressContainer" style="display: none; max-width: 800px; margin: 30px auto 10px; padding: 0; border-top: 1px solid #e2e8f0; padding-top: 20px;">
+                <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--text-muted); margin-bottom: 5px; padding: 0 5px;">
+                    <span style="font-weight: 600;"><i class="fas fa-tasks"></i> 系统处理进度 <span style="font-weight: normal; font-size: 12px; color: #94a3b8; margin-left: 6px;">(预计 3-5 分钟)</span></span>
+                    <span id="progressText" style="font-weight: bold; color: var(--primary);">0%</span>
+                </div>
+                <div style="width: 100%; background-color: #e2e8f0; border-radius: 6px; height: 10px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
+                    <div id="progressBar" style="width: 0%; height: 100%; background-color: var(--primary); transition: width 0.4s ease-out; background-image: linear-gradient(45deg, rgba(255,255,255,.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.15) 50%, rgba(255,255,255,.15) 75%, transparent 75%, transparent); background-size: 1rem 1rem;"></div>
+                </div>
+            </div>
+
+            <div id="globalLogContainer" style="display: none; max-width: 800px; margin: 0 auto 20px; background: #1e1e1e; color: #a3be8c; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 150px; overflow-y: auto; text-align: left; box-shadow: inset 0 0 10px rgba(0,0,0,0.5);">
+                <div style="color: #88c0d0; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #4c566a; padding-bottom: 5px; display: flex; justify-content: space-between;">
+                    <span><i class="fas fa-terminal"></i> 总后台运行日志</span>
+                    <a href="monitor.html" target="_blank" style="color: #81a1c1; text-decoration: none; font-weight: normal;"><i class="fas fa-external-link-alt"></i> 详细监控视图</a>
+                </div>
+                <div id="globalLogContent"></div>
             </div>
         </div>
     </div>
@@ -121,6 +134,36 @@
         let currentFullReport = null;
         let pollingInterval = null;
         let sseSource = null;
+        
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        
+        const nodeWeights = {
+            input: 1, clean: 1, api: 25, output: 1, review: 20,
+            alg1: 2, alg2: 8, alg3: 1, fusion: 1, rep1: 20, rep2: 20
+        };
+        let nodeProgress = {};
+        let aiWaitCounters = {};
+
+        function resetProgressState() {
+            for (let key in nodeWeights) nodeProgress[key] = 0;
+            aiWaitCounters = { api: 0, review: 0, rep1: 0, rep2: 0 };
+            updateOverallProgress();
+        }
+
+        function updateOverallProgress() {
+            let total = 0;
+            for (let key in nodeProgress) {
+                total += nodeProgress[key] * (nodeWeights[key] / 100);
+            }
+            let percentage = Math.round(total);
+            if (percentage > 100) percentage = 100;
+            progressBar.style.width = `${percentage}%`;
+            progressText.innerText = `${percentage}%`;
+        }
+        
+        resetProgressState();
 
         function connectSSE() {
             if (sseSource) return;
@@ -133,8 +176,47 @@
                     div.innerText = `[${data.time}] ${data.message}`;
                     globalLogContent.appendChild(div);
                     globalLogContainer.scrollTop = globalLogContainer.scrollHeight;
+                    
+                    // 针对长期等待的 AI 节点，根据输出的 log 估算非线性内部进度
+                    if (['api', 'review', 'rep1', 'rep2'].includes(data.nodeId)) {
+                        if (data.message.includes('正在思考中') || data.message.includes('模型:') || data.message.includes('请求')) {
+                            if (aiWaitCounters[data.nodeId] === undefined) aiWaitCounters[data.nodeId] = 0;
+                            aiWaitCounters[data.nodeId] += 1;
+                            let count = aiWaitCounters[data.nodeId];
+                            
+                            // 优化算法：前期按每跳（约5秒）8%匀速增长，避免一上来跑得太快
+                            // 当超过 10 跳（50秒）时，转为指数逼近 99%
+                            let p = 0;
+                            if (count <= 10) {
+                                p = count * 8; // 8, 16, 24 ... 80
+                            } else {
+                                p = 80 + 19 * (1 - Math.exp(-0.2 * (count - 10)));
+                            }
+                            if (p > 99) p = 99;
+                            
+                            if (nodeProgress[data.nodeId] !== 100) {
+                                nodeProgress[data.nodeId] = p;
+                                updateOverallProgress();
+                            }
+                        }
+                    }
+                } else if (data.type === 'progress') {
+                    if (data.nodeId === 'alg2') {
+                        let p = (data.current / data.total) * 100;
+                        if (p > 99 && data.current !== data.total) p = 99;
+                        if (nodeProgress[data.nodeId] !== 100) {
+                            nodeProgress[data.nodeId] = p;
+                            updateOverallProgress();
+                        }
+                    }
+                } else if (data.type === 'status') {
+                    if (data.status === 'success' || data.status === 'simulated' || data.status === 'error') {
+                        nodeProgress[data.nodeId] = 100;
+                        updateOverallProgress();
+                    }
                 } else if (data.type === 'reset') {
                     globalLogContent.innerHTML = '';
+                    resetProgressState();
                 }
             };
         }
@@ -160,6 +242,7 @@
                     stopBtn.style.display = 'inline-flex';
                     loading.style.display = 'flex';
                     statusText.innerText = '任务正在后台运行，请等待...';
+                    progressContainer.style.display = 'block';
                     globalLogContainer.style.display = 'block';
                     connectSSE();
                     resultSection.classList.remove('visible');
@@ -173,7 +256,8 @@
                     startBtn.disabled = jsonFilesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
-                    globalLogContainer.style.display = 'none';
+                    progressContainer.style.display = 'block';
+                    globalLogContainer.style.display = 'block';
                     
                     if (data.result && data.fullResult) {
                         currentReport = data.result;
@@ -187,7 +271,8 @@
                     startBtn.disabled = jsonFilesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
-                    globalLogContainer.style.display = 'none';
+                    progressContainer.style.display = 'block';
+                    globalLogContainer.style.display = 'block';
                     
                     if (data.errorMessage && data.errorMessage.length > 0 && currentReport == null) {
                         alert('运行结束: ' + (data.errorMessage || data.status));
@@ -199,7 +284,6 @@
                     startBtn.disabled = jsonFilesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
-                    globalLogContainer.style.display = 'none';
                 }
             } catch (e) {
                 console.error("Status fetch error", e);
@@ -389,6 +473,8 @@
             startBtn.disabled = true;
             stopBtn.style.display = 'inline-flex';
             loading.style.display = 'flex';
+            resetProgressState();
+            progressContainer.style.display = 'block';
             globalLogContainer.style.display = 'block';
             connectSSE();
             resultSection.classList.remove('visible');

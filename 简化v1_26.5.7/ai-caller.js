@@ -40,23 +40,79 @@ ideas:
 `;
 
 /**
- * 调用 OpenAI-compatible API
+ * 核心：通用的流式请求助手，用于绕过 100s 超时限制
+ */
+async function sharedStreamFetch(url, apiKey, payload, signal) {
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ ...payload, stream: true }),
+        signal
+    });
+
+    if (!response.ok) {
+        let errText = await response.text();
+        if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
+            errText = `网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`;
+        } else {
+            errText = errText.substring(0, 300);
+        }
+        throw new Error(`AI API 调用失败 (${response.status}): ${errText}`);
+    }
+
+    let fullText = '';
+    let usage = null;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        let lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (let line of lines) {
+            line = line.trim();
+            if (line.startsWith('data:')) {
+                const dataStr = line.substring(5).trim();
+                if (dataStr === '[DONE]') continue;
+                try {
+                    const dataObj = JSON.parse(dataStr);
+                    if (dataObj.choices && dataObj.choices[0].delta && dataObj.choices[0].delta.content) {
+                        fullText += dataObj.choices[0].delta.content;
+                    }
+                    if (dataObj.usage) usage = dataObj.usage;
+                } catch (e) {
+                    // 忽略 JSON 解析错误
+                }
+            }
+        }
+    }
+
+    return {
+        choices: [{ message: { content: fullText } }],
+        usage: usage
+    };
+}
+
+/**
+ * AI-1: 初级报告
  */
 async function callAI(settings, cleanedDataTexts, algoData) {
     const { baseUrl, apiKey, model } = settings;
 
-    // 构建基础上下文信息
     const now = new Date();
     const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
     const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
-    const contextHeader = `【当前分析环境】
-- 城市：福州
-- 日期：${dateStr}
-- 时间：${timeStr}
-`;
+    const contextHeader = `【当前分析环境】\n- 城市：福州\n- 日期：${dateStr}\n- 时间：${timeStr}\n`;
 
-    // 将算法结果转换为 Markdown
     let algoText = '【算法引擎预诊结果】\n暂无算法诊断结果。';
     if (algoData && algoData.anomalies) {
         const { summary, alerts } = algoData.anomalies;
@@ -71,38 +127,17 @@ async function callAI(settings, cleanedDataTexts, algoData) {
         cleanedDataTexts.join('\n\n---\n\n');
 
     const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
-
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        },
-            body: JSON.stringify({
-                model,
-                messages: [
-                    { role: 'system', content: SYSTEM_PROMPT },
-                    { role: 'user', content: userContent }
-                ],
-                reasoning_effort: "medium",
-                temperature: 0.3,
-                max_tokens: 16384
-            }),
-            signal: settings.signal
-    });
-
-    if (!response.ok) {
-        let errText = await response.text();
-        if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
-            errText = `网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`;
-        } else {
-            errText = errText.substring(0, 300);
-        }
-        throw new Error(`AI API 调用失败 (${response.status}): ${errText}`);
-    }
-
-    const data = await response.json();
-    return data; // 返回完整对象
+    
+    return await sharedStreamFetch(url, apiKey, {
+        model,
+        messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: userContent }
+        ],
+        reasoning_effort: "medium",
+        temperature: 0.3,
+        max_tokens: 16384
+    }, settings.signal);
 }
 
 const DETAILED_SYSTEM_PROMPT = `
@@ -130,92 +165,31 @@ const DETAILED_SYSTEM_PROMPT = `
 - 不要使用“不是，而是”句式
 `;
 
+/**
+ * AI-3: 详细报告
+ */
 async function callDetailedAI(settings, fusedReportText) {
     const { baseUrl, apiKey, model } = settings;
 
-    // 构建基础上下文信息
     const now = new Date();
     const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
     const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
-    const contextHeader = `【当前分析环境】
-- 城市：福州
-- 日期：${dateStr}
-- 时间：${timeStr}
-`;
-
+    const contextHeader = `【当前分析环境】\n- 城市：福州\n- 日期：${dateStr}\n- 时间：${timeStr}\n`;
     const userContent = contextHeader + '\n' + fusedReportText;
 
     const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-            model,
-            messages: [
-                { role: 'system', content: DETAILED_SYSTEM_PROMPT },
-                { role: 'user', content: userContent }
-            ],
-            reasoning_effort: "medium",
-            temperature: 0.4,
-            max_tokens: 16384,
-            stream: true // 开启流式输出以绕过 CF 100秒超时限制
-        }),
-        signal: settings.signal
-    });
-
-    if (!response.ok) {
-        let errText = await response.text();
-        if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
-            errText = `网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`;
-        } else {
-            errText = errText.substring(0, 300);
-        }
-        throw new Error(`详细报告 AI API 调用失败 (${response.status}): ${errText}`);
-    }
-
-    // 处理流式输出，将文字拼接到一起
-    let fullText = '';
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        let lines = buffer.split('\n');
-        // 保留最后一行（可能不完整）在 buffer 中
-        buffer = lines.pop();
-
-        for (let line of lines) {
-            line = line.trim();
-            if (line.startsWith('data:')) {
-                const dataStr = line.substring(5).trim();
-                if (dataStr === '[DONE]') continue;
-                try {
-                    const dataObj = JSON.parse(dataStr);
-                    if (dataObj.choices && dataObj.choices[0].delta && dataObj.choices[0].delta.content) {
-                        fullText += dataObj.choices[0].delta.content;
-                    }
-                } catch (e) {
-                    // 忽略不完整的 JSON 解析错误
-                }
-            }
-        }
-    }
-
-    // 伪装成普通的非流式返回格式，保证外部 server.js 调用的兼容性
-    return {
-        choices: [
-            { message: { content: fullText } }
-        ]
-    };
+    return await sharedStreamFetch(url, apiKey, {
+        model,
+        messages: [
+            { role: 'system', content: DETAILED_SYSTEM_PROMPT },
+            { role: 'user', content: userContent }
+        ],
+        reasoning_effort: "medium",
+        temperature: 0.4,
+        max_tokens: 16384
+    }, settings.signal);
 }
 
 const SIMPLIFIED_SYSTEM_PROMPT = `
@@ -244,56 +218,32 @@ const SIMPLIFIED_SYSTEM_PROMPT = `
 5. 禁止“不是，而是”句式
 `;
 
+/**
+ * AI-4: 老板视图 (精简报告)
+ */
 async function callSimplifiedAI(settings, detailedReportText) {
     const { baseUrl, apiKey, model } = settings;
 
-    // 构建基础上下文信息
     const now = new Date();
     const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
     const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
-    const contextHeader = `【当前分析环境】
-- 城市：福州
-- 日期：${dateStr}
-- 时间：${timeStr}
-`;
-
+    const contextHeader = `【当前分析环境】\n- 城市：福州\n- 日期：${dateStr}\n- 时间：${timeStr}\n`;
     const userContent = contextHeader + '\n\n【详细报告内容】\n' + detailedReportText;
 
     const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-            model,
-            messages: [
-                { role: 'system', content: SIMPLIFIED_SYSTEM_PROMPT },
-                { role: 'user', content: userContent }
-            ],
-            response_format: { type: "json_object" },
-            reasoning_effort: "medium",
-            temperature: 0.3,
-            max_tokens: 8192
-        }),
-        signal: settings.signal
-    });
-
-    if (!response.ok) {
-        let errText = await response.text();
-        if (errText.includes('<html') || errText.includes('<body') || errText.includes('cloudflare')) {
-            errText = `网关或代理错误 (如 Cloudflare 524 超时等)。这通常是因为模型思考时间过长导致连接断开。`;
-        } else {
-            errText = errText.substring(0, 300);
-        }
-        throw new Error(`精简报告 AI API 调用失败 (${response.status}): ${errText}`);
-    }
-
-    const data = await response.json();
-    return data;
+    return await sharedStreamFetch(url, apiKey, {
+        model,
+        messages: [
+            { role: 'system', content: SIMPLIFIED_SYSTEM_PROMPT },
+            { role: 'user', content: userContent }
+        ],
+        response_format: { type: "json_object" },
+        reasoning_effort: "medium",
+        temperature: 0.3,
+        max_tokens: 8192
+    }, settings.signal);
 }
 
 module.exports = { callAI, callDetailedAI, callSimplifiedAI };

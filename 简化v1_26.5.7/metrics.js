@@ -463,25 +463,30 @@ function calcHotProductConcentration(ranking, topN = 3) {
 }
 
 function calcStockoutRate(top500Total, outOfStock) {
-  const totalCount = top500Total?.length || 0;
+  // 优化：由于全量导出可能截断，且长尾缺货影响不大，核心改为衡量“Top 50 头部缺货率”
+  const headSize = 50;
+  const headStockouts = (outOfStock || []).filter(p => typeof p.sales_rank === 'number' && p.sales_rank <= headSize);
+  
   const stockoutCount = outOfStock?.length || 0;
-  if (totalCount <= 0) {
-    return { stockoutCount, stockoutPct: 0, status: 'uncountable' };
-  }
-  const stockoutPct = roundTo((stockoutCount / totalCount) * 100, 1);
-  const status = stockoutPct > 18 ? 'warning' : stockoutPct > 8 ? 'attention' : 'pass';
-  return { stockoutCount, stockoutPct, status };
+  const headStockoutCount = headStockouts.length;
+  
+  const stockoutPct = roundTo((headStockoutCount / headSize) * 100, 1);
+  const status = stockoutPct > 15 ? 'warning' : stockoutPct > 5 ? 'attention' : 'pass';
+  
+  return { stockoutCount, headStockoutCount, stockoutPct, status };
 }
 
 function calcMissingCategoryRate(top500Total, missingCategory) {
-  const totalCount = top500Total?.length || 0;
+  const headSize = 50;
+  const headMissing = (missingCategory || []).filter(p => typeof p.sales_rank === 'number' && p.sales_rank <= headSize);
+  
   const missingCount = missingCategory?.length || 0;
-  if (totalCount <= 0) {
-    return { missingCount, missingPct: 0, status: 'uncountable' };
-  }
-  const missingPct = roundTo((missingCount / totalCount) * 100, 1);
-  const status = missingPct > 12 ? 'warning' : missingPct > 5 ? 'attention' : 'pass';
-  return { missingCount, missingPct, status };
+  const headMissingCount = headMissing.length;
+  
+  const missingPct = roundTo((headMissingCount / headSize) * 100, 1);
+  const status = missingPct > 10 ? 'warning' : missingPct > 3 ? 'attention' : 'pass';
+  
+  return { missingCount, headMissingCount, missingPct, status };
 }
 
 function calcActiveSKUCount(ranking) {
@@ -1076,10 +1081,10 @@ function extractAlertDetail(metricName, result) {
     return `${result.dominantPlatform || '平台'}占比 ${result.concentrationPct}%`;
   }
   if (metricName.includes('StockoutRate')) {
-    return `缺货率 ${result.stockoutPct}% (${result.stockoutCount}个)`;
+    return `Top50缺货率 ${result.stockoutPct}% (前50名缺${result.headStockoutCount}个，总缺货${result.stockoutCount}个)`;
   }
   if (metricName.includes('MissingCategoryRate')) {
-    return `缺种率 ${result.missingPct}% (${result.missingCount}个)`;
+    return `Top50缺种率 ${result.missingPct}% (前50名缺${result.headMissingCount}个，总缺种${result.missingCount}个)`;
   }
   if (metricName.includes('O2OvsTotal')) {
     return `O2O营收占比达 ${result.ratioPct}%`;

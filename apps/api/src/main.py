@@ -41,7 +41,7 @@ app.add_middleware(
 
 STORAGE_DIR = ROOT_DIR / "storage"
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
-LEGACY_USER_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
+LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
 DEFAULT_TALLY = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
 STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪", "pass": "🟢"}
 SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
@@ -123,7 +123,7 @@ class SessionManager:
             return session
 
     def get_legacy_session(self) -> SessionState:
-        return self.get_session(LEGACY_USER_KEY, create_if_missing=True)
+        return self.get_session(LEGACY_ACCOUNT_KEY, create_if_missing=True)
 
     def save_profile(self, session: SessionState):
         session.account_dir.mkdir(parents=True, exist_ok=True)
@@ -257,9 +257,9 @@ def resolve_session(x_fzt_key: Optional[str], require_key: bool = False) -> Sess
         try:
             return session_manager.get_session(key, create_if_missing=False)
         except KeyError:
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            raise HTTPException(status_code=401, detail="Invalid or expired key")
     if require_key:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Authentication required")
     return session_manager.get_legacy_session()
 
 
@@ -371,8 +371,8 @@ async def sse_generator(session: SessionState):
 
 
 @app.get("/api/stream")
-async def stream(userKey: Optional[str] = Query(default=None)):
-    session = resolve_session(userKey, require_key=False)
+async def stream(user_key: Optional[str] = Query(default=None, alias="userKey")):
+    session = resolve_session(user_key, require_key=False)
     return StreamingResponse(sse_generator(session), media_type="text/event-stream")
 
 
@@ -649,7 +649,7 @@ def get_examples():
                 with open(f_path, 'r', encoding='utf-8') as f:
                     files_content.append(json.load(f))
             except Exception:
-                pass
+                print(f"示例文件加载失败: {f_path}")
 
     if not files_content:
         return {"error": "未找到案例文件，请检查目录结构"}

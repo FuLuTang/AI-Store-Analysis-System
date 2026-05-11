@@ -17,7 +17,7 @@ def hash_user_key(user_key: str) -> str:
 
 def mask_user_key(user_key: str) -> str:
     if len(user_key) <= 10:
-        return f"{user_key[:3]}***"
+        return "fzt_***"
     return f"{user_key[:6]}...{user_key[-4:]}"
 
 

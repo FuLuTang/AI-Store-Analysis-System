@@ -133,15 +133,43 @@ do_status() {
     systemctl status "$APP_NAME"
 }
 
+do_switch_branch() {
+    echo "==> 当前分支状态:"
+    git branch
+    echo "------------------------------------------"
+    echo " 1) 切换到 稳定版 (main 分支)"
+    echo " 2) 切换到 开发版 (dev 分支)"
+    echo " 3) 取消"
+    read -p "请选择 [1-3]: " br_choice < /dev/tty
+    
+    case "$br_choice" in
+        1) 
+            echo "==> 切换到 main..."
+            git fetch origin main
+            git checkout main
+            git reset --hard origin/main
+            ;;
+        2) 
+            echo "==> 切换到 dev..."
+            git fetch origin dev
+            git checkout dev
+            git reset --hard origin/dev
+            ;;
+        *) return ;;
+    esac
+    echo "✅ 分支切换完成，请重新运行脚本选择 '1) 全自动安装 / 更新' 以应用更改。"
+}
+
 echo " 1) 全自动安装 / 更新 (纯 Python 模式)"
 echo " 2) 停止服务"
 echo " 3) 重启服务"
 echo " 4) 查看实时日志"
 echo " 5) 查看运行状态"
-echo " 6) 退出"
+echo " 6) 切换版本 (开发版/稳定版)"
+echo " 7) 退出"
 echo "=========================================="
 
-read -p "请选择操作 [1-6]: " choice < /dev/tty
+read -p "请选择操作 [1-7]: " choice < /dev/tty
 
 case "$choice" in
     1) do_deploy ;;
@@ -149,6 +177,7 @@ case "$choice" in
     3) do_restart ;;
     4) do_logs ;;
     5) do_status ;;
-    6) exit 0 ;;
+    6) do_switch_branch ;;
+    7) exit 0 ;;
     *) echo "❌ 无效选项"; exit 1 ;;
 esac

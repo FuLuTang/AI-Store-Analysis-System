@@ -16,8 +16,8 @@ def hash_user_key(user_key: str) -> str:
 
 
 def mask_user_key(user_key: str) -> str:
-    if len(user_key) <= 10:
-        return "fzt_***"
+    if not isinstance(user_key, str) or not user_key.startswith("fzt_") or len(user_key) <= 10:
+        return "***"
     return f"{user_key[:6]}...{user_key[-4:]}"
 
 

@@ -4,6 +4,7 @@ import asyncio
 import time
 import shutil
 import re
+import logging
 from typing import List, Optional, Dict
 from threading import Lock
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, UploadFile, File, Header, Query
@@ -31,6 +32,7 @@ from packages.auth import generate_user_key, hash_user_key, mask_user_key, Regis
 load_dotenv()
 
 app = FastAPI(title="福州门店 AI 分析系统")
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -371,8 +373,8 @@ async def sse_generator(session: SessionState):
 
 
 @app.get("/api/stream")
-async def stream(user_key: Optional[str] = Query(default=None, alias="userKey")):
-    session = resolve_session(user_key, require_key=False)
+async def stream(x_fzt_key: Optional[str] = Query(default=None, alias="userKey")):
+    session = resolve_session(x_fzt_key, require_key=False)
     return StreamingResponse(sse_generator(session), media_type="text/event-stream")
 
 
@@ -648,8 +650,8 @@ def get_examples():
             try:
                 with open(f_path, 'r', encoding='utf-8') as f:
                     files_content.append(json.load(f))
-            except Exception:
-                print(f"示例文件加载失败: {f_path}")
+            except Exception as e:
+                logger.warning("示例文件加载失败: %s (%s)", f_path, str(e))
 
     if not files_content:
         return {"error": "未找到案例文件，请检查目录结构"}

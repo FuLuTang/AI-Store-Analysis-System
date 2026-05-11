@@ -55,9 +55,13 @@ do_deploy() {
     # 仅在第一次安装或依赖变化时可能需要 apt
     apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends >/dev/null 2>&1
 
-    # 处理虚拟环境
-    [ -d "venv" ] || python3 -m venv venv
-    source venv/bin/activate
+    # 处理虚拟环境 (确保 activate 脚本存在)
+    if [ ! -f "venv/bin/activate" ]; then
+        echo "==> 正在创建 Python 虚拟环境..."
+        rm -rf venv
+        python3 -m venv venv
+    fi
+    . venv/bin/activate
     pip install --upgrade pip >/dev/null
     pip install -r requirements.txt >/dev/null
 

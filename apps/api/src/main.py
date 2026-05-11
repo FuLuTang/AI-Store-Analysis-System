@@ -337,7 +337,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
     except TaskAbortedError as e:
         state.status = "aborted"
         state.error_message = str(e)
-        add_log("fusion", f"⚠️ {str(e)}")
+        add_log("system", f"⚠️ {str(e)}")
 
     except Exception as e:
         error_msg = "任务执行失败，请在后台监控流查看 system 节点日志"
@@ -363,7 +363,7 @@ def stop():
         state.force_stop = True
         state.status = "aborted"
         state.error_message = "任务被用户强行终止。"
-        add_log("fusion", "⚠️ 用户强制终止了任务！")
+        add_log("system", "⚠️ 用户强制终止了任务！")
     return {"status": "ok"}
 
 @app.get("/api/examples")

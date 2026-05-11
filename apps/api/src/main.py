@@ -195,7 +195,8 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
 
         rows = normalize_overview_rows(overview_day) if overview_day else []
         source_distribution = overview_day.get("sourceDistribution", {}) if overview_day else {}
-        o2o_rev = (o2o_day or {}).get("businessTable", {}).get("rows", [{}])[0].get("total_revenue", 0) if o2o_day else 0
+        o2o_rows = (o2o_day or {}).get("businessTable", {}).get("rows", [{}]) if o2o_day else [{}]
+        o2o_rev = o2o_rows[0].get("total_revenue", 0)
         overview_revenue = rows[0].get("revenue") if rows else None
 
         add_log("alg1", f"数据源就绪: 概览日={'是' if overview_day else '否'} / O2O日={'是' if o2o_day else '否'}")
@@ -299,7 +300,12 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         # 9) Fusion
         add_status("fusion", "active")
         add_log("fusion", "数据融合：合并初级报告、错误评审、异常日志...")
-        fused_context = f"【初级报告】\n{initial_report}\n\n【审计意见】\n{review_text}\n\n【算法日志】\n{json.dumps(anomaly_summary['sortedAlerts'], ensure_ascii=False)}"
+        anomaly_logs_text = json.dumps(anomaly_summary["sortedAlerts"], ensure_ascii=False)
+        fused_context = (
+            f"【初级报告】\n{initial_report}\n\n"
+            f"【审计意见】\n{review_text}\n\n"
+            f"【算法日志】\n{anomaly_logs_text}"
+        )
         add_status("fusion", "success")
         ensure_not_stopped()
 
@@ -328,9 +334,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         add_log("fusion", f"⚠️ {str(e)}")
 
     except Exception as e:
-        import traceback
-        error_msg = "任务执行失败，请查看日志"
-        print(traceback.format_exc())
+        error_msg = "任务执行失败，请在后台监控流查看 system 节点日志"
         add_log("system", f"发生错误: {str(e)}")
         state.error_message = error_msg
         state.status = "error"

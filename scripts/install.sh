@@ -115,8 +115,10 @@ EOF
 
 # --- 主界面 ---
 clear
+CURRENT_BR=$(git branch --show-current 2>/dev/null || echo "未知")
 echo "=========================================="
 echo "    $APP_DISPLAY_NAME 管理工具"
+echo "    当前版本: [$CURRENT_BR]"
 echo "=========================================="
 echo " 1) 部署 / 更新系统 (自动重启)"
 echo " 2) 停止服务"

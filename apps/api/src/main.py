@@ -115,9 +115,15 @@ async def save_config(request: Request):
 
 @app.get("/api/status")
 def get_status():
+    if state.status == "aborted":
+        safe_error = "任务被用户强行终止。"
+    elif state.status == "error":
+        safe_error = "任务执行失败，请在后台监控流查看 system 节点日志"
+    else:
+        safe_error = ""
     return {
         "status": state.status,
-        "errorMessage": state.error_message,
+        "errorMessage": safe_error,
         "result": state.result,
         "fullResult": state.full_result
     }
@@ -231,7 +237,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         add_status("alg3", "active")
         add_log("alg3", "汇总异常检测结果...")
         anomaly_summary = prepare_anomaly_summary(m_results)
-        tally = (anomaly_summary.get("aiPromptData") or {}).get("tally") or DEFAULT_TALLY
+        tally = anomaly_summary.get("aiPromptData", {}).get("tally", DEFAULT_TALLY)
         add_tally("alg3", tally)
         add_log("alg3", f"  🟢 pass: {tally.get('pass', 0)}")
         add_log("alg3", f"  🟡 attention: {tally.get('attention', 0)}")
@@ -276,7 +282,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
 
         add_status("api", "active")
         add_log("api", f"正在请求 AI 初步诊断 (模型: {settings['model']})...")
-        initial_resp = await call_ai(settings, cleaned_texts, {"anomalies": anomaly_summary.get("aiPromptData")})
+        initial_resp = await call_ai(settings, cleaned_texts, {"anomalies": anomaly_summary.get("aiPromptData", {})})
         initial_report = initial_resp["choices"][0]["message"]["content"]
         add_log("api", "初诊报告已生成")
         add_status("api", "success")
@@ -300,7 +306,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         # 9) Fusion
         add_status("fusion", "active")
         add_log("fusion", "数据融合：合并初级报告、错误评审、异常日志...")
-        anomaly_logs_text = json.dumps(anomaly_summary["sortedAlerts"], ensure_ascii=False)
+        anomaly_logs_text = json.dumps(anomaly_summary.get("sortedAlerts", []), ensure_ascii=False)
         fused_context = (
             f"【初级报告】\n{initial_report}\n\n"
             f"【审计意见】\n{review_text}\n\n"

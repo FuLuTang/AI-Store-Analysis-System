@@ -178,7 +178,8 @@ def add_status(session: SessionState, node_id: str, status: str):
 
 def add_log(session: SessionState, node_id: str, message: str):
     log_entry = emit_event(session, "log", {"nodeId": node_id, "message": message})
-    print(f"[{log_entry['time']}] {session.key_hash[:8]} {node_id}: {message}")
+    hash_prefix = (session.key_hash or "")[:8] if isinstance(session.key_hash, str) else "unknown"
+    print(f"[{log_entry['time']}] {hash_prefix} {node_id}: {message}")
 
 
 def add_progress(session: SessionState, node_id: str, current: int, total: int):

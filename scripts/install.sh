@@ -45,7 +45,9 @@ do_deploy() {
 
     # 准备生产目录
     mkdir -p "$APP_DIR"
-    cp -r "$PROJECT_ROOT/." "$APP_DIR/"
+    if [ "$PROJECT_ROOT" != "$APP_DIR" ]; then
+        cp -r "$PROJECT_ROOT/." "$APP_DIR/"
+    fi
 
     cd "$APP_DIR"
 

@@ -8,10 +8,9 @@ APP_DIR="/opt/ai-store-analysis"
 PORT="3000"
 SERVICE_FILE="/etc/systemd/system/$APP_NAME.service"
 
-echo "=========================================="
-echo "    $APP_DISPLAY_NAME (纯 Python 版)"
-echo "    不再依赖 Node.js / PM2"
-echo "=========================================="
+# 自动识别项目根目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # 必须 root 运行
 if [ "$(id -u)" -ne 0 ]; then
@@ -19,32 +18,48 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# 自动识别项目根目录 (脚本所在目录的上一级)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-
+# 核心部署逻辑
 do_deploy() {
-    echo "==> 1. 正在安装系统基础环境..."
-    apt update
-    apt install -y git curl ufw nginx ca-certificates python3 python3-pip python3-venv --no-install-recommends
-
-    # 准备目录
-    mkdir -p "$APP_DIR"
+    echo "------------------------------------------"
+    echo " 🚀 正在进入部署流程..."
+    echo " 1) 稳定版 (main)"
+    echo " 2) 开发版 (dev)"
+    echo " 3) 返回"
+    read -p "请选择安装版本 [1-3]: " br_choice < /dev/tty
     
-    echo "==> 同步代码从 $PROJECT_ROOT 到 $APP_DIR..."
+    local target_branch=""
+    case "$br_choice" in
+        1) target_branch="main" ;;
+        2) target_branch="dev" ;;
+        *) return ;;
+    esac
+
+    echo "==> 1. 正在同步代码 ($target_branch)..."
+    # 如果已经在项目目录且是 git 仓库，尝试切换分支
+    if [ -d "$PROJECT_ROOT/.git" ]; then
+        cd "$PROJECT_ROOT"
+        git fetch origin "$target_branch"
+        git checkout "$target_branch"
+        git reset --hard "origin/$target_branch"
+    fi
+
+    # 准备生产目录
+    mkdir -p "$APP_DIR"
     cp -r "$PROJECT_ROOT/." "$APP_DIR/"
 
     cd "$APP_DIR"
 
-    echo "==> 2. 正在准备 Python 虚拟环境..."
-    python3 -m venv venv
-    source venv/bin/activate
-    
-    echo "==> 3. 正在安装 Python 依赖..."
-    pip install --upgrade pip
-    pip install -r requirements.txt
+    echo "==> 2. 正在准备系统环境与依赖..."
+    # 仅在第一次安装或依赖变化时可能需要 apt
+    apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends >/dev/null 2>&1
 
-    echo "==> 4. 正在生成 Systemd 服务配置..."
+    # 处理虚拟环境
+    [ -d "venv" ] || python3 -m venv venv
+    source venv/bin/activate
+    pip install --upgrade pip >/dev/null
+    pip install -r requirements.txt >/dev/null
+
+    echo "==> 3. 正在更新系统服务配置..."
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=$APP_DISPLAY_NAME
@@ -63,17 +78,18 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOF
 
-    echo "==> 5. 正在启动系统服务..."
+    echo "==> 4. 正在重启服务并应用更改..."
     systemctl daemon-reload
-    systemctl enable "$APP_NAME"
+    systemctl enable "$APP_NAME" >/dev/null 2>&1
     systemctl restart "$APP_NAME"
 
-    echo "==> 6. 正在配置 Nginx 反向代理..."
-    cat > "/etc/nginx/sites-available/$APP_NAME" <<EOF
+    # Nginx 配置 (仅当配置不存在时创建)
+    if [ ! -f "/etc/nginx/sites-available/$APP_NAME" ]; then
+        echo "==> 配置 Nginx 反向代理..."
+        cat > "/etc/nginx/sites-available/$APP_NAME" <<EOF
 server {
     listen 80;
     server_name _;
-
     location / {
         proxy_pass http://127.0.0.1:$PORT;
         proxy_http_version 1.1;
@@ -81,103 +97,41 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_cache_bypass \$http_upgrade;
-        
-        # SSE 流式支持关键配置
         proxy_set_header X-Accel-Buffering no;
         proxy_buffering off;
-        chunked_transfer_encoding on;
         proxy_read_timeout 600s;
     }
 }
 EOF
-
-    ln -sf "/etc/nginx/sites-available/$APP_NAME" "/etc/nginx/sites-enabled/$APP_NAME"
-    rm -f /etc/nginx/sites-enabled/default
-
-    nginx -t
-    systemctl restart nginx
-
-    echo "==> 7. 正在配置防火墙..."
-    ufw allow OpenSSH
-    ufw allow 80
-    ufw --force enable
-
-    PUBLIC_IP=$(curl -fsSL ifconfig.me || true)
+        ln -sf "/etc/nginx/sites-available/$APP_NAME" "/etc/nginx/sites-enabled/$APP_NAME"
+        rm -f /etc/nginx/sites-enabled/default
+        systemctl restart nginx
+    fi
 
     echo
-    echo "✅ 纯净版部署完成！"
-    echo "📁 运行目录: $APP_DIR"
-    echo "⚙️ 服务状态: systemctl status $APP_NAME"
-    echo "📝 查看日志: journalctl -u $APP_NAME -f"
-    echo "🔗 访问地址: http://$PUBLIC_IP"
+    echo "✅ 部署/更新成功！当前版本: $target_branch"
+    echo "🔗 访问地址: http://$(curl -fsSL ifconfig.me || echo 'localhost')"
 }
 
-do_stop() {
-    echo "==> 正在停止服务..."
-    systemctl stop "$APP_NAME"
-    echo "✅ 服务已停止。"
-}
-
-do_restart() {
-    echo "==> 正在重启服务..."
-    systemctl restart "$APP_NAME"
-    echo "✅ 服务已重启。"
-}
-
-do_logs() {
-    echo "==> 正在查看实时日志 (按 Ctrl+C 退出)..."
-    journalctl -u "$APP_NAME" -f
-}
-
-do_status() {
-    systemctl status "$APP_NAME"
-}
-
-do_switch_branch() {
-    echo "==> 当前分支状态:"
-    git branch
-    echo "------------------------------------------"
-    echo " 1) 切换到 稳定版 (main 分支)"
-    echo " 2) 切换到 开发版 (dev 分支)"
-    echo " 3) 取消"
-    read -p "请选择 [1-3]: " br_choice < /dev/tty
-    
-    case "$br_choice" in
-        1) 
-            echo "==> 切换到 main..."
-            git fetch origin main
-            git checkout main
-            git reset --hard origin/main
-            ;;
-        2) 
-            echo "==> 切换到 dev..."
-            git fetch origin dev
-            git checkout dev
-            git reset --hard origin/dev
-            ;;
-        *) return ;;
-    esac
-    echo "✅ 分支切换完成，请重新运行脚本选择 '1) 全自动安装 / 更新' 以应用更改。"
-}
-
-echo " 1) 全自动安装 / 更新 (纯 Python 模式)"
+# --- 主界面 ---
+clear
+echo "=========================================="
+echo "    $APP_DISPLAY_NAME 管理工具"
+echo "=========================================="
+echo " 1) 部署 / 更新系统 (自动重启)"
 echo " 2) 停止服务"
-echo " 3) 重启服务"
-echo " 4) 查看实时日志"
-echo " 5) 查看运行状态"
-echo " 6) 切换版本 (开发版/稳定版)"
-echo " 7) 退出"
+echo " 3) 查看实时日志"
+echo " 4) 查看运行状态"
+echo " 5) 退出"
 echo "=========================================="
 
-read -p "请选择操作 [1-7]: " choice < /dev/tty
+read -p "请选择操作 [1-5]: " choice < /dev/tty
 
 case "$choice" in
     1) do_deploy ;;
-    2) do_stop ;;
-    3) do_restart ;;
-    4) do_logs ;;
-    5) do_status ;;
-    6) do_switch_branch ;;
-    7) exit 0 ;;
+    2) systemctl stop "$APP_NAME" && echo "✅ 服务已停止。" ;;
+    3) journalctl -u "$APP_NAME" -f ;;
+    4) systemctl status "$APP_NAME" ;;
+    5) exit 0 ;;
     *) echo "❌ 无效选项"; exit 1 ;;
 esac

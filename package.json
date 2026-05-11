@@ -8,7 +8,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:api": "node apps/api/src/server.js",
+    "dev:api": "python3 -m uvicorn apps.api.src.main:app --host 0.0.0.0 --port 3000 --reload",
+    "dev": "npm run dev:api",
     "start": "npm run dev:api"
   },
   "dependencies": {

@@ -6,7 +6,7 @@ APP_DIR="/opt/$APP_NAME"
 PORT="3000"
 
 echo "=========================================="
-echo "    AI Store Analysis 系统管理工具"
+echo "    AI Store Analysis 系统管理工具 (Python 版)"
 echo "=========================================="
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -15,16 +15,18 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 do_deploy() {
-    echo "==> 正在准备环境和依赖..."
+    echo "==> 正在准备系统环境..."
     apt update
-    apt install -y git curl ufw nginx ca-certificates --no-install-recommends
+    apt install -y git curl ufw nginx ca-certificates python3 python3-pip python3-venv --no-install-recommends
 
+    # 安装 Node.js (为了使用 PM2)
     if ! command -v node >/dev/null 2>&1; then
-      echo "==> 正在安装 Node.js 22..."
+      echo "==> 正在安装 Node.js 22 (用于 PM2 管理)..."
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
       apt install -y nodejs
     fi
 
+    # 安装 PM2
     if ! command -v pm2 >/dev/null 2>&1; then
       echo "==> 正在安装 PM2..."
       npm install -g pm2
@@ -32,17 +34,19 @@ do_deploy() {
 
     cd "$APP_DIR"
 
-    echo "==> 正在安装依赖..."
-    npm install
+    echo "==> 正在安装 Python 依赖..."
+    # 使用 pip3 安装依赖
+    if [ -f "requirements.txt" ]; then
+      pip3 install --break-system-packages -r requirements.txt
+    else
+      echo "⚠️ 找不到 requirements.txt，跳过 Python 依赖安装"
+    fi
 
-    echo "==> 正在启动服务..."
+    echo "==> 正在启动服务 (使用 FastAPI/Uvicorn)..."
     pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
 
-    if [ -f "package.json" ] && grep -q '"start"' package.json; then
-      pm2 start npm --name "$APP_NAME" -- start
-    else
-      pm2 start server.js --name "$APP_NAME"
-    fi
+    # 启动命令：使用 python3 -m uvicorn 运行
+    pm2 start "python3 -m uvicorn apps.api.src.main:app --host 0.0.0.0 --port $PORT" --name "$APP_NAME"
 
     pm2 save
     pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
@@ -60,6 +64,11 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_cache_bypass \$http_upgrade;
+        
+        # SSE 支持
+        proxy_set_header X-Accel-Buffering no;
+        proxy_buffering off;
+        chunked_transfer_encoding on;
     }
 }
 EOF
@@ -93,7 +102,7 @@ do_stop() {
 
 do_restart() {
     echo "==> 正在重启服务..."
-    pm2 restart "$APP_NAME" || pm2 start server.js --name "$APP_NAME"
+    pm2 restart "$APP_NAME"
     pm2 save
     echo "✅ 服务已重启。"
 }
@@ -121,7 +130,7 @@ do_uninstall() {
     fi
 }
 
-echo " 1) 安装 / 更新部署"
+echo " 1) 安装 / 更新部署 (Python 版)"
 echo " 2) 停止服务"
 echo " 3) 重启服务"
 echo " 4) 查看日志"

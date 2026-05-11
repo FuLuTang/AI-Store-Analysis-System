@@ -345,7 +345,7 @@ def _format_list(arr, limit=3, map_fn=None):
 def _extract_alert_detail(name, result):
     if "ChannelMix" in name:
         top = sorted(result.get("channels", []), key=lambda c: c.get("pct", 0), reverse=True)[:2]
-        return f"主导渠道为{result.get('dominant')}，前二: {'、'.join(f'{c[\"label\"]}({c[\"pct\"]}%)' for c in top)}"
+        return f"主导渠道为{result.get('dominant')}，前二: {'、'.join(f'{c['label']}({c['pct']}%)' for c in top)}"
     if "ConsecutiveChange" in name:
         d = "下降" if result.get("direction") == "down" else "上升"
         return f"连续{d}{result.get('consecutiveDays')}天 ({result.get('startValue')}→{result.get('endValue')})，累计{result.get('totalChangePct')}%"
@@ -363,12 +363,12 @@ def _extract_alert_detail(name, result):
         parts = [f"总缺货:{result.get('totalStockout', 0)}"]
         if result.get("highCount", 0) > 0:
             ha = [a for a in result.get("alerts", []) if a.get("salesRank", 999) <= 20]
-            parts.append(f"高危:{result['highCount']} {_format_list(ha, 2, lambda a: f'{a[\"name\"]}(排{a[\"salesRank\"]})')}")
+            parts.append(f"高危:{result['highCount']} {_format_list(ha, 2, lambda a: f"{a['name']}(排{a['salesRank']})")}")
         return "，".join(parts)
     if "StockoutLoss" in name:
         desc = f"预估日损失{result.get('estimatedDailyLoss', 0)}元"
         hi = result.get("highImpactItems", [])
-        if hi: desc += f"，高损品: {_format_list(hi, 2, lambda i: f'{i[\"name\"]}(损{i[\"estimatedLoss\"]}元)')}"
+        if hi: desc += f"，高损品: {_format_list(hi, 2, lambda i: f"{i['name']}(损{i['estimatedLoss']}元)")}"
         return desc
     if "GrowthDecomposition" in name:
         pd = _translate_factor(result.get("aiPromptData", {}).get("primaryDriver", "unknown"))

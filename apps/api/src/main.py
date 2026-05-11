@@ -135,10 +135,9 @@ def save_current_uploads(files_data: List[dict], filenames: Optional[List[str]] 
 
         for i, payload in enumerate(files_data):
             source_name = filenames[i] if filenames and i < len(filenames) else None
-            safe_name = sanitize_upload_filename(source_name, i)
-            output_path = (tmp_dir / f"{i + 1:02d}_{safe_name}").resolve()
-            if output_path.parent != tmp_dir.resolve():
-                raise HTTPException(status_code=400, detail="非法文件路径")
+            if source_name is not None:
+                sanitize_upload_filename(source_name, i)
+            output_path = tmp_dir / f"file_{i + 1:02d}.json"
             try:
                 output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as e:

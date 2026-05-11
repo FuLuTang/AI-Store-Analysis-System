@@ -190,7 +190,9 @@ def add_tally(session: SessionState, node_id: str, tally: dict):
 
 
 def ensure_not_stopped(session: SessionState):
-    if session.force_stop or session.status == "aborted":
+    with session.runtime_lock:
+        is_stopped = session.force_stop or session.status == "aborted"
+    if is_stopped:
         raise TaskAbortedError("任务被用户强制终止。")
 
 
@@ -382,16 +384,16 @@ async def stream(
 
 
 async def run_analysis_task(session: SessionState, files_data: List[dict], user_settings: Optional[dict]):
-    session.status = "running"
-    session.force_stop = False
-    session.error_message = ""
-    session.result = None
-    session.full_result = None
+    with session.runtime_lock:
+        session.status = "running"
+        session.force_stop = False
+        session.error_message = ""
+        session.result = None
+        session.full_result = None
     reset_events(session)
 
-    merged_settings = session.config.copy()
-    merged_settings.update(sanitize_settings(user_settings))
-    session.config.update(merged_settings)
+    session.config.update(sanitize_settings(user_settings))
+    active_settings = session.config.copy()
     session_manager.save_profile(session)
 
     try:
@@ -482,7 +484,7 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
         ensure_not_stopped(session)
 
         # 6) AI Initial Call
-        if not merged_settings.get("apiKey"):
+        if not active_settings.get("apiKey"):
             add_status(session, "api", "active")
             add_log(session, "api", "未检测到 API Key，进入模拟模式...")
             await asyncio.sleep(0.3)
@@ -516,8 +518,8 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
             return
 
         add_status(session, "api", "active")
-        add_log(session, "api", f"正在请求 AI 初步诊断 (模型: {merged_settings['model']})...")
-        initial_resp = await call_ai(merged_settings, cleaned_texts, {"anomalies": anomaly_summary.get("aiPromptData", {})})
+        add_log(session, "api", f"正在请求 AI 初步诊断 (模型: {active_settings['model']})...")
+        initial_resp = await call_ai(active_settings, cleaned_texts, {"anomalies": anomaly_summary.get("aiPromptData", {})})
         initial_report = initial_resp["choices"][0]["message"]["content"]
         add_log(session, "api", "初诊报告已生成")
         add_status(session, "api", "success")
@@ -532,7 +534,7 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
         # 8) Error Review
         add_status(session, "review", "active")
         add_log(session, "review", "启动逻辑审计复核...")
-        review_resp = await review_error(merged_settings, initial_report, cleaned_texts)
+        review_resp = await review_error(active_settings, initial_report, cleaned_texts)
         review_text = review_resp["choices"][0]["message"]["content"] if isinstance(review_resp, dict) else str(review_resp)
         add_log(session, "review", "审计复核完成")
         add_status(session, "review", "success")
@@ -553,7 +555,7 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
         # 10) Detailed
         add_status(session, "rep1", "active")
         add_log(session, "rep1", "正在融合审计意见生成深度报告...")
-        detailed_resp = await call_detailed_ai(merged_settings, fused_context)
+        detailed_resp = await call_detailed_ai(active_settings, fused_context)
         session.full_result = detailed_resp["choices"][0]["message"]["content"]
         add_log(session, "rep1", "深度报告生成成功")
         add_status(session, "rep1", "success")
@@ -562,24 +564,27 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
         # 11) Simplified
         add_status(session, "rep2", "active")
         add_log(session, "rep2", "生成精简老板视图...")
-        simplified_resp = await call_simplified_ai(merged_settings, session.full_result)
+        simplified_resp = await call_simplified_ai(active_settings, session.full_result)
         session.result = simplified_resp["choices"][0]["message"]["content"]
         add_log(session, "rep2", "任务全部完成！")
         add_status(session, "rep2", "success")
 
-        session.status = "completed"
+        with session.runtime_lock:
+            session.status = "completed"
         save_latest_report(session)
 
     except TaskAbortedError as e:
-        session.status = "aborted"
-        session.error_message = str(e)
+        with session.runtime_lock:
+            session.status = "aborted"
+            session.error_message = str(e)
         add_log(session, "system", f"⚠️ {str(e)}")
 
     except Exception as e:
         error_msg = "任务执行失败，请在后台监控流查看 system 节点日志"
         add_log(session, "system", f"发生错误: {str(e)}")
-        session.error_message = error_msg
-        session.status = "error"
+        with session.runtime_lock:
+            session.error_message = error_msg
+            session.status = "error"
 
 
 @app.post("/api/run")
@@ -590,8 +595,9 @@ async def run(request: Request, background_tasks: BackgroundTasks, x_fzt_key: Op
     filenames = data.get("filenames")
     user_settings = data.get("settings")
 
-    if session.status == "running":
-        raise HTTPException(status_code=400, detail="任务正在运行中")
+    with session.runtime_lock:
+        if session.status == "running":
+            raise HTTPException(status_code=400, detail="任务正在运行中")
 
     save_current_uploads(session, files, filenames if isinstance(filenames, list) else None)
     background_tasks.add_task(run_analysis_task, session, files, user_settings)
@@ -605,8 +611,9 @@ async def analyze(
     x_fzt_key: Optional[str] = Header(default=None)
 ):
     session = resolve_session(x_fzt_key, require_key=False)
-    if session.status == "running":
-        raise HTTPException(status_code=400, detail="任务正在运行中")
+    with session.runtime_lock:
+        if session.status == "running":
+            raise HTTPException(status_code=400, detail="任务正在运行中")
 
     parsed_files = []
     filenames = []
@@ -635,11 +642,12 @@ async def analyze(
 @app.post("/api/stop")
 def stop(x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key, require_key=False)
-    if session.status == "running":
-        session.force_stop = True
-        session.status = "aborted"
-        session.error_message = "任务被用户强行终止。"
-        add_log(session, "system", "⚠️ 用户强制终止了任务！")
+    with session.runtime_lock:
+        if session.status == "running":
+            session.force_stop = True
+            session.status = "aborted"
+            session.error_message = "任务被用户强行终止。"
+            add_log(session, "system", "⚠️ 用户强制终止了任务！")
     return {"status": "ok"}
 
 

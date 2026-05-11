@@ -2,8 +2,9 @@ import os
 import json
 import asyncio
 import time
+import shutil
 from typing import List, Optional
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -94,6 +95,33 @@ def ensure_not_stopped():
     if state.force_stop or state.status == "aborted":
         raise TaskAbortedError("任务被用户强制终止。")
 
+
+def _ensure_storage_dirs():
+    for d in [STORAGE_DIR, UPLOAD_DIR, CACHE_DIR]:
+        d.mkdir(parents=True, exist_ok=True)
+
+
+def save_current_uploads(files_data: List[dict], filenames: Optional[List[str]] = None):
+    _ensure_storage_dirs()
+    current_dir = UPLOAD_DIR / "current"
+    if current_dir.exists():
+        shutil.rmtree(current_dir)
+    current_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, payload in enumerate(files_data):
+        raw_name = (filenames[i] if filenames and i < len(filenames) else "") or f"file_{i + 1}.json"
+        safe_name = Path(raw_name).name
+        if not safe_name.lower().endswith(".json"):
+            safe_name = f"{safe_name}.json"
+        output_path = current_dir / f"{i + 1:02d}_{safe_name}"
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def save_latest_report():
+    _ensure_storage_dirs()
+    if isinstance(state.full_result, str) and state.full_result:
+        (STORAGE_DIR / "latest_report.md").write_text(state.full_result, encoding="utf-8")
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
@@ -127,6 +155,11 @@ def get_status():
         "result": state.result,
         "fullResult": state.full_result
     }
+
+
+@app.get("/api/logs")
+def get_logs():
+    return state.logs
 
 async def sse_generator():
     """SSE 日志推送，适配前端 EventSource('/api/stream')"""
@@ -278,6 +311,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
             }, ensure_ascii=False)
             add_status("rep2", "simulated")
             state.status = "completed"
+            save_latest_report()
             return
 
         add_status("api", "active")
@@ -333,6 +367,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         add_status("rep2", "success")
 
         state.status = "completed"
+        save_latest_report()
 
     except TaskAbortedError as e:
         state.status = "aborted"
@@ -353,8 +388,35 @@ async def run(request: Request, background_tasks: BackgroundTasks):
     
     if state.status == "running":
         raise HTTPException(status_code=400, detail="任务正在运行中")
-        
+
+    save_current_uploads(files)
     background_tasks.add_task(run_analysis_task, files, user_settings)
+    return {"status": "started"}
+
+
+@app.post("/api/analyze")
+async def analyze(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
+    if state.status == "running":
+        raise HTTPException(status_code=400, detail="任务正在运行中")
+
+    parsed_files = []
+    filenames = []
+    for uploaded_file in files:
+        filename = uploaded_file.filename or "unnamed.json"
+        if not filename.lower().endswith(".json"):
+            raise HTTPException(status_code=400, detail=f"仅支持 .json 文件: {filename}")
+
+        try:
+            raw = await uploaded_file.read()
+            parsed = json.loads(raw.decode("utf-8-sig"))
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"JSON 解析失败: {filename}")
+
+        parsed_files.append(parsed)
+        filenames.append(filename)
+
+    save_current_uploads(parsed_files, filenames)
+    background_tasks.add_task(run_analysis_task, parsed_files, None)
     return {"status": "started"}
 
 @app.post("/api/stop")
@@ -388,8 +450,7 @@ UPLOAD_DIR = STORAGE_DIR / "uploads"
 CACHE_DIR = STORAGE_DIR / "cache"
 
 # 确保目录存在
-for d in [STORAGE_DIR, UPLOAD_DIR, CACHE_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+_ensure_storage_dirs()
 
 # 挂载静态文件 (使用绝对路径更稳健)
 static_path = ROOT_DIR / "apps" / "web" / "public"

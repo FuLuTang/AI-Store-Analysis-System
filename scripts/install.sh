@@ -19,6 +19,10 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+# 自动识别项目根目录 (脚本所在目录的上一级)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
 do_deploy() {
     echo "==> 1. 正在安装系统基础环境..."
     apt update
@@ -26,11 +30,9 @@ do_deploy() {
 
     # 准备目录
     mkdir -p "$APP_DIR"
-    # 如果当前就在项目目录，尝试同步代码（如果是生产环境建议用 git clone）
-    if [ -f "requirements.txt" ]; then
-        echo "==> 同步代码到 $APP_DIR..."
-        cp -r . "$APP_DIR/"
-    fi
+    
+    echo "==> 同步代码从 $PROJECT_ROOT 到 $APP_DIR..."
+    cp -r "$PROJECT_ROOT/." "$APP_DIR/"
 
     cd "$APP_DIR"
 

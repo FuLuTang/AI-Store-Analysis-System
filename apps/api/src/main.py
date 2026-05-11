@@ -3,7 +3,9 @@ import json
 import asyncio
 import time
 import shutil
+import re
 from typing import List, Optional
+from threading import Lock
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -54,6 +56,9 @@ class AppState:
 state = AppState()
 DEFAULT_TALLY = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
 STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪", "pass": "🟢"}
+SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
+MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024
+UPLOAD_WRITE_LOCK = Lock()
 
 class TaskAbortedError(Exception):
     pass
@@ -101,20 +106,47 @@ def _ensure_storage_dirs():
         d.mkdir(parents=True, exist_ok=True)
 
 
+def sanitize_upload_filename(raw_name: Optional[str], index: int):
+    if not raw_name:
+        candidate = f"file_{index + 1}.json"
+    else:
+        if "/" in raw_name or "\\" in raw_name:
+            raise HTTPException(status_code=400, detail=f"非法文件名: {raw_name}")
+        candidate = Path(raw_name).name.strip() or f"file_{index + 1}.json"
+
+    if len(candidate) > 128:
+        raise HTTPException(status_code=400, detail=f"文件名过长: {candidate[:32]}...")
+    if not SAFE_UPLOAD_FILENAME.fullmatch(candidate):
+        raise HTTPException(status_code=400, detail=f"文件名包含非法字符: {candidate}")
+    if not candidate.lower().endswith(".json"):
+        candidate = f"{candidate}.json"
+    return candidate
+
+
 def save_current_uploads(files_data: List[dict], filenames: Optional[List[str]] = None):
     _ensure_storage_dirs()
     current_dir = UPLOAD_DIR / "current"
-    if current_dir.exists():
-        shutil.rmtree(current_dir)
-    current_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = UPLOAD_DIR / ".current_tmp"
 
-    for i, payload in enumerate(files_data):
-        raw_name = (filenames[i] if filenames and i < len(filenames) else "") or f"file_{i + 1}.json"
-        safe_name = Path(raw_name).name
-        if not safe_name.lower().endswith(".json"):
-            safe_name = f"{safe_name}.json"
-        output_path = current_dir / f"{i + 1:02d}_{safe_name}"
-        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    with UPLOAD_WRITE_LOCK:
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, payload in enumerate(files_data):
+            source_name = filenames[i] if filenames and i < len(filenames) else None
+            safe_name = sanitize_upload_filename(source_name, i)
+            output_path = (tmp_dir / f"{i + 1:02d}_{safe_name}").resolve()
+            if output_path.parent != tmp_dir.resolve():
+                raise HTTPException(status_code=400, detail="非法文件路径")
+            try:
+                output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=f"写入上传缓存失败: {str(e)}")
+
+        if current_dir.exists():
+            shutil.rmtree(current_dir)
+        tmp_dir.rename(current_dir)
 
 
 def save_latest_report():
@@ -402,19 +434,22 @@ async def analyze(background_tasks: BackgroundTasks, files: List[UploadFile] = F
 
     parsed_files = []
     filenames = []
-    for uploaded_file in files:
+    for i, uploaded_file in enumerate(files):
         filename = uploaded_file.filename or "unnamed.json"
-        if not filename.lower().endswith(".json"):
-            raise HTTPException(status_code=400, detail=f"仅支持 .json 文件: {filename}")
+        safe_name = sanitize_upload_filename(filename, i)
 
         try:
             raw = await uploaded_file.read()
+            if len(raw) > MAX_UPLOAD_FILE_SIZE:
+                raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE} bytes): {safe_name}")
             parsed = json.loads(raw.decode("utf-8-sig"))
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"JSON 解析失败: {filename} - {str(e)}")
+            raise HTTPException(status_code=400, detail=f"JSON 解析失败: {safe_name} - {str(e)}")
 
         parsed_files.append(parsed)
-        filenames.append(filename)
+        filenames.append(safe_name)
 
     save_current_uploads(parsed_files, filenames)
     background_tasks.add_task(run_analysis_task, parsed_files, None)

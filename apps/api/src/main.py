@@ -373,8 +373,11 @@ async def sse_generator(session: SessionState):
 
 
 @app.get("/api/stream")
-async def stream(x_fzt_key: Optional[str] = Query(default=None, alias="userKey")):
-    session = resolve_session(x_fzt_key, require_key=False)
+async def stream(
+    x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key"),
+    user_key: Optional[str] = Query(default=None, alias="userKey")
+):
+    session = resolve_session(x_fzt_key or user_key, require_key=False)
     return StreamingResponse(sse_generator(session), media_type="text/event-stream")
 
 
@@ -651,7 +654,7 @@ def get_examples():
                 with open(f_path, 'r', encoding='utf-8') as f:
                     files_content.append(json.load(f))
             except Exception as e:
-                logger.warning("示例文件加载失败: %s (%s)", f_path, str(e))
+                logger.warning("案例文件加载失败: %s (%s)", f_path, str(e))
 
     if not files_content:
         return {"error": "未找到案例文件，请检查目录结构"}

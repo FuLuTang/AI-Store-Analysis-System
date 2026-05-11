@@ -52,7 +52,7 @@ class AppState:
 
 state = AppState()
 DEFAULT_TALLY = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
-STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪"}
+STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪", "pass": "🟢"}
 
 class TaskAbortedError(Exception):
     pass
@@ -237,7 +237,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         add_status("alg3", "active")
         add_log("alg3", "汇总异常检测结果...")
         anomaly_summary = prepare_anomaly_summary(m_results)
-        tally = anomaly_summary.get("aiPromptData", {}).get("tally", DEFAULT_TALLY)
+        tally = anomaly_summary.get("aiPromptData", {}).get("tally") or DEFAULT_TALLY
         add_tally("alg3", tally)
         add_log("alg3", f"  🟢 pass: {tally.get('pass', 0)}")
         add_log("alg3", f"  🟡 attention: {tally.get('attention', 0)}")

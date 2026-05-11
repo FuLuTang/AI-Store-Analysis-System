@@ -1,5 +1,15 @@
 # 依赖
 node_modules/
+package-lock.json
+storage/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.vscode/
+/cache/
 
 # 缓存与数据
 /data_cache/

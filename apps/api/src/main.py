@@ -47,7 +47,7 @@ class AppState:
         self.config = {
             "baseUrl": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             "apiKey": os.getenv("OPENAI_API_KEY", ""),
-            "model": os.getenv("OPENAI_MODEL", "gpt-4o")
+            "model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
         }
 
 state = AppState()

@@ -227,7 +227,7 @@ def stop():
 @app.get("/api/examples")
 def get_examples():
     """读取案例文件"""
-    example_dir = ROOT_DIR / "简化v1_26.5.7" / "data_cache"
+    example_dir = ROOT_DIR / "data" / "samples"
     files_content = []
     if example_dir.exists():
         for f_path in example_dir.glob("*.json"):

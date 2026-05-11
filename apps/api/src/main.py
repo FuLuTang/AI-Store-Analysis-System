@@ -51,6 +51,8 @@ class AppState:
         self.force_stop = False
 
 state = AppState()
+DEFAULT_TALLY = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
+STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪"}
 
 class TaskAbortedError(Exception):
     pass
@@ -194,6 +196,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         rows = normalize_overview_rows(overview_day) if overview_day else []
         source_distribution = overview_day.get("sourceDistribution", {}) if overview_day else {}
         o2o_rev = (o2o_day or {}).get("businessTable", {}).get("rows", [{}])[0].get("total_revenue", 0) if o2o_day else 0
+        overview_revenue = rows[0].get("revenue") if rows else None
 
         add_log("alg1", f"数据源就绪: 概览日={'是' if overview_day else '否'} / O2O日={'是' if o2o_day else '否'}")
         add_status("alg1", "success")
@@ -206,7 +209,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
             ("calcRevenueChange", lambda: calc_revenue_change(rows)),
             ("prepareGrowthDecomposition", lambda: prepare_growth_decomposition(rows)),
             ("calcChannelMix", lambda: calc_channel_mix(source_distribution)),
-            ("calcO2OvsTotal", lambda: calc_o2o_vs_total(o2o_rev, rows[0]["revenue"] if rows else None)),
+            ("calcO2OvsTotal", lambda: calc_o2o_vs_total(o2o_rev, overview_revenue)),
         ]
         m_results = {}
         total = len(metric_tasks)
@@ -214,7 +217,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
             ensure_not_stopped()
             result = fn()
             m_results[name] = result
-            icon = "🔴" if result.get("status") == "warning" else ("🟡" if result.get("status") == "attention" else ("⚪" if result.get("status") == "uncountable" else "🟢"))
+            icon = STATUS_ICON_MAP.get(result.get("status"), "🟢")
             add_log("alg2", f"  [{i}/{total}] {icon} {name} -> {result.get('status', 'unknown')}")
             add_progress("alg2", i, total)
             await asyncio.sleep(0.05)
@@ -227,7 +230,7 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
         add_status("alg3", "active")
         add_log("alg3", "汇总异常检测结果...")
         anomaly_summary = prepare_anomaly_summary(m_results)
-        tally = (anomaly_summary.get("aiPromptData") or {}).get("tally") or {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
+        tally = (anomaly_summary.get("aiPromptData") or {}).get("tally") or DEFAULT_TALLY
         add_tally("alg3", tally)
         add_log("alg3", f"  🟢 pass: {tally.get('pass', 0)}")
         add_log("alg3", f"  🟡 attention: {tally.get('attention', 0)}")
@@ -326,9 +329,9 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
 
     except Exception as e:
         import traceback
-        error_msg = f"发生错误: {str(e)}"
+        error_msg = "任务执行失败，请查看日志"
         print(traceback.format_exc())
-        add_log("system", error_msg)
+        add_log("system", f"发生错误: {str(e)}")
         state.error_message = error_msg
         state.status = "error"
 

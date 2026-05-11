@@ -59,7 +59,15 @@ do_deploy() {
     [ -d "venv" ] || python3 -m venv venv
     source venv/bin/activate
     pip install --upgrade pip >/dev/null
-    pip install -r requirements.txt >/dev/null
+    
+    if [ -f "$APP_DIR/requirements.txt" ]; then
+        pip install -r "$APP_DIR/requirements.txt" >/dev/null
+    else
+        echo "❌ 错误: 未在 $APP_DIR 找到 requirements.txt"
+        echo "当前目录内容:"
+        ls -F "$APP_DIR"
+        exit 1
+    fi
 
     echo "==> 3. 正在更新系统服务配置..."
     cat > "$SERVICE_FILE" <<EOF

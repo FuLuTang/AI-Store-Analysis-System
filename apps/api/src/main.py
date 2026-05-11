@@ -384,12 +384,13 @@ async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict
 async def run(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     files = data.get("files", [])
+    filenames = data.get("filenames")
     user_settings = data.get("settings")
     
     if state.status == "running":
         raise HTTPException(status_code=400, detail="任务正在运行中")
 
-    save_current_uploads(files)
+    save_current_uploads(files, filenames if isinstance(filenames, list) else None)
     background_tasks.add_task(run_analysis_task, files, user_settings)
     return {"status": "started"}
 
@@ -409,8 +410,8 @@ async def analyze(background_tasks: BackgroundTasks, files: List[UploadFile] = F
         try:
             raw = await uploaded_file.read()
             parsed = json.loads(raw.decode("utf-8-sig"))
-        except Exception:
-            raise HTTPException(status_code=400, detail=f"JSON 解析失败: {filename}")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"JSON 解析失败: {filename} - {str(e)}")
 
         parsed_files.append(parsed)
         filenames.append(filename)

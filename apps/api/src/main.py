@@ -427,28 +427,98 @@ async def run(request: Request, background_tasks: BackgroundTasks):
 
 
 @app.post("/api/analyze")
-async def analyze(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
+async def analyze(request: Request, background_tasks: BackgroundTasks):
+    """
+    统一分析接口：支持 JSON(Base64) 和 Multipart
+    """
     if state.status == "running":
         raise HTTPException(status_code=400, detail="任务正在运行中")
 
     parsed_files = []
     filenames = []
-    for i, uploaded_file in enumerate(files):
-        filename = uploaded_file.filename or "unnamed.json"
-        safe_name = sanitize_upload_filename(filename, i)
 
+    content_type = request.headers.get("Content-Type", "")
+
+    # 1. 处理 JSON (Base64) 格式 - 推荐方式
+    if "application/json" in content_type:
+        data = await request.json()
+        input_files = data.get("files", [])
+        for i, item in enumerate(input_files):
+            name = item.get("name", f"file_{i}.json")
+            b64_str = item.get("base64", "")
+            if b64_str:
+                try:
+                    decoded_bytes = base64.b64decode(b64_str)
+                    parsed = json.loads(decoded_bytes.decode("utf-8-sig"))
+                    parsed_files.append(parsed)
+                    filenames.append(sanitize_upload_filename(name, i))
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Base64解析失败 ({name}): {str(e)}")
+
+    # 2. 处理 Multipart 格式 - 兼容旧版/网页端
+    elif "multipart/form-data" in content_type:
+        from fastapi import UploadFile, File
+        # 手动解析 multipart 以保持接口灵活
+        form = await request.form()
+        files = form.getlist("files")
+        for i, uploaded_file in enumerate(files):
+            if not isinstance(uploaded_file, UploadFile): continue
+            name = uploaded_file.filename or "unnamed.json"
+            try:
+                raw = await uploaded_file.read()
+                parsed = json.loads(raw.decode("utf-8-sig"))
+                parsed_files.append(parsed)
+                filenames.append(sanitize_upload_filename(name, i))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"文件解析失败 ({name}): {str(e)}")
+    
+    else:
+        raise HTTPException(status_code=400, detail="不支持的 Content-Type, 请使用 application/json 或 multipart/form-data")
+
+    if not parsed_files:
+        raise HTTPException(status_code=400, detail="未提供有效的文件内容")
+
+    save_current_uploads(parsed_files, filenames)
+    background_tasks.add_task(run_analysis_task, parsed_files, None)
+    return {"status": "started"}
+
+import base64
+
+@app.post("/api/analyze/json")
+async def analyze_json(request: Request, background_tasks: BackgroundTasks):
+    """
+    支持 Base64 格式的 JSON 上传
+    格式: {"files": [{"name": "1.json", "base64": "..."}, ...]}
+    """
+    if state.status == "running":
+        raise HTTPException(status_code=400, detail="任务正在运行中")
+
+    data = await request.json()
+    input_files = data.get("files", [])
+    
+    parsed_files = []
+    filenames = []
+    
+    for i, item in enumerate(input_files):
+        name = item.get("name", f"file_{i}.json")
+        b64_str = item.get("base64", "")
+        
+        if not b64_str:
+            continue
+            
         try:
-            raw = await uploaded_file.read()
-            if len(raw) > MAX_UPLOAD_FILE_SIZE:
-                raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE} bytes): {safe_name}")
-            parsed = json.loads(raw.decode("utf-8-sig"))
-        except HTTPException:
-            raise
+            # 解码 base64
+            decoded_bytes = base64.b64decode(b64_str)
+            # 尝试解析为 JSON (目前系统核心逻辑仍基于 JSON 模块)
+            parsed = json.loads(decoded_bytes.decode("utf-8-sig"))
+            
+            parsed_files.append(parsed)
+            filenames.append(sanitize_upload_filename(name, i))
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"JSON 解析失败: {safe_name} - {str(e)}")
+            raise HTTPException(status_code=400, detail=f"文件 {name} 解析失败: {str(e)}")
 
-        parsed_files.append(parsed)
-        filenames.append(safe_name)
+    if not parsed_files:
+        raise HTTPException(status_code=400, detail="未提供有效的文件内容")
 
     save_current_uploads(parsed_files, filenames)
     background_tasks.add_task(run_analysis_task, parsed_files, None)

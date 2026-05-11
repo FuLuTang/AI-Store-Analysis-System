@@ -51,8 +51,19 @@ sequenceDiagram
 ### 3.2 核心分析类 (均需 Header: X-FZT-Key)
 
 #### [POST] /api/analyze
-- **说明**: 上传文件并启动该账户下的 AI 分析。
-- **Body (Multipart)**: `files: [...]`
+- **说明**: 上传文件并启动该账户下的 AI 分析。支持多文件同时上传。
+- **Content-Type**: `application/json`
+- **Body (JSON)**:
+  ```json
+  {
+    "files": [
+      {
+        "name": "data1.json",
+        "base64": "..." 
+      }
+    ]
+  }
+  ```
 - **响应**: `200` (Started) | `401` (Unauthorized) | `400` (Busy)
 
 #### [GET] /api/status

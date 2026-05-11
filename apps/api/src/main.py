@@ -7,7 +7,6 @@ from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 from dotenv import load_dotenv
 from pathlib import Path
 import sys
@@ -18,7 +17,7 @@ sys.path.append(str(ROOT_DIR))
 
 from packages.core.cleaner import clean_data, merge_hot_products, merge_hot_top500
 from packages.core.metrics import (
-    normalize_overview_rows, normalize_hot_products,
+    normalize_overview_rows,
     calc_channel_mix, calc_revenue_change, calc_o2o_vs_total,
     prepare_growth_decomposition, prepare_anomaly_summary
 )
@@ -49,19 +48,49 @@ class AppState:
             "apiKey": os.getenv("OPENAI_API_KEY", ""),
             "model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
         }
+        self.force_stop = False
 
 state = AppState()
 
-def add_log(node_id: str, message: str, status: str = "processing"):
-    log_entry = {
-        "type": "log",
-        "nodeId": node_id,
-        "message": message,
-        "status": status,
-        "time": time.strftime("%H:%M:%S")
-    }
-    state.logs.append(log_entry)
+class TaskAbortedError(Exception):
+    pass
+
+
+def _now_time():
+    return time.strftime("%H:%M:%S")
+
+
+def emit_event(event_type: str, payload: dict):
+    event = {"type": event_type, "time": _now_time(), **payload}
+    state.logs.append(event)
+    return event
+
+
+def reset_events():
+    state.logs = []
+    emit_event("reset", {})
+
+
+def add_status(node_id: str, status: str):
+    emit_event("status", {"nodeId": node_id, "status": status})
+
+
+def add_log(node_id: str, message: str):
+    log_entry = emit_event("log", {"nodeId": node_id, "message": message})
     print(f"[{log_entry['time']}] {node_id}: {message}")
+
+
+def add_progress(node_id: str, current: int, total: int):
+    emit_event("progress", {"nodeId": node_id, "current": current, "total": total})
+
+
+def add_tally(node_id: str, tally: dict):
+    emit_event("tally", {"nodeId": node_id, "tally": tally})
+
+
+def ensure_not_stopped():
+    if state.force_stop or state.status == "aborted":
+        raise TaskAbortedError("任务被用户强制终止。")
 
 @app.get("/api/health")
 def health():
@@ -94,8 +123,7 @@ def get_status():
 async def sse_generator():
     """SSE 日志推送，适配前端 EventSource('/api/stream')"""
     last_idx = 0
-    # 发送重置信号
-    yield f"data: {json.dumps({'type': 'reset'})}\n\n"
+    yield f"data: {json.dumps({'type': 'reset', 'time': _now_time()})}\n\n"
     
     while True:
         if last_idx < len(state.logs):
@@ -116,93 +144,191 @@ async def stream():
 
 async def run_analysis_task(files_data: List[dict], user_settings: Optional[dict]):
     state.status = "running"
-    state.logs = []
+    state.force_stop = False
     state.error_message = ""
     state.result = None
     state.full_result = None
+    reset_events()
     
     settings = user_settings or state.config
     
     try:
-        # 1. Cleaner
+        # 1) Input
+        add_status("input", "active")
+        add_log("input", f"收到 {len(files_data)} 个 JSON 文件")
+        for i, f in enumerate(files_data):
+            page = f.get("page", {})
+            add_log("input", f"  [{i}] {page.get('module', '?')} - {page.get('title', '')}")
+        add_status("input", "success")
+        ensure_not_stopped()
+
+        # 2) Clean
+        add_status("clean", "active")
         add_log("clean", "开始清洗数据...")
         cleaned_list = []
         for f in files_data:
+            ensure_not_stopped()
             c = clean_data(f)
-            if c: cleaned_list.append(c)
+            if c:
+                cleaned_list.append(c)
         
         # 合并处理
         hot_merged = merge_hot_products(files_data)
         top500_merged = merge_hot_top500(files_data)
-        if hot_merged: cleaned_list.append(hot_merged)
-        if top500_merged: cleaned_list.append(top500_merged)
+        if hot_merged:
+            cleaned_list.append(hot_merged)
+        if top500_merged:
+            cleaned_list.append(top500_merged)
         
         cleaned_texts = [json.dumps(c, ensure_ascii=False, indent=2) for c in cleaned_list]
-        add_log("clean", f"完成清洗，共 {len(cleaned_list)} 个有效模块", "success")
+        add_log("clean", f"完成清洗，共 {len(cleaned_list)} 个有效模块")
+        add_status("clean", "success")
+        ensure_not_stopped()
 
-        # 2. Metrics
-        add_log("alg1", "启动算法引擎计算核心指标...")
+        # 3) Alg1
+        add_status("alg1", "active")
+        add_log("alg1", "启动算法引擎，加载并整理数据源...")
         overview_day = next((f for f in files_data if f.get("page", {}).get("module") == "business_overview" and f.get("page", {}).get("viewType") == "day"), None)
         o2o_day = next((f for f in files_data if f.get("page", {}).get("module") == "o2o_business_summary"), None)
-        
+
+        rows = normalize_overview_rows(overview_day) if overview_day else []
+        source_distribution = overview_day.get("sourceDistribution", {}) if overview_day else {}
+        o2o_rev = (o2o_day or {}).get("businessTable", {}).get("rows", [{}])[0].get("total_revenue", 0) if o2o_day else 0
+
+        add_log("alg1", f"数据源就绪: 概览日={'是' if overview_day else '否'} / O2O日={'是' if o2o_day else '否'}")
+        add_status("alg1", "success")
+        ensure_not_stopped()
+
+        # 4) Alg2
+        add_status("alg2", "active")
+        add_log("alg2", "开始逐项计算指标...")
+        metric_tasks = [
+            ("calcRevenueChange", lambda: calc_revenue_change(rows)),
+            ("prepareGrowthDecomposition", lambda: prepare_growth_decomposition(rows)),
+            ("calcChannelMix", lambda: calc_channel_mix(source_distribution)),
+            ("calcO2OvsTotal", lambda: calc_o2o_vs_total(o2o_rev, rows[0]["revenue"] if rows else None)),
+        ]
         m_results = {}
-        if overview_day:
-            rows = normalize_overview_rows(overview_day)
-            m_results["calcRevenueChange"] = calc_revenue_change(rows)
-            m_results["prepareGrowthDecomposition"] = prepare_growth_decomposition(rows)
-            m_results["calcChannelMix"] = calc_channel_mix(overview_day.get("sourceDistribution", {}))
-            
-            if o2o_day:
-                o2o_rev = o2o_day.get("businessTable", {}).get("rows", [{}])[0].get("total_revenue", 0)
-                m_results["calcO2OvsTotal"] = calc_o2o_vs_total(o2o_rev, rows[0]["revenue"] if rows else 0)
+        total = len(metric_tasks)
+        for i, (name, fn) in enumerate(metric_tasks, start=1):
+            ensure_not_stopped()
+            result = fn()
+            m_results[name] = result
+            icon = "🔴" if result.get("status") == "warning" else ("🟡" if result.get("status") == "attention" else ("⚪" if result.get("status") == "uncountable" else "🟢"))
+            add_log("alg2", f"  [{i}/{total}] {icon} {name} -> {result.get('status', 'unknown')}")
+            add_progress("alg2", i, total)
+            await asyncio.sleep(0.05)
 
+        add_log("alg2", f"完成: {total} 个指标已计算")
+        add_status("alg2", "success")
+        ensure_not_stopped()
+
+        # 5) Alg3
+        add_status("alg3", "active")
+        add_log("alg3", "汇总异常检测结果...")
         anomaly_summary = prepare_anomaly_summary(m_results)
-        add_log("alg1", f"算法计算完成，发现 {anomaly_summary['totalAlerts']} 项异常", "success")
+        tally = (anomaly_summary.get("aiPromptData") or {}).get("tally") or {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
+        add_tally("alg3", tally)
+        add_log("alg3", f"  🟢 pass: {tally.get('pass', 0)}")
+        add_log("alg3", f"  🟡 attention: {tally.get('attention', 0)}")
+        add_log("alg3", f"  🔴 warning: {tally.get('warning', 0)}")
+        if tally.get("uncountable", 0) > 0:
+            add_log("alg3", f"  ⚪ uncountable: {tally.get('uncountable', 0)}")
+        add_status("alg3", "success")
+        ensure_not_stopped()
 
-        # 3. AI Initial Call
+        # 6) AI Initial Call
         if not settings.get("apiKey"):
-            add_log("api", "未检测到 API Key，进入模拟模式...", "simulated")
-            await asyncio.sleep(2)
+            add_status("api", "active")
+            add_log("api", "未检测到 API Key，进入模拟模式...")
+            await asyncio.sleep(0.3)
+            add_status("api", "simulated")
+
+            add_status("output", "active")
+            add_log("output", "使用模拟报告")
+            add_status("output", "simulated")
+
+            add_status("review", "active")
+            add_log("review", "模拟模式：跳过错误评审")
+            add_status("review", "simulated")
+
+            add_status("fusion", "active")
+            add_log("fusion", "模拟模式：融合默认报告与异常摘要")
+            add_status("fusion", "success")
+
+            add_status("rep1", "active")
             state.full_result = "# 模拟诊断报告\n\n这是一个模拟生成的报告，因为没有配置 API Key。"
+            add_status("rep1", "simulated")
+
+            add_status("rep2", "active")
             state.result = json.dumps({
                 "health_status": "模拟运行",
                 "overview_text": "系统处于模拟测试模式。",
                 "cards": [{"title": "演示问题", "explanation": "这是一个模拟卡片", "suggestion": "请在设置中配置 API Key", "color": "blue"}]
-            })
+            }, ensure_ascii=False)
+            add_status("rep2", "simulated")
             state.status = "completed"
             return
 
+        add_status("api", "active")
         add_log("api", f"正在请求 AI 初步诊断 (模型: {settings['model']})...")
-        initial_resp = await call_ai(settings, cleaned_texts, {"anomalies": anomaly_summary})
+        initial_resp = await call_ai(settings, cleaned_texts, {"anomalies": anomaly_summary.get("aiPromptData")})
         initial_report = initial_resp["choices"][0]["message"]["content"]
-        add_log("api", "初诊报告已生成", "success")
+        add_log("api", "初诊报告已生成")
+        add_status("api", "success")
+        ensure_not_stopped()
 
-        # 4. Error Review
+        # 7) Output
+        add_status("output", "active")
+        add_log("output", f"报告内容: {len(initial_report)} 字符")
+        add_status("output", "success")
+        ensure_not_stopped()
+
+        # 8) Error Review
+        add_status("review", "active")
         add_log("review", "启动逻辑审计复核...")
         review_resp = await review_error(settings, initial_report, cleaned_texts)
         review_text = review_resp["choices"][0]["message"]["content"] if isinstance(review_resp, dict) else str(review_resp)
-        add_log("review", "审计复核完成", "success")
+        add_log("review", "审计复核完成")
+        add_status("review", "success")
+        ensure_not_stopped()
 
-        # 5. Fusion & Final Report
-        add_log("rep1", "正在融合审计意见生成深度报告...")
+        # 9) Fusion
+        add_status("fusion", "active")
+        add_log("fusion", "数据融合：合并初级报告、错误评审、异常日志...")
         fused_context = f"【初级报告】\n{initial_report}\n\n【审计意见】\n{review_text}\n\n【算法日志】\n{json.dumps(anomaly_summary['sortedAlerts'], ensure_ascii=False)}"
+        add_status("fusion", "success")
+        ensure_not_stopped()
+
+        # 10) Detailed
+        add_status("rep1", "active")
+        add_log("rep1", "正在融合审计意见生成深度报告...")
         detailed_resp = await call_detailed_ai(settings, fused_context)
         state.full_result = detailed_resp["choices"][0]["message"]["content"]
-        add_log("rep1", "深度报告生成成功", "success")
+        add_log("rep1", "深度报告生成成功")
+        add_status("rep1", "success")
+        ensure_not_stopped()
 
-        # 6. Simplified Report
+        # 11) Simplified
+        add_status("rep2", "active")
         add_log("rep2", "生成精简老板视图...")
         simplified_resp = await call_simplified_ai(settings, state.full_result)
         state.result = simplified_resp["choices"][0]["message"]["content"]
-        add_log("rep2", "任务全部完成！", "success")
+        add_log("rep2", "任务全部完成！")
+        add_status("rep2", "success")
 
         state.status = "completed"
+
+    except TaskAbortedError as e:
+        state.status = "aborted"
+        state.error_message = str(e)
+        add_log("fusion", f"⚠️ {str(e)}")
 
     except Exception as e:
         import traceback
         error_msg = f"发生错误: {str(e)}"
         print(traceback.format_exc())
-        add_log("system", error_msg, "error")
+        add_log("system", error_msg)
         state.error_message = error_msg
         state.status = "error"
 
@@ -220,8 +346,11 @@ async def run(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/api/stop")
 def stop():
-    state.status = "idle"
-    add_log("system", "任务已被用户手动终止", "error")
+    if state.status == "running":
+        state.force_stop = True
+        state.status = "aborted"
+        state.error_message = "任务被用户强行终止。"
+        add_log("fusion", "⚠️ 用户强制终止了任务！")
     return {"status": "ok"}
 
 @app.get("/api/examples")

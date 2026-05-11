@@ -138,6 +138,10 @@ class SessionManager:
             encoding="utf-8"
         )
 
+    def drop_session(self, key_hash: str):
+        with self._lock:
+            self._sessions.pop(key_hash, None)
+
 
 session_manager = SessionManager(ACCOUNTS_DIR)
 register_limiter = RegisterRateLimiter(window_seconds=180, max_requests=5)
@@ -292,7 +296,11 @@ async def auth_register(request: Request):
     if isinstance(openai_key, str) and openai_key.strip():
         session.config["apiKey"] = openai_key.strip()
 
-    session_manager.save_profile(session)
+    try:
+        session_manager.save_profile(session)
+    except Exception as e:
+        session_manager.drop_session(session.key_hash)
+        raise HTTPException(status_code=500, detail=f"账号初始化失败: {str(e)}")
     return {"userKey": user_key, "status": "ok"}
 
 

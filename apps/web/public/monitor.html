@@ -12,6 +12,9 @@
         <nav>
             <a href="index.html">用户工作台</a>
             <a href="monitor.html" class="active">后台监控流</a>
+            <button class="settings-btn" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';" style="color:#ef4444;">
+                <i class="fas fa-sign-out-alt"></i> 退出
+            </button>
         </nav>
 
         <header>
@@ -123,6 +126,16 @@
     </div>
 
     <script>
+        // ========== 鉴权守卫 ==========
+        (async function authGuard() {
+            const key = localStorage.getItem('X-FZT-Key');
+            if (!key) { window.location.href = '/login.html'; return; }
+            try {
+                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
+            } catch(e) { window.location.href = '/login.html'; }
+        })();
+
         const connStatus = document.getElementById('connStatus');
         const timeDisplay = document.getElementById('currentTime');
         const eventSource = new EventSource('/api/stream');

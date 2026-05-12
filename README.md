@@ -4,7 +4,18 @@
 
 ## 🚀 快速启动
 
+### {
+
+### "name": "xxx.zip",
+
+"content": "base64str",
+
+"aaa":"`121"
+
+### }
+
 ### 1. 安装环境
+
 本系统采用纯 Python 后端，建议使用 Python 3.10+。
 
 ```bash
@@ -13,6 +24,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. 启动服务 (端口 3000)
+
 系统会自动托管前端静态文件，启动后端即可。
 
 ```bash
@@ -24,6 +36,7 @@ python3 -m uvicorn apps.api.src.main:app --host 0.0.0.0 --port 3000 --reload
 ```
 
 ### 3. 访问界面
+
 启动后访问 [http://localhost:3000](http://localhost:3000)
 
 ## 📂 项目结构 (Python 架构)
@@ -46,4 +59,5 @@ python3 -m uvicorn apps.api.src.main:app --host 0.0.0.0 --port 3000 --reload
 - **部署**: Systemd + Nginx (零 Node.js 生产依赖)
 
 ---
+
 详细开发指南请参考 [docs/开发文档.md](./docs/开发文档.md)

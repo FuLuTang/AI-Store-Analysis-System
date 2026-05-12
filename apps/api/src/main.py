@@ -39,21 +39,45 @@ app.add_middleware(
 )
 
 # 全局状态存储（简化版）
+import hashlib
+import secrets
+
+USERS_FILE = ROOT_DIR / "storage" / "users.json"
+
 class AppState:
     def __init__(self):
-        self.status = "idle"  # idle, running, completed, error
+        self.status = "idle"
         self.error_message = ""
         self.logs = []
-        self.result = None      # 精简报告 (JSON string)
-        self.full_result = None # 完整报告 (Markdown string)
+        self.result = None
+        self.full_result = None
         self.config = {
             "baseUrl": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             "apiKey": os.getenv("OPENAI_API_KEY", ""),
             "model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
         }
         self.force_stop = False
+        self.users = self._load_users()
+
+    def _load_users(self):
+        if USERS_FILE.exists():
+            try:
+                return json.loads(USERS_FILE.read_text(encoding="utf-8"))
+            except: return {}
+        return {}
+
+    def save_users(self):
+        USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        USERS_FILE.write_text(json.dumps(self.users, indent=2), encoding="utf-8")
 
 state = AppState()
+
+def get_user_dir(user_key: str):
+    """根据 Key 的哈希值确定存储目录，实现物理隔离"""
+    h = hashlib.sha256(user_key.encode()).hexdigest()
+    d = ROOT_DIR / "storage" / "accounts" / h
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 DEFAULT_TALLY = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
 STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪", "pass": "🟢"}
 SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
@@ -153,9 +177,52 @@ def save_latest_report():
     if isinstance(state.full_result, str) and state.full_result:
         (STORAGE_DIR / "latest_report.md").write_text(state.full_result, encoding="utf-8")
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
+@app.post("/api/auth/register")
+async def register(request: Request):
+    # 生成唯一 User Key
+    new_key = f"fzt_{secrets.token_hex(16)}"
+    state.users[new_key] = {
+        "createdAt": time.time()
+    }
+    state.save_users()
+    return {"userKey": new_key, "status": "ok"}
+
+@app.get("/api/auth/me")
+async def get_me(request: Request):
+    user_key = request.headers.get("X-FZT-Key")
+    if not user_key or user_key not in state.users:
+        raise HTTPException(status_code=401, detail="无效的 User Key")
+    
+    user_data = state.users[user_key]
+    return {
+        "status": "ok",
+        "userKeyMasked": f"{user_key[:7]}...{user_key[-4:]}",
+        "config": user_data.get("config", {})
+    }
+
+CONFIG_FILE = ROOT_DIR / "storage" / "config.json"
+
+def _load_config():
+    """从磁盘加载持久化配置"""
+    defaults = {
+        "baseUrl": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        "apiKey": os.getenv("OPENAI_API_KEY", ""),
+        "model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+    }
+    if CONFIG_FILE.exists():
+        try:
+            saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            defaults.update({k: v for k, v in saved.items() if v})
+        except: pass
+    return defaults
+
+def _save_config(cfg: dict):
+    """持久化配置到磁盘"""
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+# 启动时从磁盘加载
+state.config = _load_config()
 
 @app.get("/api/config")
 def get_config():
@@ -170,6 +237,11 @@ def get_config():
 async def save_config(request: Request):
     data = await request.json()
     state.config.update(data)
+    _save_config(state.config)
+    return {"status": "ok"}
+
+@app.get("/api/health")
+def health():
     return {"status": "ok"}
 
 @app.get("/api/status")

@@ -4,6 +4,8 @@ import asyncio
 import time
 import shutil
 import re
+import base64
+import hashlib
 import logging
 from typing import List, Optional, Dict
 from threading import Lock
@@ -53,6 +55,8 @@ DEFAULT_REASONING_EFFORT = "medium"
 REASONING_EFFORT_OPTIONS = {"low", "medium", "high"}
 LLM_PRESETS_FILE = STORAGE_DIR / "llm_presets.json"
 LLM_PRESETS_LOCK = Lock()
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+PRESET_SECRET = os.getenv("LLM_PRESET_SECRET", "").strip()
 
 
 def normalize_reasoning_effort(value: Optional[str]) -> str:
@@ -73,10 +77,52 @@ def _default_llm_presets() -> dict:
     }
 
 
+def _mask_sensitive_text(text: str) -> str:
+    if not isinstance(text, str):
+        return str(text)
+    masked = re.sub(r"sk-[A-Za-z0-9\-_]{8,}", "sk-***", text)
+    masked = re.sub(
+        r"(?i)(api[_-]?key\s*[:=]\s*)([^\s,;]+)",
+        lambda m: f"{m.group(1)}***",
+        masked
+    )
+    return masked
+
+
+def _encrypt_text(raw: str) -> str:
+    text = (raw or "").encode("utf-8")
+    if not text:
+        return ""
+    key_source = PRESET_SECRET or "fzt-default-preset-secret"
+    key = hashlib.sha256(key_source.encode("utf-8")).digest()
+    encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(text))
+    return base64.b64encode(encrypted).decode("utf-8")
+
+
+def _decrypt_text(raw: str) -> str:
+    if not isinstance(raw, str) or not raw:
+        return ""
+    try:
+        encrypted = base64.b64decode(raw.encode("utf-8"))
+    except Exception:
+        return ""
+    key_source = PRESET_SECRET or "fzt-default-preset-secret"
+    key = hashlib.sha256(key_source.encode("utf-8")).digest()
+    decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(encrypted))
+    try:
+        return decrypted.decode("utf-8")
+    except Exception:
+        return ""
+
+
 def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
     data = raw if isinstance(raw, dict) else {}
     base_url = data.get("baseUrl", fallback.get("baseUrl", ""))
-    api_key = data.get("apiKey", fallback.get("apiKey", ""))
+    encoded_key = data.get("apiKeyEnc")
+    if isinstance(encoded_key, str):
+        api_key = _decrypt_text(encoded_key)
+    else:
+        api_key = data.get("apiKey", fallback.get("apiKey", ""))
     model = data.get("model", fallback.get("model", ""))
     return {
         "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback.get("baseUrl", "")),
@@ -134,8 +180,15 @@ def get_all_llm_presets() -> dict:
 
 def save_llm_presets_locked():
     LLM_PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    safe_presets = {}
+    for effort, preset in GLOBAL_LLM_PRESETS.items():
+        safe_presets[effort] = {
+            "baseUrl": preset.get("baseUrl", ""),
+            "apiKeyEnc": _encrypt_text(preset.get("apiKey", "")),
+            "model": preset.get("model", "")
+        }
     LLM_PRESETS_FILE.write_text(
-        json.dumps({"presets": GLOBAL_LLM_PRESETS}, ensure_ascii=False, indent=2),
+        json.dumps({"presets": safe_presets}, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
@@ -151,6 +204,13 @@ def update_llm_presets(raw_presets: dict):
         GLOBAL_LLM_PRESETS.clear()
         GLOBAL_LLM_PRESETS.update(next_presets)
         save_llm_presets_locked()
+
+
+def require_admin_authorization(x_admin_token: Optional[str]):
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="Admin token not configured")
+    if (x_admin_token or "").strip() != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Admin unauthorized")
 
 
 class SessionState:
@@ -276,9 +336,10 @@ def add_status(session: SessionState, node_id: str, status: str):
 
 
 def add_log(session: SessionState, node_id: str, message: str):
-    log_entry = emit_event(session, "log", {"nodeId": node_id, "message": message})
+    safe_message = _mask_sensitive_text(message)
+    log_entry = emit_event(session, "log", {"nodeId": node_id, "message": safe_message})
     hash_prefix = session.key_hash[:8]
-    logger.info("[%s] %s %s: %s", log_entry["time"], hash_prefix, node_id, message)
+    logger.info("[%s] %s %s: %s", log_entry["time"], hash_prefix, node_id, safe_message)
 
 
 def add_progress(session: SessionState, node_id: str, current: int, total: int):
@@ -451,7 +512,8 @@ async def save_config(request: Request, x_fzt_key: Optional[str] = Header(defaul
 
 
 @app.get("/api/admin/llm-presets")
-def get_admin_llm_presets():
+def get_admin_llm_presets(x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
     return {
         "status": "ok",
         "presets": get_all_llm_presets()
@@ -459,7 +521,8 @@ def get_admin_llm_presets():
 
 
 @app.post("/api/admin/llm-presets")
-async def save_admin_llm_presets(request: Request):
+async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
     payload = await request.json()
     source = payload.get("presets") if isinstance(payload, dict) and "presets" in payload else payload
     update_llm_presets(source)

@@ -23,6 +23,10 @@
         </header>
 
         <div class="card">
+            <div class="form-group">
+                <label>管理员令牌（X-Admin-Token）</label>
+                <input type="password" id="adminToken" placeholder="请输入管理员令牌">
+            </div>
             <div id="presetContainer"></div>
             <div class="modal-actions" style="margin-top: 1rem;">
                 <button class="btn" id="saveBtn"><i class="fas fa-save"></i> 保存全部预设</button>
@@ -34,7 +38,15 @@
         const efforts = ['low', 'medium', 'high'];
         const presetContainer = document.getElementById('presetContainer');
         const saveBtn = document.getElementById('saveBtn');
+        const adminTokenInput = document.getElementById('adminToken');
         let currentPresets = {};
+        adminTokenInput.value = localStorage.getItem('adminToken') || '';
+
+        function adminHeaders() {
+            const token = adminTokenInput.value.trim();
+            if (token) localStorage.setItem('adminToken', token);
+            return token ? { 'X-Admin-Token': token } : {};
+        }
 
         function renderPresets() {
             presetContainer.innerHTML = efforts.map(effort => {
@@ -80,11 +92,13 @@
                 .replaceAll('&', '&amp;')
                 .replaceAll('<', '&lt;')
                 .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;');
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
         }
 
         async function loadPresets() {
-            const resp = await fetch('/api/admin/llm-presets');
+            const resp = await fetch('/api/admin/llm-presets', { headers: adminHeaders() });
+            if (!resp.ok) throw new Error(`加载失败(${resp.status})`);
             const data = await resp.json();
             currentPresets = data.presets || {};
             renderPresets();
@@ -95,9 +109,10 @@
                 const presets = collectPresetsFromForm();
                 const resp = await fetch('/api/admin/llm-presets', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
                     body: JSON.stringify({ presets })
                 });
+                if (!resp.ok) throw new Error(`保存失败(${resp.status})`);
                 const data = await resp.json();
                 currentPresets = data.presets || presets;
                 renderPresets();

@@ -34,7 +34,7 @@ sequenceDiagram
 - **Header Name**: `X-FZT-Key`
 - **Value**: 用户的唯一通行证（如 `fzt_abc123...`）
 
-> legacy 会话说明：当接口标注“`X-FZT-Key` 可选”且请求未携带该 Header 时，后端会回落到系统内置的 legacy 账号上下文，用于兼容旧版前端流程。
+> legacy 会话说明：当接口标注“`X-FZT-Key` 可选”且请求未携带该 Header 时，后端会回退到系统内置的 legacy 账号上下文，用于兼容旧版前端流程。
 
 ### 2.2 管理员鉴权
 管理员接口通过 HTTP Header 携带：
@@ -113,6 +113,7 @@ sequenceDiagram
 #### [POST] /api/admin/llm-presets
 - **说明**: 更新全局 LLM 预设。
 - **Body (JSON)**:
+  - 当前后端两种格式都支持
   - 推荐方式 A: `{"presets": {"low": {...}, "medium": {...}, "high": {...}}}`（结构稳定，便于后续扩展额外字段）
   - 兼容方式 B: `{"low": {...}, "medium": {...}, "high": {...}}`（仅用于兼容历史调用方）
   - 单档对象字段：`baseUrl` (string), `apiKey` (string, 可选), `model` (string)

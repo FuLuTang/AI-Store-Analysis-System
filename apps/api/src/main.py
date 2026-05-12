@@ -49,10 +49,23 @@ STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪",
 SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
 MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
+GLOBAL_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GLOBAL_API_KEY_LOCK = Lock()
 
 
 class TaskAbortedError(Exception):
     pass
+
+
+def get_global_api_key() -> str:
+    with GLOBAL_API_KEY_LOCK:
+        return GLOBAL_API_KEY
+
+
+def set_global_api_key(raw_key: str):
+    global GLOBAL_API_KEY
+    with GLOBAL_API_KEY_LOCK:
+        GLOBAL_API_KEY = (raw_key or "").strip()
 
 
 class SessionState:
@@ -86,7 +99,6 @@ class SessionManager:
     def _default_config(self) -> dict:
         return {
             "baseUrl": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            "apiKey": os.getenv("OPENAI_API_KEY", ""),
             "model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
         }
 
@@ -97,7 +109,7 @@ class SessionManager:
             try:
                 profile = json.loads(profile_path.read_text(encoding="utf-8"))
                 if isinstance(profile, dict):
-                    for key in ["baseUrl", "apiKey", "model"]:
+                    for key in ["baseUrl", "model"]:
                         if key in profile:
                             cfg[key] = profile[key]
             except Exception:
@@ -133,7 +145,6 @@ class SessionManager:
         session.profile_path.write_text(
             json.dumps({
                 "baseUrl": session.config.get("baseUrl", ""),
-                "apiKey": session.config.get("apiKey", ""),
                 "model": session.config.get("model", "")
             }, ensure_ascii=False, indent=2),
             encoding="utf-8"
@@ -295,7 +306,7 @@ async def auth_register(request: Request):
 
     api_key = data.get("apiKey") or data.get("openaiKey")
     if isinstance(api_key, str) and api_key.strip():
-        session.config["apiKey"] = api_key.strip()
+        set_global_api_key(api_key)
 
     try:
         session_manager.save_profile(session)
@@ -313,7 +324,7 @@ def auth_me(x_fzt_key: Optional[str] = Header(default=None)):
         "config": {
             "baseUrl": session.config.get("baseUrl", ""),
             "model": session.config.get("model", ""),
-            "hasKey": bool(session.config.get("apiKey"))
+            "hasKey": bool(get_global_api_key())
         }
     }
 
@@ -330,11 +341,12 @@ def auth_verify(x_fzt_key: Optional[str] = Header(default=None)):
 @app.get("/api/config")
 def get_config(x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key, require_key=False)
+    api_key = get_global_api_key()
     return {
         "baseUrl": session.config["baseUrl"],
-        "apiKey": session.config["apiKey"],
+        "apiKey": api_key,
         "model": session.config["model"],
-        "hasKey": bool(session.config["apiKey"])
+        "hasKey": bool(api_key)
     }
 
 
@@ -342,6 +354,9 @@ def get_config(x_fzt_key: Optional[str] = Header(default=None)):
 async def save_config(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key, require_key=False)
     data = sanitize_settings(await request.json())
+    incoming_api_key = data.pop("apiKey", None)
+    if incoming_api_key is not None:
+        set_global_api_key(incoming_api_key)
     session.config.update(data)
     session_manager.save_profile(session)
     return {"status": "ok"}
@@ -401,8 +416,13 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
         session.full_result = None
     reset_events(session)
 
-    session.config.update(sanitize_settings(user_settings))
+    updates = sanitize_settings(user_settings)
+    incoming_api_key = updates.pop("apiKey", None)
+    if incoming_api_key is not None:
+        set_global_api_key(incoming_api_key)
+    session.config.update(updates)
     active_settings = session.config.copy()
+    active_settings["apiKey"] = get_global_api_key()
     session_manager.save_profile(session)
 
     try:

@@ -74,7 +74,10 @@ sequenceDiagram
 
 #### [POST] /api/run
 - **说明**: 前端主流程入口，提交 JSON 文件数组并启动分析。
-- **Body (JSON)**: `{"files":[...], "filenames":[...], "settings":{...}}`
+- **Body (JSON)**:
+  - `files` (必填, array): 解析后的业务 JSON 数据列表
+  - `filenames` (可选, array<string>): 与 `files` 对应的原始文件名
+  - `settings` (可选, object): 本次任务覆盖配置（如 `reasoningEffort`）
 - **Header**: `X-FZT-Key`（可选，不传时走 legacy 会话）
 - **响应**: `200` (Started) | `400` (Busy)
 
@@ -107,7 +110,10 @@ sequenceDiagram
 
 #### [POST] /api/admin/llm-presets
 - **说明**: 更新全局 LLM 预设。
-- **Body (JSON)**: `{"presets":{"low":...,"medium":...,"high":...}}` 或直接传 presets 对象
+- **Body (JSON)**:
+  - 方式 A: `{"presets": {"low": {...}, "medium": {...}, "high": {...}}}`
+  - 方式 B: `{"low": {...}, "medium": {...}, "high": {...}}`
+  - 单档对象字段：`baseUrl` (string), `apiKey` (string, 可选), `model` (string)
 
 ### 3.5 其他接口
 - **[GET] /api/health**: 基础检查（无需鉴权）。

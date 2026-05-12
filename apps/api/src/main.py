@@ -339,7 +339,7 @@ def add_log(session: SessionState, node_id: str, message: str):
     safe_message = _mask_sensitive_text(message)
     log_entry = emit_event(session, "log", {"nodeId": node_id, "message": safe_message})
     hash_prefix = session.key_hash[:8]
-    logger.info("[%s] %s %s: %s", log_entry["time"], hash_prefix, node_id, safe_message)
+    logger.info("[%s] %s %s", log_entry["time"], hash_prefix, node_id)
 
 
 def add_progress(session: SessionState, node_id: str, current: int, total: int):

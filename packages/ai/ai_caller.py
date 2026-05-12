@@ -147,9 +147,18 @@ def _build_context_header() -> str:
     return f"【当前分析环境】\n- 城市：福州\n- 日期：{now.strftime('%Y年%m月%d日')}\n- 时间：{now.strftime('%H:%M')}\n"
 
 
+def _resolve_reasoning_effort(settings: dict) -> str:
+    raw = ""
+    if isinstance(settings, dict):
+        raw = settings.get("reasoningEffort") or settings.get("reasoning_effort") or ""
+    value = str(raw).strip().lower()
+    return value if value in {"low", "medium", "high"} else "medium"
+
+
 async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = None) -> dict:
     """AI-1: 初级报告"""
     context = _build_context_header()
+    reasoning_effort = _resolve_reasoning_effort(settings)
 
     algo_text = "【算法引擎预诊结果】\n暂无算法诊断结果。"
     if algo_data and algo_data.get("anomalies"):
@@ -167,26 +176,28 @@ async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = No
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        "reasoning_effort": "medium", "temperature": 0.3, "max_tokens": 16384,
+        "reasoning_effort": reasoning_effort, "temperature": 0.3, "max_tokens": 16384,
     })
 
 
 async def call_detailed_ai(settings: dict, fused_report_text: str) -> dict:
     """AI-3: 详细报告"""
     user_content = _build_context_header() + "\n" + fused_report_text
+    reasoning_effort = _resolve_reasoning_effort(settings)
     return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
         "model": settings["model"],
         "messages": [
             {"role": "system", "content": DETAILED_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        "reasoning_effort": "medium", "temperature": 0.4, "max_tokens": 16384,
+        "reasoning_effort": reasoning_effort, "temperature": 0.4, "max_tokens": 16384,
     })
 
 
 async def call_simplified_ai(settings: dict, detailed_report_text: str) -> dict:
     """AI-4: 老板视图 (精简报告)"""
     user_content = _build_context_header() + "\n\n【详细报告内容】\n" + detailed_report_text
+    reasoning_effort = _resolve_reasoning_effort(settings)
     return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
         "model": settings["model"],
         "messages": [
@@ -194,5 +205,5 @@ async def call_simplified_ai(settings: dict, detailed_report_text: str) -> dict:
             {"role": "user", "content": user_content},
         ],
         "response_format": {"type": "json_object"},
-        "reasoning_effort": "medium", "temperature": 0.3, "max_tokens": 8192,
+        "reasoning_effort": reasoning_effort, "temperature": 0.3, "max_tokens": 8192,
     })

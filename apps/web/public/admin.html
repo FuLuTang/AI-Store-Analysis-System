@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理员配置 - AI 分析系统</title>
+    <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <a href="index.html">用户工作台</a>
+            <a href="monitor.html">后台监控流</a>
+            <a href="admin.html" class="active">管理员配置</a>
+        </nav>
+
+        <header>
+            <h1>LLM 预设管理</h1>
+            <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+                仅可配置 low / medium / high 三档的 baseUrl、apiKey、model。
+            </p>
+        </header>
+
+        <div class="card">
+            <div class="form-group">
+                <label>管理员令牌（X-Admin-Token）</label>
+                <input type="password" id="adminToken" placeholder="请输入管理员令牌">
+            </div>
+            <div id="presetContainer"></div>
+            <div class="modal-actions" style="margin-top: 1rem;">
+                <button class="btn" id="saveBtn"><i class="fas fa-save"></i> 保存全部预设</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const efforts = ['low', 'medium', 'high'];
+        const presetContainer = document.getElementById('presetContainer');
+        const saveBtn = document.getElementById('saveBtn');
+        const adminTokenInput = document.getElementById('adminToken');
+        let currentPresets = {};
+        adminTokenInput.value = localStorage.getItem('adminToken') || '';
+
+        function adminHeaders() {
+            const token = adminTokenInput.value.trim();
+            if (token) localStorage.setItem('adminToken', token);
+            return token ? { 'X-Admin-Token': token } : {};
+        }
+
+        function renderPresets() {
+            presetContainer.innerHTML = efforts.map(effort => {
+                const preset = currentPresets[effort] || { baseUrl: '', apiKey: '', model: '' };
+                return `
+                    <div class="card" style="padding: 1rem; margin-bottom: 1rem; border: 1px dashed var(--border); box-shadow:none;">
+                        <h3 style="margin-bottom: 0.8rem; text-transform: uppercase;">${effort}</h3>
+                        <div class="form-group">
+                            <label>API Base URL</label>
+                            <input type="text" data-effort="${effort}" data-key="baseUrl" value="${escapeHtml(preset.baseUrl || '')}" placeholder="https://api.openai.com/v1">
+                        </div>
+                        <div class="form-group">
+                            <label>API Key</label>
+                            <input type="password" data-effort="${effort}" data-key="apiKey" value="${escapeHtml(preset.apiKey || '')}" placeholder="sk-...">
+                        </div>
+                        <div class="form-group">
+                            <label>模型名称</label>
+                            <input type="text" data-effort="${effort}" data-key="model" value="${escapeHtml(preset.model || '')}" placeholder="gpt-5.4-mini">
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function collectPresetsFromForm() {
+            const next = {};
+            efforts.forEach(effort => {
+                next[effort] = { baseUrl: '', apiKey: '', model: '' };
+            });
+
+            document.querySelectorAll('[data-effort][data-key]').forEach(el => {
+                const effort = el.dataset.effort;
+                const key = el.dataset.key;
+                if (next[effort] && ['baseUrl', 'apiKey', 'model'].includes(key)) {
+                    next[effort][key] = el.value.trim();
+                }
+            });
+            return next;
+        }
+
+        function escapeHtml(text) {
+            return String(text)
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        async function loadPresets() {
+            const resp = await fetch('/api/admin/llm-presets', { headers: adminHeaders() });
+            if (!resp.ok) throw new Error(`加载失败(${resp.status})`);
+            const data = await resp.json();
+            currentPresets = data.presets || {};
+            renderPresets();
+        }
+
+        saveBtn.onclick = async () => {
+            try {
+                const presets = collectPresetsFromForm();
+                const resp = await fetch('/api/admin/llm-presets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                    body: JSON.stringify({ presets })
+                });
+                if (!resp.ok) throw new Error(`保存失败(${resp.status})`);
+                const data = await resp.json();
+                currentPresets = data.presets || presets;
+                renderPresets();
+                alert('保存成功');
+            } catch (e) {
+                console.error(e);
+                alert('保存失败');
+            }
+        };
+
+        loadPresets().catch(err => {
+            console.error(err);
+            alert('加载预设失败');
+        });
+    </script>
+</body>
+</html>

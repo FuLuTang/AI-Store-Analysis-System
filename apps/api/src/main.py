@@ -182,7 +182,7 @@ def add_status(session: SessionState, node_id: str, status: str):
 
 def add_log(session: SessionState, node_id: str, message: str):
     log_entry = emit_event(session, "log", {"nodeId": node_id, "message": message})
-    hash_prefix = (session.key_hash or "")[:8] if isinstance(session.key_hash, str) else "unknown"
+    hash_prefix = session.key_hash[:8]
     print(f"[{log_entry['time']}] {hash_prefix} {node_id}: {message}")
 
 
@@ -385,10 +385,9 @@ async def sse_generator(session: SessionState):
 
 @app.get("/api/stream")
 async def stream(
-    x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key"),
-    user_key: Optional[str] = Query(default=None, alias="userKey")
+    x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
 ):
-    session = resolve_session(x_fzt_key or user_key, require_key=False)
+    session = resolve_session(x_fzt_key, require_key=False)
     return StreamingResponse(sse_generator(session), media_type="text/event-stream")
 
 

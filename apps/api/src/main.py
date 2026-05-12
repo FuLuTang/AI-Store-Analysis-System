@@ -48,7 +48,7 @@ DEFAULT_TALLY = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
 STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪", "pass": "🟢"}
 SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
 MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024
-MAX_UPLOAD_FILE_SIZE_LABEL = "5MB"
+MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
 
 
 class TaskAbortedError(Exception):
@@ -293,7 +293,7 @@ async def auth_register(request: Request):
     session = session_manager.get_session(user_key, create_if_missing=True)
     _ensure_session_dirs(session)
 
-    api_key = data.get("openaiKey") or data.get("apiKey")
+    api_key = data.get("apiKey") or data.get("openaiKey")
     if isinstance(api_key, str) and api_key.strip():
         session.config["apiKey"] = api_key.strip()
 

@@ -48,6 +48,7 @@ DEFAULT_TALLY = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
 STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪", "pass": "🟢"}
 SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
 MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024
+MAX_UPLOAD_FILE_SIZE_LABEL = "5MB"
 
 
 class TaskAbortedError(Exception):
@@ -292,9 +293,9 @@ async def auth_register(request: Request):
     session = session_manager.get_session(user_key, create_if_missing=True)
     _ensure_session_dirs(session)
 
-    openai_key = data.get("openaiKey") or data.get("apiKey")
-    if isinstance(openai_key, str) and openai_key.strip():
-        session.config["apiKey"] = openai_key.strip()
+    api_key = data.get("openaiKey") or data.get("apiKey")
+    if isinstance(api_key, str) and api_key.strip():
+        session.config["apiKey"] = api_key.strip()
 
     try:
         session_manager.save_profile(session)
@@ -632,7 +633,7 @@ async def analyze(
         try:
             raw = await uploaded_file.read()
             if len(raw) > MAX_UPLOAD_FILE_SIZE:
-                raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE} bytes): {safe_name}")
+                raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {safe_name}")
             parsed = json.loads(raw.decode("utf-8-sig"))
         except HTTPException:
             raise

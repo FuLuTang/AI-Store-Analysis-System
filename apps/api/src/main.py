@@ -183,7 +183,7 @@ def add_status(session: SessionState, node_id: str, status: str):
 def add_log(session: SessionState, node_id: str, message: str):
     log_entry = emit_event(session, "log", {"nodeId": node_id, "message": message})
     hash_prefix = session.key_hash[:8]
-    print(f"[{log_entry['time']}] {hash_prefix} {node_id}: {message}")
+    logger.info("[%s] %s %s: %s", log_entry["time"], hash_prefix, node_id, message)
 
 
 def add_progress(session: SessionState, node_id: str, current: int, total: int):
@@ -292,7 +292,7 @@ async def auth_register(request: Request):
     session = session_manager.get_session(user_key, create_if_missing=True)
     _ensure_session_dirs(session)
 
-    openai_key = (data or {}).get("openaiKey")
+    openai_key = (data or {}).get("openaiKey") or (data or {}).get("apiKey")
     if isinstance(openai_key, str) and openai_key.strip():
         session.config["apiKey"] = openai_key.strip()
 

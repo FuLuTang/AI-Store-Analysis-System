@@ -49,8 +49,57 @@ STATUS_ICON_MAP = {"warning": "🔴", "attention": "🟡", "uncountable": "⚪",
 SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
 MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
-GLOBAL_API_KEY = os.getenv("OPENAI_API_KEY", "")
-GLOBAL_API_KEY_LOCK = Lock()
+DEFAULT_REASONING_EFFORT = "medium"
+REASONING_EFFORT_OPTIONS = {"low", "medium", "high"}
+LLM_PRESETS_FILE = STORAGE_DIR / "llm_presets.json"
+LLM_PRESETS_LOCK = Lock()
+
+
+def normalize_reasoning_effort(value: Optional[str]) -> str:
+    if not isinstance(value, str):
+        return DEFAULT_REASONING_EFFORT
+    effort = value.strip().lower()
+    return effort if effort in REASONING_EFFORT_OPTIONS else DEFAULT_REASONING_EFFORT
+
+
+def _default_llm_presets() -> dict:
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini").strip()
+    return {
+        "low": {"baseUrl": base_url, "apiKey": api_key, "model": model},
+        "medium": {"baseUrl": base_url, "apiKey": api_key, "model": model},
+        "high": {"baseUrl": base_url, "apiKey": api_key, "model": model}
+    }
+
+
+def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    base_url = data.get("baseUrl", fallback.get("baseUrl", ""))
+    api_key = data.get("apiKey", fallback.get("apiKey", ""))
+    model = data.get("model", fallback.get("model", ""))
+    return {
+        "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback.get("baseUrl", "")),
+        "apiKey": api_key.strip() if isinstance(api_key, str) else str(fallback.get("apiKey", "")),
+        "model": model.strip() if isinstance(model, str) else str(fallback.get("model", ""))
+    }
+
+
+def _load_llm_presets() -> dict:
+    defaults = _default_llm_presets()
+    if LLM_PRESETS_FILE.exists():
+        try:
+            payload = json.loads(LLM_PRESETS_FILE.read_text(encoding="utf-8"))
+            source = payload.get("presets") if isinstance(payload, dict) and "presets" in payload else payload
+            if isinstance(source, dict):
+                for effort in REASONING_EFFORT_OPTIONS:
+                    defaults[effort] = _sanitize_preset_item(source.get(effort), defaults[effort])
+        except Exception:
+            pass
+    return defaults
+
+
+GLOBAL_LLM_PRESETS = _load_llm_presets()
 
 
 class TaskAbortedError(Exception):
@@ -58,14 +107,50 @@ class TaskAbortedError(Exception):
 
 
 def get_global_api_key() -> str:
-    with GLOBAL_API_KEY_LOCK:
-        return GLOBAL_API_KEY
+    with LLM_PRESETS_LOCK:
+        return GLOBAL_LLM_PRESETS["medium"]["apiKey"]
 
 
 def set_global_api_key(raw_key: str):
-    global GLOBAL_API_KEY
-    with GLOBAL_API_KEY_LOCK:
-        GLOBAL_API_KEY = (raw_key or "").strip()
+    key_value = (raw_key or "").strip()
+    with LLM_PRESETS_LOCK:
+        for effort in REASONING_EFFORT_OPTIONS:
+            GLOBAL_LLM_PRESETS[effort]["apiKey"] = key_value
+        save_llm_presets_locked()
+
+
+def get_llm_preset(reasoning_effort: Optional[str]) -> dict:
+    effort = normalize_reasoning_effort(reasoning_effort)
+    with LLM_PRESETS_LOCK:
+        preset = GLOBAL_LLM_PRESETS.get(effort, GLOBAL_LLM_PRESETS[DEFAULT_REASONING_EFFORT]).copy()
+    preset["reasoningEffort"] = effort
+    return preset
+
+
+def get_all_llm_presets() -> dict:
+    with LLM_PRESETS_LOCK:
+        return {k: v.copy() for k, v in GLOBAL_LLM_PRESETS.items()}
+
+
+def save_llm_presets_locked():
+    LLM_PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LLM_PRESETS_FILE.write_text(
+        json.dumps({"presets": GLOBAL_LLM_PRESETS}, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def update_llm_presets(raw_presets: dict):
+    if not isinstance(raw_presets, dict):
+        raise HTTPException(status_code=400, detail="presets 必须是对象")
+    with LLM_PRESETS_LOCK:
+        next_presets = {k: v.copy() for k, v in GLOBAL_LLM_PRESETS.items()}
+        for effort in REASONING_EFFORT_OPTIONS:
+            if effort in raw_presets:
+                next_presets[effort] = _sanitize_preset_item(raw_presets.get(effort), next_presets[effort])
+        GLOBAL_LLM_PRESETS.clear()
+        GLOBAL_LLM_PRESETS.update(next_presets)
+        save_llm_presets_locked()
 
 
 class SessionState:
@@ -98,8 +183,7 @@ class SessionManager:
 
     def _default_config(self) -> dict:
         return {
-            "baseUrl": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            "model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+            "reasoningEffort": DEFAULT_REASONING_EFFORT
         }
 
     def _load_profile(self, account_dir: Path) -> dict:
@@ -109,9 +193,9 @@ class SessionManager:
             try:
                 profile = json.loads(profile_path.read_text(encoding="utf-8"))
                 if isinstance(profile, dict):
-                    for key in ["baseUrl", "model"]:
-                        if key in profile:
-                            cfg[key] = profile[key]
+                    cfg["reasoningEffort"] = normalize_reasoning_effort(
+                        profile.get("reasoningEffort") or profile.get("reasoning_effort")
+                    )
             except Exception:
                 pass
         return cfg
@@ -144,8 +228,7 @@ class SessionManager:
         session.account_dir.mkdir(parents=True, exist_ok=True)
         session.profile_path.write_text(
             json.dumps({
-                "baseUrl": session.config.get("baseUrl", ""),
-                "model": session.config.get("model", "")
+                "reasoningEffort": normalize_reasoning_effort(session.config.get("reasoningEffort"))
             }, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
@@ -264,12 +347,9 @@ def save_latest_report(session: SessionState):
 def sanitize_settings(raw: Optional[dict]) -> dict:
     if not isinstance(raw, dict):
         return {}
-    safe = {}
-    for key in ["baseUrl", "apiKey", "model"]:
-        value = raw.get(key)
-        if isinstance(value, str):
-            safe[key] = value.strip()
-    return safe
+    return {
+        "reasoningEffort": normalize_reasoning_effort(raw.get("reasoningEffort") or raw.get("reasoning_effort"))
+    }
 
 
 def resolve_session(x_fzt_key: Optional[str], require_key: bool = False) -> SessionState:
@@ -319,12 +399,15 @@ async def auth_register(request: Request):
 @app.get("/api/auth/me")
 def auth_me(x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key, require_key=True)
+    effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
+    preset = get_llm_preset(effort)
     return {
         "userKey": mask_user_key(session.user_key),
         "config": {
-            "baseUrl": session.config.get("baseUrl", ""),
-            "model": session.config.get("model", ""),
-            "hasKey": bool(get_global_api_key())
+            "reasoningEffort": effort,
+            "baseUrl": preset.get("baseUrl", ""),
+            "model": preset.get("model", ""),
+            "hasKey": bool(preset.get("apiKey"))
         }
     }
 
@@ -341,12 +424,14 @@ def auth_verify(x_fzt_key: Optional[str] = Header(default=None)):
 @app.get("/api/config")
 def get_config(x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key, require_key=False)
-    api_key = get_global_api_key()
+    effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
+    preset = get_llm_preset(effort)
     return {
-        "baseUrl": session.config["baseUrl"],
-        "apiKey": api_key,
-        "model": session.config["model"],
-        "hasKey": bool(api_key)
+        "reasoningEffort": effort,
+        "availableReasoningEfforts": sorted(REASONING_EFFORT_OPTIONS),
+        "baseUrl": preset.get("baseUrl", ""),
+        "model": preset.get("model", ""),
+        "hasKey": bool(preset.get("apiKey"))
     }
 
 
@@ -354,12 +439,34 @@ def get_config(x_fzt_key: Optional[str] = Header(default=None)):
 async def save_config(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key, require_key=False)
     data = sanitize_settings(await request.json())
-    incoming_api_key = data.pop("apiKey", None)
-    if incoming_api_key is not None:
-        set_global_api_key(incoming_api_key)
     session.config.update(data)
     session_manager.save_profile(session)
-    return {"status": "ok"}
+    effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
+    preset = get_llm_preset(effort)
+    return {
+        "status": "ok",
+        "reasoningEffort": effort,
+        "hasKey": bool(preset.get("apiKey"))
+    }
+
+
+@app.get("/api/admin/llm-presets")
+def get_admin_llm_presets():
+    return {
+        "status": "ok",
+        "presets": get_all_llm_presets()
+    }
+
+
+@app.post("/api/admin/llm-presets")
+async def save_admin_llm_presets(request: Request):
+    payload = await request.json()
+    source = payload.get("presets") if isinstance(payload, dict) and "presets" in payload else payload
+    update_llm_presets(source)
+    return {
+        "status": "ok",
+        "presets": get_all_llm_presets()
+    }
 
 
 @app.get("/api/status")
@@ -417,12 +524,9 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
     reset_events(session)
 
     updates = sanitize_settings(user_settings)
-    incoming_api_key = updates.pop("apiKey", None)
-    if incoming_api_key is not None:
-        set_global_api_key(incoming_api_key)
     session.config.update(updates)
-    active_settings = session.config.copy()
-    active_settings["apiKey"] = get_global_api_key()
+    session.config["reasoningEffort"] = normalize_reasoning_effort(session.config.get("reasoningEffort"))
+    active_settings = get_llm_preset(session.config["reasoningEffort"])
     session_manager.save_profile(session)
 
     try:

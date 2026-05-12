@@ -13,8 +13,12 @@
         <nav>
             <a href="index.html" class="active">用户工作台</a>
             <a href="monitor.html">后台监控流</a>
+            <a href="admin.html">管理员配置</a>
             <button class="settings-btn" onclick="openSettings()">
                 <i class="fas fa-cog"></i> 设置
+            </button>
+            <button class="settings-btn" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';" style="color:#ef4444;">
+                <i class="fas fa-sign-out-alt"></i> 退出
             </button>
         </nav>
 
@@ -28,7 +32,7 @@
                 <i class="fas fa-file-upload"></i>
                 <p id="fileName">拖放一个或多个 JSON 文件到此处</p>
                 <div id="fileList" class="file-list"></div>
-                <input type="file" id="fileInput" hidden accept=".json" multiple>
+                <input type="file" id="fileInput" hidden multiple>
             </div>
 
             <div style="text-align: center; display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
@@ -91,18 +95,14 @@
     <!-- 设置弹窗 -->
     <div id="settingsModal" class="modal-overlay">
         <div class="modal">
-            <h2><i class="fas fa-cog"></i> AI 接口设置</h2>
+            <h2><i class="fas fa-sliders-h"></i> 推理强度设置</h2>
             <div class="form-group">
-                <label>API Base URL</label>
-                <input type="text" id="settingBaseUrl" placeholder="https://api.openai.com/v1">
-            </div>
-            <div class="form-group">
-                <label>API Key</label>
-                <input type="password" id="settingApiKey" placeholder="sk-...">
-            </div>
-            <div class="form-group">
-                <label>模型名称</label>
-                <input type="text" id="settingModel" placeholder="gpt-4o">
+                <label>reasoning_effort（仅支持 low / medium / high）</label>
+                <select id="settingReasoningEffort">
+                    <option value="low">low（快速）</option>
+                    <option value="medium">medium（默认）</option>
+                    <option value="high">high（深度）</option>
+                </select>
             </div>
             <div class="modal-actions">
                 <button class="btn-secondary" onclick="closeSettings()">取消</button>
@@ -114,6 +114,16 @@
     </div>
 
     <script>
+        // ========== 鉴权守卫 ==========
+        (async function authGuard() {
+            const key = localStorage.getItem('X-FZT-Key');
+            if (!key) { window.location.href = '/login.html'; return; }
+            try {
+                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
+            } catch(e) { window.location.href = '/login.html'; }
+        })();
+
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
         const startBtn = document.getElementById('startBtn');
@@ -129,7 +139,7 @@
         const labelFull = document.getElementById('labelFull');
         const exampleBtn = document.getElementById('exampleBtn');
         
-        let jsonFilesData = [];
+        let filesData = [];
         let currentReport = null;
         let currentFullReport = null;
         let pollingInterval = null;
@@ -253,7 +263,7 @@
                 } else if (data.status === 'completed') {
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
                     disconnectSSE();
-                    startBtn.disabled = jsonFilesData.length === 0;
+                    startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
                     progressContainer.style.display = 'block';
@@ -268,7 +278,7 @@
                 } else if (data.status === 'error' || data.status === 'aborted') {
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
                     disconnectSSE();
-                    startBtn.disabled = jsonFilesData.length === 0;
+                    startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
                     progressContainer.style.display = 'block';
@@ -281,7 +291,7 @@
                     // idle
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
                     disconnectSSE();
-                    startBtn.disabled = jsonFilesData.length === 0;
+                    startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
                 }
@@ -388,16 +398,14 @@
         }
 
         let currentSettings = {
-            baseUrl: 'https://api.openai.com/v1',
-            apiKey: '',
-            model: 'gpt-5.4-mini'
+            reasoningEffort: 'medium'
         };
+        let currentHasKey = false;
 
         // 页面加载时获取云端设置
         fetch('/api/config').then(res => res.json()).then(data => {
-            if (data.baseUrl) currentSettings.baseUrl = data.baseUrl;
-            if (data.apiKey) currentSettings.apiKey = data.apiKey;
-            if (data.model) currentSettings.model = data.model;
+            if (data.reasoningEffort) currentSettings.reasoningEffort = data.reasoningEffort;
+            currentHasKey = !!data.hasKey;
         }).catch(e => console.error('获取配置失败', e));
 
         // === 设置相关 ===
@@ -407,9 +415,7 @@
 
         function openSettings() {
             const s = loadSettings();
-            document.getElementById('settingBaseUrl').value = s.baseUrl;
-            document.getElementById('settingApiKey').value = s.apiKey;
-            document.getElementById('settingModel').value = s.model;
+            document.getElementById('settingReasoningEffort').value = s.reasoningEffort || 'medium';
             document.getElementById('settingsModal').classList.add('open');
         }
 
@@ -419,18 +425,18 @@
 
         async function saveSettings() {
             const newSettings = {
-                baseUrl: document.getElementById('settingBaseUrl').value.trim(),
-                apiKey: document.getElementById('settingApiKey').value.trim(),
-                model: document.getElementById('settingModel').value.trim()
+                reasoningEffort: document.getElementById('settingReasoningEffort').value
             };
             
             try {
-                await fetch('/api/config', {
+                const resp = await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(newSettings)
                 });
+                const latest = await resp.json();
                 currentSettings = newSettings;
+                if (typeof latest.hasKey === 'boolean') currentHasKey = latest.hasKey;
                 closeSettings();
             } catch (err) {
                 alert('保存配置到云端失败！');
@@ -457,39 +463,39 @@
 
         function handleFiles(files) {
             if (files.length === 0) return;
-            
-            jsonFilesData = [];
+
+            filesData = [];
             fileListDisplay.innerHTML = '';
-            
+
             Array.from(files).forEach(file => {
-                if (!file.name.endsWith('.json')) return;
-                
                 const reader = new FileReader();
                 reader.onload = (e) => {
-                    try {
-                        const data = JSON.parse(e.target.result);
-                        jsonFilesData.push(data);
-                        
-                        const item = document.createElement('div');
-                        item.className = 'file-item';
-                        item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
-                        fileListDisplay.appendChild(item);
+                    const arrayBuffer = e.target.result;
+                    const bytes = new Uint8Array(arrayBuffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.length; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                    }
+                    const b64 = btoa(binary);
+                    filesData.push({ name: file.name, base64: b64 });
 
-                        if (jsonFilesData.length > 0) {
-                            startBtn.disabled = false;
-                            document.getElementById('fileName').innerText = `已准备 ${jsonFilesData.length} 个数据文件`;
-                        }
-                    } catch (err) {
-                        console.error('JSON 解析失败', file.name);
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
+                    fileListDisplay.appendChild(item);
+
+                    if (filesData.length > 0) {
+                        startBtn.disabled = false;
+                        document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
                     }
                 };
-                reader.readAsText(file);
+                reader.readAsArrayBuffer(file);
             });
         }
 
         // === 开始分析 ===
         startBtn.onclick = async () => {
-            if (jsonFilesData.length === 0) return;
+            if (filesData.length === 0) return;
 
             const settings = loadSettings();
 
@@ -501,7 +507,7 @@
             globalLogContainer.style.display = 'block';
             connectSSE();
             resultSection.classList.remove('visible');
-            statusText.innerText = settings.apiKey
+            statusText.innerText = currentHasKey
                 ? '正在提交分析任务...'
                 : '正在使用模拟模式（未配置 API）...';
 
@@ -510,8 +516,10 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        files: jsonFilesData,
-                        settings: settings.apiKey ? settings : null
+                        files: filesData,
+                        settings: {
+                            reasoningEffort: settings.reasoningEffort
+                        }
                     })
                 });
 
@@ -548,18 +556,18 @@
                 const res = await fetch('/api/examples');
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
-                
-                jsonFilesData = data.files;
+
+                filesData = data.files;
                 fileListDisplay.innerHTML = '';
-                jsonFilesData.forEach((f, i) => {
+                filesData.forEach((f) => {
                     const item = document.createElement('div');
                     item.className = 'file-item';
-                    item.innerHTML = `<i class="fas fa-file-code"></i> 案例文件 ${i + 1} (${f.page?.title || '未命名'})`;
+                    item.innerHTML = `<i class="fas fa-file-code"></i> ${f.name || '案例文件'}`;
                     fileListDisplay.appendChild(item);
                 });
-                
+
                 startBtn.disabled = false;
-                document.getElementById('fileName').innerText = `已加载 ${jsonFilesData.length} 个案例文件`;
+                document.getElementById('fileName').innerText = `已加载 ${filesData.length} 个案例文件`;
             } catch (err) {
                 alert('加载案例失败: ' + err.message);
             } finally {

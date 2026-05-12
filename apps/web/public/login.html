@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 门店分析系统 | 门户</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --secondary: #a855f7;
+            --bg: #0f172a;
+            --glass: rgba(30, 41, 59, 0.7);
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg);
+            color: white;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: absolute;
+            width: 200%; height: 200%;
+            background: radial-gradient(circle at center, #1e293b 0%, transparent 70%);
+            animation: drift 20s infinite linear;
+            z-index: -1;
+        }
+
+        @keyframes drift {
+            from { transform: translate(-25%, -25%) rotate(0deg); }
+            to { transform: translate(-25%, -25%) rotate(360deg); }
+        }
+
+        .container { width: 100%; max-width: 450px; padding: 20px; z-index: 10; }
+
+        .glass-card {
+            background: var(--glass);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+
+        h1 {
+            font-weight: 600; font-size: 2.2rem; margin-bottom: 8px;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle { color: #94a3b8; font-size: 0.95rem; margin-bottom: 32px; }
+
+        .input-group { text-align: left; margin-bottom: 20px; }
+
+        label { display: block; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 8px; }
+
+        input {
+            width: 100%; background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border); border-radius: 12px;
+            padding: 14px 16px; color: white; font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2); }
+
+        .btn {
+            width: 100%; padding: 14px; border-radius: 12px; border: none;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white; font-size: 1rem; font-weight: 600; cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s; margin-top: 10px;
+        }
+
+        .btn:hover { opacity: 0.9; transform: translateY(-2px); }
+
+        .divider { margin: 24px 0; display: flex; align-items: center; color: #475569; font-size: 0.8rem; }
+        .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #334155; }
+        .divider span { padding: 0 12px; }
+
+        .secondary-link { color: #94a3b8; font-size: 0.85rem; text-decoration: none; margin-top: 16px; display: inline-block; cursor: pointer; }
+        .secondary-link:hover { color: white; }
+
+        #key-display {
+            display: none; background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2); padding: 16px;
+            border-radius: 12px; margin-bottom: 20px; word-break: break-all;
+            font-family: monospace; color: #10b981; font-size: 0.9rem;
+        }
+
+        .loading-spinner {
+            display: none; width: 20px; height: 20px; border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="glass-card">
+            <h1 id="title">欢迎回来</h1>
+            <p class="subtitle" id="subtitle">请输入您的 User Key 进入系统</p>
+
+            <div id="login-section">
+                <div class="input-group">
+                    <label>User Key</label>
+                    <input type="password" id="user-key-input" placeholder="fzt_xxxxxxxx">
+                </div>
+                <button class="btn" onclick="handleLogin()">进入系统</button>
+                <div class="divider"><span>或</span></div>
+                <p class="secondary-link" onclick="switchMode('reg')">申请新账户</p>
+            </div>
+
+            <div id="reg-section" style="display:none;">
+                <p style="color:#94a3b8; font-size:0.9rem; margin-bottom:20px;">点击下方按钮即可生成您的专属通行证</p>
+                <div id="key-display"></div>
+                <button class="btn" id="reg-btn" onclick="handleRegister()">生成专属通行证</button>
+                <p class="secondary-link" onclick="switchMode('login')">已有 Key，直接登录</p>
+            </div>
+
+            <div class="loading-spinner" id="spinner"></div>
+        </div>
+    </div>
+
+    <script>
+        const savedKey = localStorage.getItem('X-FZT-Key');
+        if (savedKey) document.getElementById('user-key-input').value = savedKey;
+
+        function switchMode(mode) {
+            const isReg = mode === 'reg';
+            document.getElementById('login-section').style.display = isReg ? 'none' : 'block';
+            document.getElementById('reg-section').style.display = isReg ? 'block' : 'none';
+            document.getElementById('title').innerText = isReg ? '申请权限' : '欢迎回来';
+            document.getElementById('subtitle').innerText = isReg ? '生成您的唯一通行证以开始分析' : '请输入您的 User Key 进入系统';
+        }
+
+        async function handleLogin() {
+            const key = document.getElementById('user-key-input').value.trim();
+            if (!key) return;
+            setLoading(true);
+            try {
+                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                if (r.ok) {
+                    localStorage.setItem('X-FZT-Key', key);
+                    const data = await r.json();
+                    // 登录成功 - 跳转到主工作台
+                    window.location.href = '/';
+                } else {
+                    alert('Key 无效或已过期，请检查或重新申请');
+                }
+            } catch (e) { alert('服务器连接失败: ' + e.message); }
+            setLoading(false);
+        }
+
+        async function handleRegister() {
+            setLoading(true);
+            try {
+                const r = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const d = await r.json();
+                const display = document.getElementById('key-display');
+                display.innerText = '请保存您的 Key (仅显示一次):\n' + d.userKey;
+                display.style.display = 'block';
+                
+                const btn = document.getElementById('reg-btn');
+                btn.innerText = '已保存，去登录';
+                btn.onclick = () => {
+                    localStorage.setItem('X-FZT-Key', d.userKey);
+                    document.getElementById('user-key-input').value = d.userKey;
+                    switchMode('login');
+                };
+            } catch (e) { alert('注册失败: ' + e.message); }
+            setLoading(false);
+        }
+
+        function setLoading(loading) {
+            document.getElementById('spinner').style.display = loading ? 'block' : 'none';
+            document.querySelectorAll('button').forEach(b => b.disabled = loading);
+        }
+    </script>
+</body>
+</html>

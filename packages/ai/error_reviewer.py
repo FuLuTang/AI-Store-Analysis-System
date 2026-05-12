@@ -32,6 +32,10 @@ async def review_error(settings: dict, report: str, cleaned_data_texts: list = N
 
     raw_data_str = "\n\n---\n\n".join(cleaned_data_texts) if cleaned_data_texts else "暂无底层数据"
     user_content = context + "\n\n【初级分析报告】\n" + (report or "") + "\n\n【底层原始数据】\n" + raw_data_str
+    raw_effort = settings.get("reasoningEffort") or settings.get("reasoning_effort") or ""
+    reasoning_effort = str(raw_effort).strip().lower()
+    if reasoning_effort not in {"low", "medium", "high"}:
+        reasoning_effort = "medium"
 
     try:
         return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
@@ -40,7 +44,7 @@ async def review_error(settings: dict, report: str, cleaned_data_texts: list = N
                 {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            "temperature": 0.2, "reasoning_effort": "medium", "max_tokens": 8192,
+            "temperature": 0.2, "reasoning_effort": reasoning_effort, "max_tokens": 8192,
         })
     except Exception as e:
         return f"错误审核失败。原因：{str(e)}"

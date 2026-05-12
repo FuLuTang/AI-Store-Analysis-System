@@ -58,7 +58,8 @@ class TaskAbortedError(Exception):
 
 
 def get_global_api_key() -> str:
-    return GLOBAL_API_KEY
+    with GLOBAL_API_KEY_LOCK:
+        return GLOBAL_API_KEY
 
 
 def set_global_api_key(raw_key: str):

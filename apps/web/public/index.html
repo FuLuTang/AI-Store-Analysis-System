@@ -32,7 +32,7 @@
                 <i class="fas fa-file-upload"></i>
                 <p id="fileName">拖放一个或多个 JSON 文件到此处</p>
                 <div id="fileList" class="file-list"></div>
-                <input type="file" id="fileInput" hidden accept=".json" multiple>
+                <input type="file" id="fileInput" hidden multiple>
             </div>
 
             <div style="text-align: center; display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
@@ -139,7 +139,7 @@
         const labelFull = document.getElementById('labelFull');
         const exampleBtn = document.getElementById('exampleBtn');
         
-        let jsonFilesData = [];
+        let filesData = [];
         let currentReport = null;
         let currentFullReport = null;
         let pollingInterval = null;
@@ -263,7 +263,7 @@
                 } else if (data.status === 'completed') {
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
                     disconnectSSE();
-                    startBtn.disabled = jsonFilesData.length === 0;
+                    startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
                     progressContainer.style.display = 'block';
@@ -278,7 +278,7 @@
                 } else if (data.status === 'error' || data.status === 'aborted') {
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
                     disconnectSSE();
-                    startBtn.disabled = jsonFilesData.length === 0;
+                    startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
                     progressContainer.style.display = 'block';
@@ -291,7 +291,7 @@
                     // idle
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
                     disconnectSSE();
-                    startBtn.disabled = jsonFilesData.length === 0;
+                    startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
                 }
@@ -463,39 +463,39 @@
 
         function handleFiles(files) {
             if (files.length === 0) return;
-            
-            jsonFilesData = [];
+
+            filesData = [];
             fileListDisplay.innerHTML = '';
-            
+
             Array.from(files).forEach(file => {
-                if (!file.name.endsWith('.json')) return;
-                
                 const reader = new FileReader();
                 reader.onload = (e) => {
-                    try {
-                        const data = JSON.parse(e.target.result);
-                        jsonFilesData.push(data);
-                        
-                        const item = document.createElement('div');
-                        item.className = 'file-item';
-                        item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
-                        fileListDisplay.appendChild(item);
+                    const arrayBuffer = e.target.result;
+                    const bytes = new Uint8Array(arrayBuffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.length; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                    }
+                    const b64 = btoa(binary);
+                    filesData.push({ name: file.name, base64: b64 });
 
-                        if (jsonFilesData.length > 0) {
-                            startBtn.disabled = false;
-                            document.getElementById('fileName').innerText = `已准备 ${jsonFilesData.length} 个数据文件`;
-                        }
-                    } catch (err) {
-                        console.error('JSON 解析失败', file.name);
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
+                    fileListDisplay.appendChild(item);
+
+                    if (filesData.length > 0) {
+                        startBtn.disabled = false;
+                        document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
                     }
                 };
-                reader.readAsText(file);
+                reader.readAsArrayBuffer(file);
             });
         }
 
         // === 开始分析 ===
         startBtn.onclick = async () => {
-            if (jsonFilesData.length === 0) return;
+            if (filesData.length === 0) return;
 
             const settings = loadSettings();
 
@@ -516,7 +516,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        files: jsonFilesData,
+                        files: filesData,
                         settings: {
                             reasoningEffort: settings.reasoningEffort
                         }
@@ -556,18 +556,18 @@
                 const res = await fetch('/api/examples');
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
-                
-                jsonFilesData = data.files;
+
+                filesData = data.files;
                 fileListDisplay.innerHTML = '';
-                jsonFilesData.forEach((f, i) => {
+                filesData.forEach((f) => {
                     const item = document.createElement('div');
                     item.className = 'file-item';
-                    item.innerHTML = `<i class="fas fa-file-code"></i> 案例文件 ${i + 1} (${f.page?.title || '未命名'})`;
+                    item.innerHTML = `<i class="fas fa-file-code"></i> ${f.name || '案例文件'}`;
                     fileListDisplay.appendChild(item);
                 });
-                
+
                 startBtn.disabled = false;
-                document.getElementById('fileName').innerText = `已加载 ${jsonFilesData.length} 个案例文件`;
+                document.getElementById('fileName').innerText = `已加载 ${filesData.length} 个案例文件`;
             } catch (err) {
                 alert('加载案例失败: ' + err.message);
             } finally {

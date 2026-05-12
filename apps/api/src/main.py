@@ -3,6 +3,7 @@ import json
 import asyncio
 import time
 import shutil
+import base64
 import re
 import base64
 import hashlib
@@ -372,9 +373,21 @@ def sanitize_upload_filename(raw_name: Optional[str], index: int):
     if not candidate.lower().endswith(".json"):
         candidate = f"{candidate}.json"
     return candidate
+    if not raw_name:
+        return f"file_{index + 1}"
+    if "/" in raw_name or "\\" in raw_name:
+        raise HTTPException(status_code=400, detail=f"非法文件名: {raw_name}")
+    name = Path(raw_name).name.strip()
+    if not name:
+        name = f"file_{index + 1}"
+    if len(name) > 128:
+        raise HTTPException(status_code=400, detail=f"文件名过长: {name[:32]}...")
+    if not SAFE_UPLOAD_FILENAME.fullmatch(name):
+        raise HTTPException(status_code=400, detail=f"文件名包含非法字符: {name}")
+    return name
 
 
-def save_current_uploads(session: SessionState, files_data: List[dict], filenames: Optional[List[str]] = None):
+def save_current_uploads(session: SessionState, decoded_files: List[dict]):
     _ensure_session_dirs(session)
     current_dir = session.upload_dir / "current"
     tmp_dir = session.upload_dir / ".current_tmp"
@@ -384,13 +397,13 @@ def save_current_uploads(session: SessionState, files_data: List[dict], filename
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        for i, payload in enumerate(files_data):
-            source_name = filenames[i] if filenames and i < len(filenames) else None
-            if source_name is not None:
-                sanitize_upload_filename(source_name, i)
-            output_path = tmp_dir / f"file_{i + 1:02d}.json"
+        for i, item in enumerate(decoded_files):
+            raw_name = item.get("name")
+            data_bytes = item.get("bytes", b"")
+            safe_name = sanitize_upload_filename(raw_name, i)
+            output_path = tmp_dir / safe_name
             try:
-                output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                output_path.write_bytes(data_bytes)
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"写入上传缓存失败: {str(e)}")
 
@@ -783,15 +796,39 @@ async def run(request: Request, background_tasks: BackgroundTasks, x_fzt_key: Op
     session = resolve_session(x_fzt_key, require_key=False)
     data = await request.json()
     files = data.get("files", [])
-    filenames = data.get("filenames")
     user_settings = data.get("settings")
 
     with session.runtime_lock:
         if session.status == "running":
             raise HTTPException(status_code=400, detail="任务正在运行中")
 
-    save_current_uploads(session, files, filenames if isinstance(filenames, list) else None)
-    background_tasks.add_task(run_analysis_task, session, files, user_settings)
+    parsed_files = []
+    decoded_files = []
+
+    for item in files:
+        name = item.get("name", "unnamed")
+        b64_str = item.get("base64", "")
+        if not b64_str:
+            continue
+        try:
+            decoded_bytes = base64.b64decode(b64_str)
+        except Exception as e:
+            add_log(session, "system", f"Base64 解码失败 ({name}): {str(e)}")
+            continue
+
+        decoded_files.append({"name": name, "bytes": decoded_bytes})
+
+        try:
+            parsed = json.loads(decoded_bytes.decode("utf-8-sig"))
+            parsed_files.append(parsed)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            add_log(session, "system", f"跳过非 JSON 文件: {name}")
+
+    if not parsed_files:
+        raise HTTPException(status_code=400, detail="未提供有效的 JSON 文件内容")
+
+    save_current_uploads(session, decoded_files)
+    background_tasks.add_task(run_analysis_task, session, parsed_files, user_settings)
     return {"status": "started"}
 
 
@@ -807,9 +844,9 @@ async def analyze(
             raise HTTPException(status_code=400, detail="任务正在运行中")
 
     parsed_files = []
-    filenames = []
+    decoded_files = []
     for i, uploaded_file in enumerate(files):
-        filename = uploaded_file.filename or "unnamed.json"
+        filename = uploaded_file.filename or "unnamed"
         safe_name = sanitize_upload_filename(filename, i)
 
         try:
@@ -817,15 +854,15 @@ async def analyze(
             if len(raw) > MAX_UPLOAD_FILE_SIZE:
                 raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {safe_name}")
             parsed = json.loads(raw.decode("utf-8-sig"))
+            decoded_files.append({"name": filename, "bytes": raw})
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"JSON 解析失败: {safe_name} - {str(e)}")
 
         parsed_files.append(parsed)
-        filenames.append(safe_name)
 
-    save_current_uploads(session, parsed_files, filenames)
+    save_current_uploads(session, decoded_files)
     background_tasks.add_task(run_analysis_task, session, parsed_files, None)
     return {"status": "started"}
 
@@ -844,17 +881,17 @@ def stop(x_fzt_key: Optional[str] = Header(default=None)):
 
 @app.get("/api/examples")
 def get_examples():
-    """读取案例文件"""
+    """读取案例文件（Base64 编码）"""
     example_dir = ROOT_DIR / "data" / "samples"
     files_content = []
     if example_dir.exists():
         for f_path in example_dir.glob("*.json"):
             try:
-                with open(f_path, 'r', encoding='utf-8') as f:
-                    files_content.append(json.load(f))
+                raw_bytes = f_path.read_bytes()
+                b64 = base64.b64encode(raw_bytes).decode("utf-8")
+                files_content.append({"name": f_path.name, "base64": b64})
             except Exception as e:
                 logger.warning("案例文件加载失败: %s (%s)", f_path, str(e))
-
     if not files_content:
         return {"error": "未找到案例文件，请检查目录结构"}
     return {"files": files_content}

@@ -34,7 +34,7 @@ sequenceDiagram
 - **Header Name**: `X-FZT-Key`
 - **Value**: 用户的唯一通行证（如 `fzt_abc123...`）
 
-> legacy 会话说明：当接口标注“`X-FZT-Key` 可选”且请求未携带该 Header 时，后端会回落到系统内置的 legacy 账号上下文, 用于兼容旧版前端流程。
+> legacy 会话说明：当接口标注“`X-FZT-Key` 可选”且请求未携带该 Header 时，后端会回落到系统内置的 legacy 账号上下文，用于兼容旧版前端流程。
 
 ### 2.2 管理员鉴权
 管理员接口通过 HTTP Header 携带：

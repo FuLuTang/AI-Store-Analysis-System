@@ -1,0 +1,90 @@
+# 药店行业指标包
+
+industry: pharmacy
+aliases: [药店, 药房, 药, 药品]
+
+metrics:
+  - metric_id: revenue_change
+    name: 营收趋势
+    required_fields: [date, revenue]
+    calculator: period_change
+    health_profiles: [default]
+
+  - metric_id: avg_order_value
+    name: 客单价
+    required_fields: [revenue, order_count]
+    calculator: ratio
+    params:
+      numerator: revenue
+      denominator: order_count
+    health_profiles: [default]
+
+  - metric_id: gross_margin_rate
+    name: 毛利率
+    required_fields: [revenue, gross_profit]
+    calculator: ratio
+    params:
+      numerator: gross_profit
+      denominator: revenue
+      unit: "%"
+    health_profiles: [default]
+
+  - metric_id: channel_share
+    name: 渠道占比
+    required_fields: [revenue, channel]
+    calculator: share_by_dimension
+    params:
+      value_field: revenue
+      dim_field: channel
+    health_profiles: [default]
+
+  - metric_id: channel_concentration
+    name: 渠道集中度
+    required_fields: [revenue, channel]
+    calculator: concentration
+    params:
+      value_field: revenue
+      dim_field: channel
+    health_profiles: [default, o2o_driven]
+
+  - metric_id: member_penetration
+    name: 会员渗透率
+    required_fields: [member_revenue, revenue]
+    calculator: ratio
+    params:
+      numerator: member_revenue
+      denominator: revenue
+      unit: "%"
+    health_profiles: [default]
+
+  - metric_id: top_product_contribution
+    name: TOP商品贡献
+    required_fields: [revenue, product_name]
+    calculator: top_contribution
+    params:
+      value_field: revenue
+      dim_field: product_name
+      top_n: 3
+    health_profiles: [default]
+
+  - metric_id: volatility
+    name: 波动率
+    required_fields: [date, revenue]
+    calculator: volatility
+    health_profiles: [default]
+
+  - metric_id: data_completeness
+    name: 数据完整度
+    required_fields: []
+    calculator: data_quality
+    health_profiles: [default]
+
+threshold_profiles:
+  o2o_driven:
+    channel_concentration:
+      attention: 85
+      warning: 95
+  offline_driven:
+    channel_concentration:
+      attention: 50
+      warning: 70

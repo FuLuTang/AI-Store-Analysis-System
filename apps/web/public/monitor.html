@@ -20,104 +20,127 @@
 
         <header>
             <h1>后台数据流转监视器</h1>
-            <p style="color: var(--text-muted); margin-bottom: 1.5rem;">实时观察系统处理步骤与日志输出。</p>
+            <p style="color: var(--text-muted); margin-bottom: 1.5rem;">实时观察系统处理步骤与日志输出。支持多文件（JSON / Excel / CSV）管线。</p>
         </header>
 
         <!-- 流程图 -->
         <div class="card" style="margin-bottom: 1.5rem;">
             <div class="flow-container">
-                <!-- 第一阶段：输入 -->
+
+                <!-- 数据接入 · 纯算法 -->
                 <div class="flow-row">
-                    <div id="input" class="node pending">
-                        <div class="node-title"><i class="fas fa-file-import"></i> <span>json 传入</span></div>
-                        <div class="node-log" id="log-input"></div>
+                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
+                        <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">数据接入 · 纯算法</div>
+                        <div id="input" class="node pending">
+                            <div class="node-title"><i class="fas fa-file-import"></i> <span>数据输入</span></div>
+                            <div class="node-log" id="log-input"></div>
+                        </div>
+                        <div class="v-connector"></div>
+                        <div id="profile" class="node pending">
+                            <div class="node-title"><i class="fas fa-chart-bar"></i> <span>数据画像</span></div>
+                            <div class="node-log" id="log-profile"></div>
+                        </div>
                     </div>
                 </div>
-                
+
                 <div class="v-connector"></div>
 
-                <!-- 第二阶段：并行处理 -->
-                <div class="flow-row" style="align-items: flex-start; gap: 4rem; position: relative;">
-                    <!-- 分支连线 (上) -->
-                    <div style="position: absolute; top: -20px; left: 50%; transform: translateX(-50%); width: calc(100% - 300px); height: 20px; border-top: 2px solid #e2e8f0; border-left: 2px solid #e2e8f0; border-right: 2px solid #e2e8f0;"></div>
+                <!-- 语义理解 · AI辅助 -->
+                <div class="flow-row">
+                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #a78bfa; background: #faf5ff;">
+                        <div style="font-size: 0.65rem; color: #a78bfa; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">语义理解 · AI辅助</div>
+                        <div id="scene" class="node pending">
+                            <div class="node-title"><i class="fas fa-lightbulb"></i> <span>场景识别 (AI)</span></div>
+                            <div class="node-log" id="log-scene"></div>
+                        </div>
+                        <div class="v-connector"></div>
+                        <div id="mapping" class="node pending">
+                            <div class="node-title"><i class="fas fa-tags"></i> <span>语义映射 (AI)</span></div>
+                            <div class="node-log" id="log-mapping"></div>
+                        </div>
+                    </div>
+                </div>
 
-                    <!-- AI 分支 -->
+                <div class="v-connector"></div>
+
+                <!-- 标准数据与指标 · 纯算法 -->
+                <div class="flow-row">
                     <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                        <div style="font-size: 0.65rem; color: #94a3b8; position: absolute; top: 4px; width: 100%; text-align: center;">AI 调用</div>
-                        <div id="clean" class="node pending">
-                            <div class="node-title"><i class="fas fa-broom"></i> <span>json清洗与转换</span></div>
-                            <div class="node-log" id="log-clean"></div>
+                        <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">标准数据与指标 · 纯算法</div>
+                        <div id="canonical" class="node pending">
+                            <div class="node-title"><i class="fas fa-layer-group"></i> <span>标准数据层</span></div>
+                            <div class="node-log" id="log-canonical"></div>
                         </div>
                         <div class="v-connector"></div>
-                        <div id="api" class="node pending">
-                            <div class="node-title"><i class="fas fa-robot"></i> <span>API调用</span></div>
-                            <div class="node-log" id="log-api"></div>
+                        <div id="registry" class="node pending">
+                            <div class="node-title"><i class="fas fa-list-check"></i> <span>指标匹配</span></div>
+                            <div class="node-log" id="log-registry"></div>
                         </div>
                         <div class="v-connector"></div>
-                        <div id="output" class="node pending">
-                            <div class="node-title"><i class="fas fa-file-alt"></i> <span>初步输出</span></div>
-                            <div class="node-log" id="log-output"></div>
+                        <div id="engine" class="node pending">
+                            <div class="node-title">
+                                <i class="fas fa-calculator"></i> <span>指标计算</span>
+                                <span id="engine-progress" class="progress-badge" style="display:none;">0/0</span>
+                            </div>
+                            <div class="node-log" id="log-engine"></div>
+                        </div>
+                        <div class="v-connector"></div>
+                        <div id="threshold" class="node pending">
+                            <div class="node-title">
+                                <i class="fas fa-scale-balanced"></i> <span>健康判断</span>
+                                <span id="threshold-tally" class="tally-badges" style="display:none;"></span>
+                            </div>
+                            <div class="node-log" id="log-threshold"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="v-connector"></div>
+
+                <!-- 证据构建 · 纯算法 -->
+                <div class="flow-row">
+                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
+                        <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">证据构建 · 纯算法</div>
+                        <div id="evidence" class="node pending">
+                            <div class="node-title"><i class="fas fa-database"></i> <span>证据包</span></div>
+                            <div class="node-log" id="log-evidence"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="v-connector"></div>
+
+                <!-- AI 报告生成 -->
+                <div class="flow-row">
+                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #8b5cf6; background: #faf5ff;">
+                        <div style="font-size: 0.65rem; color: #8b5cf6; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">AI 报告生成</div>
+                        <div id="report" class="node pending">
+                            <div class="node-title"><i class="fas fa-robot"></i> <span>AI初诊报告</span></div>
+                            <div class="node-log" id="log-report"></div>
                         </div>
                         <div class="v-connector"></div>
                         <div id="review" class="node pending">
-                            <div class="node-title"><i class="fas fa-search-check"></i> <span>错误评审</span></div>
+                            <div class="node-title"><i class="fas fa-search-check"></i> <span>错误评审 (AI)</span></div>
                             <div class="node-log" id="log-review"></div>
                         </div>
-                    </div>
-
-                    <!-- 算法分支 -->
-                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                        <div style="font-size: 0.65rem; color: #94a3b8; position: absolute; top: 4px; width: 100%; text-align: center;">算法处理</div>
-                        <div id="alg1" class="node pending">
-                            <div class="node-title"><i class="fas fa-layer-group"></i> <span>数据整理</span></div>
-                            <div class="node-log" id="log-alg1"></div>
-                        </div>
                         <div class="v-connector"></div>
-                        <div id="alg2" class="node pending">
-                            <div class="node-title">
-                                <i class="fas fa-calculator"></i> <span>算指标</span>
-                                <span id="alg2-progress" class="progress-badge" style="display:none;">0/0</span>
-                            </div>
-                            <div class="node-log" id="log-alg2"></div>
-                        </div>
-                        <div class="v-connector"></div>
-                        <div id="alg3" class="node pending">
-                            <div class="node-title">
-                                <i class="fas fa-microscope"></i> <span>检查异常</span>
-                                <span id="alg3-tally" class="tally-badges" style="display:none;"></span>
-                            </div>
-                            <div class="node-log" id="log-alg3"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 第三阶段：结果聚合 -->
-                <div style="position: relative; width: 100%; display: flex; flex-direction: column; align-items: center;">
-                    <!-- 分支连线 (下) -->
-                    <div style="width: calc(100% - 300px); height: 20px; border-bottom: 2px solid #e2e8f0; border-left: 2px solid #e2e8f0; border-right: 2px solid #e2e8f0; margin-bottom: 20px;"></div>
-                    <div style="position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: 2px; height: 20px; background: #e2e8f0;"></div>
-                </div>
-
-                <!-- 第四阶段：输出 -->
-                <div class="flow-row">
-                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: var(--primary); background: #eff6ff;">
-                        <div style="font-size: 0.65rem; color: var(--primary); position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">结果融合-输出</div>
                         <div id="fusion" class="node pending">
                             <div class="node-title"><i class="fas fa-object-group"></i> <span>数据融合</span></div>
                             <div class="node-log" id="log-fusion"></div>
                         </div>
                         <div class="v-connector"></div>
                         <div id="rep1" class="node pending">
-                            <div class="node-title"><i class="fas fa-file-medical"></i> <span>完整报告</span></div>
+                            <div class="node-title"><i class="fas fa-file-medical"></i> <span>完整报告 (AI)</span></div>
                             <div class="node-log" id="log-rep1"></div>
                         </div>
                         <div class="v-connector"></div>
                         <div id="rep2" class="node pending">
-                            <div class="node-title"><i class="fas fa-file-contract"></i> <span>简化报告</span></div>
+                            <div class="node-title"><i class="fas fa-file-contract"></i> <span>精简报告 (AI)</span></div>
                             <div class="node-log" id="log-rep2"></div>
                         </div>
                     </div>
                 </div>
+
             </div>
             <div style="margin-top: 0.75rem; color: var(--text-muted); font-size: 0.8rem; display: flex; justify-content: space-between;">
                 <span>SSE: <span id="connStatus" style="color: var(--success)">已连接</span></span>
@@ -139,7 +162,8 @@
 
         const connStatus = document.getElementById('connStatus');
         const timeDisplay = document.getElementById('currentTime');
-        const eventSource = new EventSource('/api/stream');
+        const key = localStorage.getItem('X-FZT-Key') || '';
+        const eventSource = new EventSource('/api/stream?x-fzt-key=' + encodeURIComponent(key));
 
         eventSource.onopen = () => {
             connStatus.innerText = '已连接';
@@ -172,10 +196,14 @@
                 const logEl = node.querySelector('.node-log');
                 if (logEl) logEl.innerHTML = '';
             });
-            const progress = document.getElementById('alg2-progress');
-            if (progress) { progress.style.display = 'none'; progress.textContent = '0/0'; }
-            const tally = document.getElementById('alg3-tally');
-            if (tally) { tally.style.display = 'none'; tally.innerHTML = ''; }
+            ['engine-progress', 'alg2-progress'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.style.display = 'none'; el.textContent = '0/0'; }
+            });
+            ['threshold-tally', 'alg3-tally'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+            });
             timeDisplay.innerText = '等待任务...';
         }
 
@@ -193,7 +221,7 @@
                 const tallyEl = document.getElementById(nodeId + '-tally');
                 if (tallyEl) { tallyEl.style.display = 'none'; tallyEl.innerHTML = ''; }
             }
-            timeDisplay.innerText = `最后更新: ${time}`;
+            timeDisplay.innerText = '最后更新: ' + time;
         }
 
         function appendLog(nodeId, message, time) {
@@ -201,7 +229,7 @@
             if (!logEl) return;
             const line = document.createElement('div');
             line.className = 'log-line';
-            line.innerHTML = `<span class="log-time">${time}</span> ${escapeHtml(message)}`;
+            line.innerHTML = '<span class="log-time">' + time + '</span> ' + escapeHtml(message);
             logEl.appendChild(line);
             logEl.scrollTop = logEl.scrollHeight;
         }
@@ -210,8 +238,7 @@
             const el = document.getElementById(nodeId + '-progress');
             if (!el) return;
             el.style.display = 'inline';
-            el.textContent = `${current}/${total}`;
-            // 完成时变色
+            el.textContent = current + '/' + total;
             if (current === total) {
                 el.style.background = 'var(--success)';
             } else {
@@ -223,12 +250,10 @@
             const el = document.getElementById(nodeId + '-tally');
             if (!el) return;
             el.style.display = 'inline-flex';
-            el.innerHTML = `
-                <span class="tally-badge pass">🟢${tally.pass}</span>
-                <span class="tally-badge attention">🟡${tally.attention}</span>
-                <span class="tally-badge warning">🔴${tally.warning}</span>
-                ${tally.uncountable ? `<span class="tally-badge uncountable">⚪${tally.uncountable}</span>` : ''}
-            `;
+            el.innerHTML = '<span class="tally-badge pass">🟢' + tally.pass + '</span>'
+                + '<span class="tally-badge attention">🟡' + tally.attention + '</span>'
+                + '<span class="tally-badge warning">🔴' + tally.warning + '</span>'
+                + (tally.uncountable ? '<span class="tally-badge uncountable">⚪' + tally.uncountable + '</span>' : '');
         }
 
         function escapeHtml(text) {

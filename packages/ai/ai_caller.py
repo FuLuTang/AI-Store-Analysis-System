@@ -1,113 +1,194 @@
 """
-ai_caller.py — AI 调用模块 (从 ai-caller.js 完整迁移)
-包含: callAI (初级报告), callDetailedAI (详细报告), callSimplifiedAI (精简报告)
+ai_caller.py — AI 调用模块 (v2: 多行业支持 + 格式化输入)
 """
 import json
 import asyncio
 from datetime import datetime
 
-SYSTEM_PROMPT = """
-你是一位资深连锁药店经营分析顾问。你将收到一家门店的多维经营数据，数据已清洗为紧凑格式。
+# ── 行业角色模板 ──
 
-数据类型：
-- business_overview：营业概览，含营收、来客数、客单价、毛利、会员、电商、业绩来源占比及环比趋势
-- store_hot_products：门店热销商品，按今/昨/周/月分组
-- hot_top500_stock_status：全城热销TOP500库存对照
-- **Algorithm Analysis Results**: 算法引擎预先计算的诊断指标和异常清单，请优先参考其中的结论。
-
-你的任务：
-基于数据生成一份【经营诊断报告】，聚焦颗粒度为年、月、周。请将现状诊断报告与优化行动方案（如果有）写在一起。
-
-# 第一部分：现状诊断报告
-1. 核心经营判断 （现在是涨是跌还是稳定还是波动，可能原因是什么，数据是否正常，带emojis如📈📉）
-2. 热销商品变化趋势分析
-3. 缺货/缺种损失评估
-4. 风险预警（可选）
-
-# 第二部分：优化行动方案（可选部分，不一定都有）
-1. 紧急补货
-2. 品种引进
-3. 毛利/客单提升
-4. 促活
-5. 根据你的经验，能想到的其他可能有效的方案
-
-ideas:
-1. 考虑到店的位置，气温，时间天气，社会环境因素，近期事件。开拓思维
-2. 可结合当前季节、气温（春/夏季交替）及社会因素进行发散性诊断
-3. 因为没有同比数据，所以环比数据要注意折算！
-
-输出要求：
-- Markdown 格式，大小标题，列点，格式化，必要时用表格或Mermaid美化输出
-- 两大段：用 # 现状诊断报告 ... \\n --- \\n # 优化行动方案 ... 来分隔
-- 全文控制在约1000字
-- 不要使用过长段 bullet
-- 每个 bullet 不超过 45 字
-- 总结只保留 4 个核心问题
-- 商品最多提 6 个
-- 不要把"建议："写成单独一行
-"""
-
-DETAILED_SYSTEM_PROMPT = """
-你是一位资深数据分析师与零售专家。你将收到一份经过初步处理的【门店分析融合报告】，包含：
-1. 初级AI诊断报告
-2. 明显错误评审意见
-3. 算法引擎检测出的异常日志
-
-你的任务：
-基于这些融合信息，深度重写并输出一份【更详细、结构更严谨的最终经营诊断报告】。
-
-注意：
-- 不需要复述那些能通过原始json/ERP系统里能直接看出来的浅层信息
-- 初级报告中可能存在谬误，请务必结合评审意见进行核对
-- "指标"是用来补充初级报告中未发现的问题的
-- "指标"中的结果很可能和初级报告有冲突，请自行判断并融合
-
-你需要：
-- 纠正初级报告中被"错误评审"指出的逻辑或计算谬误。
-- 结合"异常检测日志"，挖掘更深层次的业务根因。
-- 提供更加具体、可落地的优化行动方案。
-- 保持专业的商业分析语调。
-- 格式化输出，采用合适的标题、列表和加粗，让重点一目了然。
-- 结尾不需要"如果你愿意，我可以帮你..."等字样
-- 不要使用"不是，而是"句式
-"""
-
-SIMPLIFIED_SYSTEM_PROMPT = """
-你是一位资深连锁药店经营分析顾问，你的任务是为管理层（老板）提供一份"一眼定真问题"的【精简诊断报告】。
-你将收到一份经过深度分析的详细报告。请提取最核心的信息，并严格按照以下 JSON 格式输出，不要包含任何其他字符或 Markdown 格式（不要包含 ```json）：
-
-{
-  "health_status": "这里填1-2个词的整体状态",
-  "overview_text": "用一句大白话总结门店当前的整体经营状况。",
-  "cards": [
-    {
-      "title": "问题标题",
-      "explanation": "大白话说怎么回事。",
-      "suggestion": "咋办。",
-      "evidence": "相关数据证据。优先使用 Markdown 迷你表格展示。",
-      "color": "red/yellow/green/blue/pink"
-    }
-  ]
+INDUSTRY_ROLES = {
+    "pharmacy": {
+        "role": "连锁药店经营分析顾问",
+        "domain": "连锁药店",
+        "scopes": ["营收趋势", "毛利率", "会员渗透率", "O2O渠道占比", "热销商品波动", "缺货风险"],
+    },
+    "restaurant": {
+        "role": "餐饮经营分析顾问",
+        "domain": "餐饮门店",
+        "scopes": ["营收趋势", "客单价", "堂食/外卖占比", "菜品TOP贡献", "出餐超时", "翻台率"],
+    },
+    "hr": {
+        "role": "HR组织效率分析顾问",
+        "domain": "企业组织",
+        "scopes": ["离职率", "招聘漏斗", "考勤异常", "绩效分布", "部门人数变化"],
+    },
+    "generic": {
+        "role": "数据分析顾问",
+        "domain": "经营实体",
+        "scopes": ["营收趋势", "指标变化", "异常波动", "数据完整度"],
+    },
 }
 
-要求：
-1. cards 最多只能有 7 个。
-2. 语言必须是大白话。
-3. 如果发现数据口径不一致，请使用 pink 颜色。
-4. 禁止"不是，而是"句式
-"""
+def _role_config(scene: dict) -> dict:
+    industry = (scene or {}).get("industry", "generic")
+    return INDUSTRY_ROLES.get(industry, INDUSTRY_ROLES["generic"])
 
+
+def _build_system_prompt(scene: dict) -> str:
+    cfg = _role_config(scene)
+    scopes_text = "、".join(cfg["scopes"])
+    return f"""你是一位资深{cfg["role"]}。你将收到一家{cfg["domain"]}的多维经营数据。
+
+数据含：
+- 算法引擎预先计算的指标结果（附状态: pass/attention/warning/uncountable）
+- 由证据包（evidence）支撑的量化结果
+- 字段语义映射记录和数据质量报告
+
+你的任务：
+生成一份【经营诊断报告】。
+
+# 第一部分：现状诊断报告
+1. 核心经营判断（涨跌稳定波动，可能原因，带emojis如📈📉）
+2. 核心指标逐项解读（优先关注 attention/warning 项）
+3. 关联分析（多指标交叉解读，如营收涨但毛利跌说明什么）
+4. 风险预警
+
+# 第二部分：优化行动方案
+1. 紧急事项（高风险指标对应的动作）
+2. 中期改善（结构性问题的优化方向）
+3. 基于行业经验的其他建议
+
+分析要点：
+- {scopes_text}
+- 优先使用证据包（evidence）中的数据，避免编造数值
+- 标记为 uncountable 的指标说明数据不足，报告中应注明"数据缺失"
+- 环比注意折算（可能未到期末）
+- 没有同比数据时，环比结论需留有余地
+
+输出要求：
+- Markdown 格式，大小标题，列点，必要时用表格或Mermaid
+- 用 # 现状诊断报告 ... \\n --- \\n # 优化行动方案 ... 分隔
+- 全文约1000字，bullet 不超45字，最多4个核心问题
+- 禁止"不是，而是"句式，禁止结尾客套话"""
+
+
+def _build_detail_prompt(scene: dict) -> str:
+    cfg = _role_config(scene)
+    return f"""你是一位资深数据分析师与{cfg["role"]}。你将收到一份融合报告：
+
+1. 初级AI诊断报告
+2. 错误评审意见
+3. 证据包（量化支撑）
+
+任务：深度重写为结构严谨的最终诊断报告。
+
+规则：
+- 纠正初级报告中被评审指出的错误
+- 结合证据包挖掘深层根因，不允许引用证据包外的数据
+- 提供具体可落地的行动方案
+- 保持专业商业语调，格式化输出
+- 禁止"不是，而是"句式，禁止结尾客套话"""
+
+
+def _build_simplified_prompt(scene: dict = None) -> str:
+    return """你是一位经营分析顾问。请为管理层提供"一眼定真问题"的精简诊断。
+
+严格按照 JSON 输出，不含其他字符（不含 ```json）：
+
+{
+  "health_status": "1-2词整体状态",
+  "overview_text": "一句大白话总结当前经营状况",
+  "cards": [{
+    "title": "问题标题",
+    "explanation": "大白话说怎么回事",
+    "suggestion": "咋办",
+    "evidence": "数据证据（优先 Markdown 迷你表格）",
+    "color": "red/yellow/green/blue/pink"
+  }]
+}
+
+规则：
+- cards 最多 7 个
+- 大白话
+- color: red=报警 yellow=关注 green=正常 blue=信息 pink=数据口径不一致
+- 禁止"不是，而是"句式"""
+
+
+# ── 格式化工具 ──
+
+def _format_metrics_text(metric_results: list) -> str:
+    if not metric_results:
+        return "暂无可计算指标。"
+
+    header = "| 指标 | 结果 | 状态 | 说明 |\n|------|------|------|------|\n"
+    rows = []
+    for r in metric_results:
+        name = r.get("name", "?")
+        status = r.get("status", "uncountable")
+        icon = {"warning": "🔴", "attention": "🟡", "pass": "🟢", "uncountable": "⚪"}.get(status, "⚪")
+        val = r.get("value")
+        if isinstance(val, (dict, list)):
+            val_str = _value_brief(val)
+        elif val is not None:
+            val_str = f"{val:.2f}" if isinstance(val, float) else str(val)
+        else:
+            val_str = "-"
+        reason = r.get("reason", "") or ""
+        rows.append(f"| {icon} {name} | {val_str} | {status} | {reason} |")
+
+    return "【指标计算结果】\n" + header + "\n".join(rows)
+
+
+def _value_brief(val) -> str:
+    if isinstance(val, dict):
+        parts = []
+        for k, v in val.items():
+            if k in ("evidence_table", "issues"):
+                continue
+            parts.append(f"{k}={v}")
+        return ", ".join(parts[:3])
+    if isinstance(val, list):
+        return f"[{len(val)}条]"
+    return str(val)
+
+
+def _format_evidence_summary(evidence_bundle: dict) -> str:
+    items = evidence_bundle.get("items", [])
+    if not items:
+        return "暂无证据数据。"
+    lines = ["【证据包摘要】"]
+    lines.append(f"共 {len(items)} 条证据，tally: {evidence_bundle.get('summary', {}).get('tally', {})}")
+    lines.append("")
+
+    # 按状态分组展示
+    for status in ("warning", "attention"):
+        filtered = [i for i in items if i.get("status") == status]
+        if not filtered:
+            continue
+        icon = "🔴" if status == "warning" else "🟡"
+        lines.append(f"{icon} {status.upper()} ({len(filtered)}条):")
+        for item in filtered:
+            val = item.get("value")
+            val_str = _value_brief(val) if isinstance(val, (dict, list)) else str(val)[:60]
+            lines.append(f"  - {item.get('title', '?')}: {val_str}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_mapping_summary(mappings: list) -> str:
+    mapped = [m for m in mappings if m.get("semantic_field") != "unknown"]
+    return f"【字段映射】{len(mapped)}/{len(mappings)} 个字段已识别为标准化语义字段。"
+
+
+# ── API 调用基础 ──
 
 async def shared_stream_fetch(base_url: str, api_key: str, payload: dict, abort_event=None) -> dict:
-    """通用流式请求助手，用于绕过超时限制"""
     import httpx
-
     url = base_url.rstrip("/") + "/chat/completions"
     payload["stream"] = True
-
     full_text = ""
     usage = None
-
     async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
         async with client.stream(
             "POST", url,
@@ -117,7 +198,6 @@ async def shared_stream_fetch(base_url: str, api_key: str, payload: dict, abort_
             if response.status_code != 200:
                 err = await response.aread()
                 raise Exception(f"AI API 调用失败 ({response.status_code}): {err.decode()[:300]}")
-
             buffer = ""
             async for chunk in response.aiter_text():
                 buffer += chunk
@@ -138,25 +218,36 @@ async def shared_stream_fetch(base_url: str, api_key: str, payload: dict, abort_
                                 usage = data_obj["usage"]
                         except json.JSONDecodeError:
                             pass
-
     return {"choices": [{"message": {"content": full_text}}], "usage": usage}
 
 
-def _build_context_header() -> str:
+def _build_context_header(scene: dict = None) -> str:
     now = datetime.now()
-    return f"【当前分析环境】\n- 城市：福州\n- 日期：{now.strftime('%Y年%m月%d日')}\n- 时间：{now.strftime('%H:%M')}\n"
+    cfg = _role_config(scene)
+    city = "福州"
+    header = (
+        f"【分析环境】\n"
+        f"- 城市：{city}\n"
+        f"- 行业：{cfg['domain']}\n"
+        f"- 角色：{cfg['role']}\n"
+        f"- 日期：{now.strftime('%Y年%m月%d日')} {now.strftime('%H:%M')}\n"
+        f"- 重要提醒：排名/排序类数值不具有指标含义，不可用于经营分析\n"
+    )
+    return header
 
 
 def _resolve_reasoning_effort(settings: dict) -> str:
-    raw = ""
-    if isinstance(settings, dict):
-        raw = settings.get("reasoningEffort") or settings.get("reasoning_effort") or ""
+    if not isinstance(settings, dict):
+        return "medium"
+    raw = settings.get("reasoningEffort") or settings.get("reasoning_effort") or ""
     value = str(raw).strip().lower()
     return value if value in {"low", "medium", "high"} else "medium"
 
 
+# ── AI-1: 初级报告 ──
+
 async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = None) -> dict:
-    """AI-1: 初级报告"""
+    """AI-1: 初级报告 (兼容旧管线)"""
     context = _build_context_header()
     reasoning_effort = _resolve_reasoning_effort(settings)
 
@@ -168,40 +259,82 @@ async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = No
             icon = "🔴" if alert.get("severity") == "warning" else "🟡"
             algo_text += f"{icon} **{alert['metric']}** ({alert['severity']}): {alert['detail']}\n"
 
-    user_content = context + "\n" + algo_text + "\n\n【底层原始数据】\n" + "\n\n---\n\n".join(cleaned_data_texts)
+    user_content = context + "\n" + algo_text + "\n\n【底层数据】\n" + "\n\n---\n\n".join(cleaned_data_texts)
 
     return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
         "model": settings["model"],
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _build_system_prompt(None)},
             {"role": "user", "content": user_content},
         ],
         "reasoning_effort": reasoning_effort, "temperature": 0.3, "max_tokens": 16384,
     })
 
 
+async def call_ai_new(settings: dict, scene: dict, metric_results: list, evidence: dict, mappings: list) -> dict:
+    """AI-1: 初级报告 (新管线 — 格式化输入)"""
+    reasoning_effort = _resolve_reasoning_effort(settings)
+
+    parts = [
+        _build_context_header(scene),
+        _format_metrics_text(metric_results),
+        "",
+        _format_evidence_summary(evidence),
+        "",
+        _format_mapping_summary(mappings),
+    ]
+    user_content = "\n".join(parts)
+
+    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
+        "model": settings["model"],
+        "messages": [
+            {"role": "system", "content": _build_system_prompt(scene)},
+            {"role": "user", "content": user_content},
+        ],
+        "reasoning_effort": reasoning_effort, "temperature": 0.3, "max_tokens": 16384,
+    })
+
+
+# ── AI-3: 深度报告 ──
+
 async def call_detailed_ai(settings: dict, fused_report_text: str) -> dict:
-    """AI-3: 详细报告"""
+    """AI-3: 详细报告 (兼容旧管线)"""
     user_content = _build_context_header() + "\n" + fused_report_text
     reasoning_effort = _resolve_reasoning_effort(settings)
     return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
         "model": settings["model"],
         "messages": [
-            {"role": "system", "content": DETAILED_SYSTEM_PROMPT},
+            {"role": "system", "content": _build_detail_prompt(None)},
             {"role": "user", "content": user_content},
         ],
         "reasoning_effort": reasoning_effort, "temperature": 0.4, "max_tokens": 16384,
     })
 
 
+async def call_detailed_ai_new(settings: dict, scene: dict, fused_report_text: str) -> dict:
+    """AI-3: 深度报告 (新管线)"""
+    user_content = _build_context_header(scene) + "\n" + fused_report_text
+    reasoning_effort = _resolve_reasoning_effort(settings)
+    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
+        "model": settings["model"],
+        "messages": [
+            {"role": "system", "content": _build_detail_prompt(scene)},
+            {"role": "user", "content": user_content},
+        ],
+        "reasoning_effort": reasoning_effort, "temperature": 0.4, "max_tokens": 16384,
+    })
+
+
+# ── AI-4: 精简报告 ──
+
 async def call_simplified_ai(settings: dict, detailed_report_text: str) -> dict:
-    """AI-4: 老板视图 (精简报告)"""
+    """AI-4: 老板视图"""
     user_content = _build_context_header() + "\n\n【详细报告内容】\n" + detailed_report_text
     reasoning_effort = _resolve_reasoning_effort(settings)
     return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
         "model": settings["model"],
         "messages": [
-            {"role": "system", "content": SIMPLIFIED_SYSTEM_PROMPT},
+            {"role": "system", "content": _build_simplified_prompt()},
             {"role": "user", "content": user_content},
         ],
         "response_format": {"type": "json_object"},

@@ -115,6 +115,11 @@
 
     <script>
         // ========== 鉴权守卫 ==========
+        function authHeaders() {
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            return { 'X-FZT-Key': key };
+        }
+
         (async function authGuard() {
             const key = localStorage.getItem('X-FZT-Key');
             if (!key) { window.location.href = '/login.html'; return; }
@@ -150,22 +155,26 @@
         const progressText = document.getElementById('progressText');
         
         const nodeWeights = {
-            input: 1, clean: 1, api: 25, output: 1, review: 20,
-            alg1: 2, alg2: 8, alg3: 1, fusion: 1, rep1: 20, rep2: 20
+            input: 1, profile: 2, scene: 3, mapping: 3, canonical: 2,
+            registry: 2, engine: 15, threshold: 2, evidence: 2,
+            report: 25, review: 10, fusion: 1, rep1: 15, rep2: 15,
+            clean: 1, api: 25, output: 1, alg1: 2, alg2: 8, alg3: 1
         };
         let nodeProgress = {};
         let aiWaitCounters = {};
 
         function resetProgressState() {
             for (let key in nodeWeights) nodeProgress[key] = 0;
-            aiWaitCounters = { api: 0, review: 0, rep1: 0, rep2: 0 };
+            aiWaitCounters = { api: 0, report: 0, review: 0, rep1: 0, rep2: 0 };
             updateOverallProgress();
         }
 
         function updateOverallProgress() {
             let total = 0;
             for (let key in nodeProgress) {
-                total += nodeProgress[key] * (nodeWeights[key] / 100);
+                if (nodeWeights[key] !== undefined) {
+                    total += nodeProgress[key] * (nodeWeights[key] / 100);
+                }
             }
             let percentage = Math.round(total);
             if (percentage > 100) percentage = 100;
@@ -177,7 +186,7 @@
 
         function connectSSE() {
             if (sseSource) return;
-            sseSource = new EventSource('/api/stream');
+            sseSource = new EventSource('/api/stream?x-fzt-key=' + encodeURIComponent(localStorage.getItem('X-FZT-Key') || ''));
             sseSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'log') {
@@ -188,7 +197,7 @@
                     globalLogContainer.scrollTop = globalLogContainer.scrollHeight;
                     
                     // 针对长期等待的 AI 节点，根据输出的 log 估算非线性内部进度
-                    if (['api', 'review', 'rep1', 'rep2'].includes(data.nodeId)) {
+                    if (['api', 'report', 'review', 'rep1', 'rep2'].includes(data.nodeId)) {
                         if (data.message.includes('正在思考中') || data.message.includes('模型:') || data.message.includes('请求')) {
                             if (aiWaitCounters[data.nodeId] === undefined) aiWaitCounters[data.nodeId] = 0;
                             aiWaitCounters[data.nodeId] += 1;
@@ -211,7 +220,7 @@
                         }
                     }
                 } else if (data.type === 'progress') {
-                    if (data.nodeId === 'alg2') {
+                    if (data.nodeId === 'alg2' || data.nodeId === 'engine') {
                         let p = (data.current / data.total) * 100;
                         if (p > 99 && data.current !== data.total) p = 99;
                         if (nodeProgress[data.nodeId] !== 100) {
@@ -244,7 +253,7 @@
 
         async function checkStatus() {
             try {
-                const res = await fetch('/api/status');
+                const res = await fetch('/api/status', { headers: authHeaders() });
                 const data = await res.json();
                 
                 if (data.status === 'running') {
@@ -403,7 +412,7 @@
         let currentHasKey = false;
 
         // 页面加载时获取云端设置
-        fetch('/api/config').then(res => res.json()).then(data => {
+        fetch('/api/config', { headers: authHeaders() }).then(res => res.json()).then(data => {
             if (data.reasoningEffort) currentSettings.reasoningEffort = data.reasoningEffort;
             currentHasKey = !!data.hasKey;
         }).catch(e => console.error('获取配置失败', e));
@@ -431,7 +440,7 @@
             try {
                 const resp = await fetch('/api/config', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
                     body: JSON.stringify(newSettings)
                 });
                 const latest = await resp.json();
@@ -514,7 +523,7 @@
             try {
                 const response = await fetch('/api/run', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
                     body: JSON.stringify({
                         files: filesData,
                         settings: {
@@ -543,7 +552,7 @@
         stopBtn.onclick = async () => {
             if (!confirm('确认要强制停止当前正在运行的后台分析任务吗？')) return;
             try {
-                await fetch('/api/stop', { method: 'POST' });
+                await fetch('/api/stop', { method: 'POST', headers: authHeaders() });
                 await checkStatus();
             } catch(e) {
                 console.error(e);

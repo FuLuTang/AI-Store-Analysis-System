@@ -10,7 +10,7 @@ import hashlib
 import logging
 from typing import List, Optional, Dict
 from threading import Lock
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, UploadFile, File, Header, Query
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, UploadFile, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -472,22 +472,6 @@ async def auth_register(request: Request):
     return {"userKey": user_key, "status": "ok"}
 
 
-@app.get("/api/auth/me")
-def auth_me(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
-    effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
-    preset = get_llm_preset(effort)
-    return {
-        "userKey": mask_user_key(session.user_key),
-        "config": {
-            "reasoningEffort": effort,
-            "baseUrl": preset.get("baseUrl", ""),
-            "model": preset.get("model", ""),
-            "hasKey": bool(preset.get("apiKey"))
-        }
-    }
-
-
 @app.post("/api/auth/verify")
 def auth_verify(x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key)
@@ -507,21 +491,6 @@ def get_config(x_fzt_key: Optional[str] = Header(default=None)):
         "availableReasoningEfforts": sorted(REASONING_EFFORT_OPTIONS),
         "baseUrl": preset.get("baseUrl", ""),
         "model": preset.get("model", ""),
-        "hasKey": bool(preset.get("apiKey"))
-    }
-
-
-@app.post("/api/config")
-async def save_config(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
-    data = sanitize_settings(await request.json())
-    session.config.update(data)
-    session_manager.save_profile(session)
-    effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
-    preset = get_llm_preset(effort)
-    return {
-        "status": "ok",
-        "reasoningEffort": effort,
         "hasKey": bool(preset.get("apiKey"))
     }
 
@@ -1026,47 +995,15 @@ async def run_multifile_analysis(session: SessionState, decoded_files: list):
             session.status = "error"
 
 
-@app.post("/api/run")
-async def run(request: Request, background_tasks: BackgroundTasks, x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
-    data = await request.json()
-    files = data.get("files", [])
-    user_settings = data.get("settings")
-
-    with session.runtime_lock:
-        if session.status == "running":
-            raise HTTPException(status_code=400, detail="任务正在运行中")
-
-    decoded_files = []
-
-    for item in files:
-        name = item.get("name", "unnamed")
-        b64_str = item.get("base64", "")
-        if not b64_str:
-            continue
-        try:
-            decoded_bytes = base64.b64decode(b64_str)
-        except Exception as e:
-            add_log(session, "system", f"Base64 解码失败 ({name}): {str(e)}")
-            continue
-
-        decoded_files.append({"name": name, "bytes": decoded_bytes})
-
-    if not decoded_files:
-        raise HTTPException(status_code=400, detail="未提供有效的文件内容")
-
-    save_current_uploads(session, decoded_files)
-    background_tasks.add_task(run_multifile_analysis, session, decoded_files)
-    return {"status": "started"}
-
-
 @app.post("/api/analyze")
 async def analyze(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
-    x_fzt_key: Optional[str] = Header(default=None)
+    x_fzt_key: Optional[str] = Header(default=None),
+    reasoningEffort: Optional[str] = Form(None)
 ):
     session = resolve_session(x_fzt_key)
+    session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort)
     with session.runtime_lock:
         if session.status == "running":
             raise HTTPException(status_code=400, detail="任务正在运行中")

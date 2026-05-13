@@ -155,7 +155,7 @@
             const key = localStorage.getItem('X-FZT-Key');
             if (!key) { window.location.href = '/login.html'; return; }
             try {
-                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
                 if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
             } catch(e) { window.location.href = '/login.html'; }
         })();

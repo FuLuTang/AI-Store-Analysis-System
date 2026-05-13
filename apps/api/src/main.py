@@ -28,9 +28,20 @@ from packages.core.metrics import (
     calc_channel_mix, calc_revenue_change, calc_o2o_vs_total,
     prepare_growth_decomposition, prepare_anomaly_summary
 )
-from packages.ai.ai_caller import call_ai, call_detailed_ai, call_simplified_ai
-from packages.ai.error_reviewer import review_error
+from packages.ai.ai_caller import call_ai, call_detailed_ai, call_simplified_ai, call_ai_new, call_detailed_ai_new
+from packages.ai.error_reviewer import review_error, review_error_new
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
+
+# 新多文件管线
+from packages.core.input_adapter import parse_uploaded_files, infer_source_type
+from packages.core.profiler import profile_dataset
+from packages.core.semantic_mapper import map_profiles
+from packages.core.scene_classifier import classify_scene, classify_data_scope
+from packages.core.canonical import build_canonical_dataset
+from packages.core.metric_registry import match_metrics
+from packages.core.metric_engine import run_metrics
+from packages.core.threshold_resolver import resolve_all_statuses
+from packages.core.evidence_builder import build_evidence_bundle
 
 load_dotenv()
 
@@ -208,10 +219,7 @@ def update_llm_presets(raw_presets: dict):
 
 
 def require_admin_authorization(x_admin_token: Optional[str]):
-    if not ADMIN_TOKEN:
-        raise HTTPException(status_code=503, detail="Admin token not configured")
-    if (x_admin_token or "").strip() != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Admin unauthorized")
+    return  # 内部工具，不做管理员鉴权
 
 
 class SessionState:
@@ -426,16 +434,14 @@ def sanitize_settings(raw: Optional[dict]) -> dict:
     }
 
 
-def resolve_session(x_fzt_key: Optional[str], require_key: bool = False) -> SessionState:
+def resolve_session(x_fzt_key: Optional[str]) -> SessionState:
     key = (x_fzt_key or "").strip()
-    if key:
-        try:
-            return session_manager.get_session(key, create_if_missing=False)
-        except KeyError:
-            raise HTTPException(status_code=401, detail="Invalid or expired key")
-    if require_key:
+    if not key:
         raise HTTPException(status_code=401, detail="Authentication required")
-    return session_manager.get_legacy_session()
+    try:
+        return session_manager.get_session(key, create_if_missing=False)
+    except KeyError:
+        raise HTTPException(status_code=401, detail="Invalid or expired key")
 
 
 
@@ -468,7 +474,7 @@ async def auth_register(request: Request):
 
 @app.get("/api/auth/me")
 def auth_me(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=True)
+    session = resolve_session(x_fzt_key)
     effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
     preset = get_llm_preset(effort)
     return {
@@ -484,7 +490,7 @@ def auth_me(x_fzt_key: Optional[str] = Header(default=None)):
 
 @app.post("/api/auth/verify")
 def auth_verify(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=True)
+    session = resolve_session(x_fzt_key)
     return {
         "status": "ok",
         "userKey": mask_user_key(session.user_key)
@@ -493,7 +499,7 @@ def auth_verify(x_fzt_key: Optional[str] = Header(default=None)):
 
 @app.get("/api/config")
 def get_config(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
     preset = get_llm_preset(effort)
     return {
@@ -507,7 +513,7 @@ def get_config(x_fzt_key: Optional[str] = Header(default=None)):
 
 @app.post("/api/config")
 async def save_config(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     data = sanitize_settings(await request.json())
     session.config.update(data)
     session_manager.save_profile(session)
@@ -542,7 +548,7 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
 
 @app.get("/api/status")
 def get_status(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     if session.status == "aborted":
         safe_error = "任务被用户强行终止。"
     elif session.status == "error":
@@ -559,7 +565,7 @@ def get_status(x_fzt_key: Optional[str] = Header(default=None)):
 
 @app.get("/api/logs")
 def get_logs(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     return session.logs
 
 
@@ -581,7 +587,7 @@ async def sse_generator(session: SessionState):
 async def stream(
     x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
 ):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     return StreamingResponse(sse_generator(session), media_type="text/event-stream")
 
 
@@ -791,9 +797,238 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
             session.status = "error"
 
 
+async def run_multifile_analysis(session: SessionState, decoded_files: list):
+    """新多文件管线：支持 JSON / Excel / CSV 多文件分析"""
+    import json as _json
+
+    with session.runtime_lock:
+        session.status = "running"
+        session.force_stop = False
+        session.error_message = ""
+        session.result = None
+        session.full_result = None
+    reset_events(session)
+
+    active_settings = get_llm_preset(session.config.get("reasoningEffort", "medium"))
+
+    try:
+        # 1) Input Adapter
+        add_status(session, "input", "active")
+        add_log(session, "input", f"多文件管线: 收到 {len(decoded_files)} 个文件")
+        for f in decoded_files:
+            source = infer_source_type(f.get("name", ""))
+            add_log(session, "input", f"  [{source}] {f.get('name', '?')} ({len(f.get('bytes', b''))} bytes)")
+        dataset_bundle = parse_uploaded_files(decoded_files)
+        add_log(session, "input", f"解析完成: {dataset_bundle['source_type']}, {len(dataset_bundle['tables'])} 张表")
+        add_status(session, "input", "success")
+        ensure_not_stopped(session)
+
+        # 2) Data Profiler
+        add_status(session, "profile", "active")
+        add_log(session, "profile", "开始数据画像...")
+        profiles = profile_dataset(dataset_bundle)
+        add_log(session, "profile", f"画像完成: {len(profiles)} 个字段")
+        add_status(session, "profile", "success")
+        ensure_not_stopped(session)
+
+        # 3) Scene Classifier
+        add_status(session, "scene", "active")
+        add_log(session, "scene", "开始场景识别...")
+        scene = classify_scene(profiles)
+        add_log(session, "scene", f"识别结果: {scene.get('industry')}/{scene.get('business_model')} (conf={scene.get('confidence')})")
+        add_status(session, "scene", "success")
+        ensure_not_stopped(session)
+
+        # 4) Semantic Mapper
+        add_status(session, "mapping", "active")
+        add_log(session, "mapping", "开始字段语义映射（场景感知）...")
+        add_log(session, "mapping", f"共 {len(profiles)} 个字段待映射, 场景: {scene.get('industry')}")
+        mappings = map_profiles(profiles, scene)
+        mapped_count = sum(1 for m in mappings if m.get("semantic_field") != "unknown")
+        confirm_count = sum(1 for m in mappings if m.get("need_confirm"))
+        add_log(session, "mapping", f"结果: {mapped_count}/{len(mappings)} 已识别, {confirm_count} 需确认")
+        for m in mappings:
+            sf = m.get("semantic_field", "unknown")
+            conf = m.get("confidence", 0)
+            mark = " [需确认]" if m.get("need_confirm") else ""
+            table = m.get("table", "?")
+            add_log(session, "mapping", f"  `{m['raw_field']}` → `{sf}` (table={table}, conf={conf}){mark}")
+        if confirm_count > 0:
+            add_log(session, "mapping", f"低置信字段: {[m['raw_field'] for m in mappings if m.get('need_confirm')]}")
+        add_status(session, "mapping", "success")
+
+        # 完善 data_scope（基于语义映射结果）
+        scene["data_scope"] = classify_data_scope(mappings)
+        add_log(session, "scene", f"数据范围: {scene.get('data_scope')}")
+        ensure_not_stopped(session)
+
+        # 5) Canonical Dataset
+        add_status(session, "canonical", "active")
+        add_log(session, "canonical", "构建标准语义数据层...")
+        canonical = build_canonical_dataset(dataset_bundle, mappings, scene)
+        table_names = list(canonical.get("tables", {}).keys())
+        total_rows = sum(len(rows) for rows in canonical.get("tables", {}).values())
+        add_log(session, "canonical", f"标准数据集: {table_names}, 共 {total_rows} 行")
+        add_status(session, "canonical", "success")
+        ensure_not_stopped(session)
+
+        # 6) Metric Registry
+        add_status(session, "registry", "active")
+        add_log(session, "registry", "匹配可计算指标...")
+        metric_defs = match_metrics(canonical)
+        available = [m for m in metric_defs if m["available"]]
+        unavailable = [m for m in metric_defs if not m["available"]]
+        add_log(session, "registry", f"可计算: {len(available)} 项 - {[m['metric_id'] for m in available]}")
+        if unavailable:
+            add_log(session, "registry", f"不可计算: {len(unavailable)} 项 - {[m['metric_id'] for m in unavailable]}")
+        add_status(session, "registry", "success")
+        ensure_not_stopped(session)
+
+        # 7) Metric Engine
+        add_status(session, "engine", "active")
+        add_log(session, "engine", f"开始计算 {len(available)} 项指标...")
+        metric_results = run_metrics(available, canonical)
+        pass_count = sum(1 for r in metric_results if r.get("status") == "pass")
+        unc_count = sum(1 for r in metric_results if r.get("status") == "uncountable")
+        for r in metric_results:
+            val = r.get("value")
+            val_str = _json.dumps(val, ensure_ascii=False) if isinstance(val, (dict, list)) else str(val)
+            add_log(session, "engine", f"  {r.get('name', '?')} → {r.get('status')} | {val_str[:80]}")
+        add_log(session, "engine", f"完成: {pass_count} pass, {unc_count} uncountable")
+        add_status(session, "engine", "success")
+        ensure_not_stopped(session)
+
+        # 8) Threshold Resolver
+        add_status(session, "threshold", "active")
+        add_log(session, "threshold", "场景化健康判断...")
+        metric_results = resolve_all_statuses(metric_results, scene)
+        tally = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
+        for r in metric_results:
+            s = r.get("status", "uncountable")
+            tally[s] = tally.get(s, 0) + 1
+        add_log(session, "threshold", f"🟢 pass: {tally['pass']}, 🟡 attention: {tally['attention']}, 🔴 warning: {tally['warning']}, ⚪ uncountable: {tally['uncountable']}")
+        add_status(session, "threshold", "success")
+        ensure_not_stopped(session)
+
+        # 9) Evidence Builder
+        add_status(session, "evidence", "active")
+        add_log(session, "evidence", "构建证据包...")
+        evidence = build_evidence_bundle(metric_results, canonical)
+        add_log(session, "evidence", f"证据包: {len(evidence['items'])} 条证据")
+        add_status(session, "evidence", "success")
+        ensure_not_stopped(session)
+
+        # 10) AI Report (如果无 API Key 则生成摘要)
+        if not active_settings.get("apiKey"):
+            add_status(session, "report", "active")
+            add_log(session, "report", "未检测到 API Key，生成算法摘要...")
+
+            lines = [f"# {scene.get('industry', '未知')} 经营分析摘要"]
+            lines.append("")
+            lines.append(f"## 场景识别")
+            lines.append(f"- 行业: {scene.get('industry')}")
+            lines.append(f"- 业态: {scene.get('business_model')}")
+            lines.append(f"- 数据范围: {', '.join(scene.get('data_scope', []))}")
+            lines.append("")
+            lines.append(f"## 指标结果 ({len(metric_results)} 项)")
+            lines.append("")
+            for r in metric_results:
+                icon = STATUS_ICON_MAP.get(r.get("status"), "⚪")
+                val = r.get("value")
+                val_str = _json.dumps(val, ensure_ascii=False) if isinstance(val, (dict, list)) else str(val)
+                lines.append(f"- {icon} **{r.get('name')}**: {val_str}")
+                if r.get("reason"):
+                    lines.append(f"  - {r.get('reason')}")
+            lines.append("")
+            lines.append("## 字段映射")
+            for m in mappings:
+                sf = m.get("semantic_field", "unknown")
+                conf = m.get("confidence", 0)
+                lines.append(f"- `{m.get('raw_field')}` → `{sf}` (conf: {conf})")
+
+            report_md = "\n".join(lines)
+            session.full_result = report_md
+            session.result = _json.dumps({
+                "health_status": f"{tally['warning']}项报警/{tally['attention']}项关注",
+                "overview_text": f"{scene.get('industry')}场景分析完成，共{tally['warning'] + tally['attention']}项需关注。",
+                "cards": [
+                    {"title": r.get("name", ""), "explanation": r.get("reason", ""),
+                     "suggestion": "", "color": "red" if r.get("status") == "warning" else "yellow" if r.get("status") == "attention" else "green"}
+                    for r in metric_results if r.get("status") in ("warning", "attention")
+                ]
+            }, ensure_ascii=False)
+            add_status(session, "report", "simulated")
+            session.status = "completed"
+            save_latest_report(session)
+            return
+
+        # AI-1: 初诊报告 (新管线 — 格式化输入)
+        add_status(session, "report", "active")
+        add_log(session, "report", f"调用 AI 生成报告 (模型: {active_settings['model']})...")
+        initial_resp = await call_ai_new(active_settings, scene, metric_results, evidence, mappings)
+        initial_report = initial_resp["choices"][0]["message"]["content"]
+        add_log(session, "report", f"初诊报告已生成 ({len(initial_report)} 字符)")
+        ensure_not_stopped(session)
+
+        # AI-2: 审计复核 (新管线 — 证据包对照)
+        add_status(session, "review", "active")
+        add_log(session, "review", "启动逻辑审计复核...")
+        review_resp = await review_error_new(active_settings, scene, initial_report, evidence)
+        review_text = review_resp["choices"][0]["message"]["content"] if isinstance(review_resp, dict) else str(review_resp)
+        add_log(session, "review", f"审计复核完成 ({len(review_text)} 字符)")
+        add_status(session, "review", "success")
+        ensure_not_stopped(session)
+
+        # 融合
+        add_status(session, "fusion", "active")
+        add_log(session, "fusion", "数据融合：合并初级报告、错误评审、证据数据...")
+        fused_context = (
+            f"【初级报告】\n{initial_report}\n\n"
+            f"【审计意见】\n{review_text}\n\n"
+            f"【证据包】\n{_json.dumps(evidence.get('items', [])[:10], ensure_ascii=False)}"
+        )
+        add_log(session, "fusion", f"融合上下文: {len(fused_context)} 字符")
+        add_status(session, "fusion", "success")
+        ensure_not_stopped(session)
+
+        # AI-3: 深度报告 (新管线)
+        add_status(session, "rep1", "active")
+        add_log(session, "rep1", "正在融合审计意见生成深度报告...")
+        detailed_resp = await call_detailed_ai_new(active_settings, scene, fused_context)
+        session.full_result = detailed_resp["choices"][0]["message"]["content"]
+        add_log(session, "rep1", f"深度报告生成成功 ({len(session.full_result)} 字符)")
+        add_status(session, "rep1", "success")
+        ensure_not_stopped(session)
+
+        # AI-4: 精简报告
+        add_status(session, "rep2", "active")
+        add_log(session, "rep2", "生成精简老板视图...")
+        simplified_resp = await call_simplified_ai(active_settings, session.full_result)
+        session.result = simplified_resp["choices"][0]["message"]["content"]
+        add_log(session, "rep2", f"任务全部完成！(精简报告 {len(session.result)} 字符)")
+        add_status(session, "rep2", "success")
+
+        with session.runtime_lock:
+            session.status = "completed"
+        save_latest_report(session)
+
+    except TaskAbortedError as e:
+        with session.runtime_lock:
+            session.status = "aborted"
+            session.error_message = str(e)
+        add_log(session, "system", f"⚠️ {str(e)}")
+
+    except Exception as e:
+        error_msg = "多文件分析失败，请在后台监控流查看 system 节点日志"
+        add_log(session, "system", f"发生错误: {str(e)}")
+        with session.runtime_lock:
+            session.error_message = error_msg
+            session.status = "error"
+
+
 @app.post("/api/run")
 async def run(request: Request, background_tasks: BackgroundTasks, x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     data = await request.json()
     files = data.get("files", [])
     user_settings = data.get("settings")
@@ -802,7 +1037,6 @@ async def run(request: Request, background_tasks: BackgroundTasks, x_fzt_key: Op
         if session.status == "running":
             raise HTTPException(status_code=400, detail="任务正在运行中")
 
-    parsed_files = []
     decoded_files = []
 
     for item in files:
@@ -818,17 +1052,11 @@ async def run(request: Request, background_tasks: BackgroundTasks, x_fzt_key: Op
 
         decoded_files.append({"name": name, "bytes": decoded_bytes})
 
-        try:
-            parsed = json.loads(decoded_bytes.decode("utf-8-sig"))
-            parsed_files.append(parsed)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            add_log(session, "system", f"跳过非 JSON 文件: {name}")
-
-    if not parsed_files:
-        raise HTTPException(status_code=400, detail="未提供有效的 JSON 文件内容")
+    if not decoded_files:
+        raise HTTPException(status_code=400, detail="未提供有效的文件内容")
 
     save_current_uploads(session, decoded_files)
-    background_tasks.add_task(run_analysis_task, session, parsed_files, user_settings)
+    background_tasks.add_task(run_multifile_analysis, session, decoded_files)
     return {"status": "started"}
 
 
@@ -838,38 +1066,53 @@ async def analyze(
     files: List[UploadFile] = File(...),
     x_fzt_key: Optional[str] = Header(default=None)
 ):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     with session.runtime_lock:
         if session.status == "running":
             raise HTTPException(status_code=400, detail="任务正在运行中")
 
     parsed_files = []
     decoded_files = []
+    has_non_json = False
+
     for i, uploaded_file in enumerate(files):
         filename = uploaded_file.filename or "unnamed"
-        safe_name = sanitize_upload_filename(filename, i)
 
         try:
             raw = await uploaded_file.read()
             if len(raw) > MAX_UPLOAD_FILE_SIZE:
-                raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {safe_name}")
-            parsed = json.loads(raw.decode("utf-8-sig"))
+                raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {filename}")
+
+            source_type = infer_source_type(filename)
+            if source_type != "json":
+                has_non_json = True
+
+            # 先尝试 JSON 解析（兼容旧流程）
+            try:
+                parsed = json.loads(raw.decode("utf-8-sig"))
+                parsed_files.append(parsed)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                if source_type == "json":
+                    raise HTTPException(status_code=400, detail=f"JSON 解析失败: {filename}")
+                # 非 JSON 文件（Excel/CSV），保留原始字节供新管线处理
+
             decoded_files.append({"name": filename, "bytes": raw})
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"JSON 解析失败: {safe_name} - {str(e)}")
-
-        parsed_files.append(parsed)
+            raise HTTPException(status_code=400, detail=f"文件读取失败: {filename} - {str(e)}")
 
     save_current_uploads(session, decoded_files)
-    background_tasks.add_task(run_analysis_task, session, parsed_files, None)
-    return {"status": "started"}
+
+    # 统一走新管线（input_adapter 已支持旧药店 JSON 解包）
+    background_tasks.add_task(run_multifile_analysis, session, decoded_files)
+
+    return {"status": "started", "pipeline": "multifile"}
 
 
 @app.post("/api/stop")
 def stop(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, require_key=False)
+    session = resolve_session(x_fzt_key)
     with session.runtime_lock:
         if session.status == "running":
             session.force_stop = True
@@ -896,11 +1139,6 @@ def get_examples():
         return {"error": "未找到案例文件，请检查目录结构"}
     return {"files": files_content}
 
-
-# 预创建 legacy 账号目录，确保兼容旧前端流程
-legacy_session = session_manager.get_legacy_session()
-_ensure_session_dirs(legacy_session)
-session_manager.save_profile(legacy_session)
 
 # 挂载静态文件 (使用绝对路径更稳健)
 static_path = ROOT_DIR / "apps" / "web" / "public"

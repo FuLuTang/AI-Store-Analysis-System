@@ -8,6 +8,7 @@ from ..tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_
 from ..tools.impl.context_impl import read_context_impl
 from ..tools.impl.profile_impl import profile_table_impl
 from ..tools.impl.validate_impl import validate_result_impl
+from ..tools.impl.setup_impl import setup_workspace_impl, cleanup_workspace_impl, list_tables_impl
 
 
 @dataclass
@@ -55,6 +56,18 @@ def register_pydantic_tools(agent):
     async def validate_result(ctx: RunContext[AgentDeps], raw: dict) -> dict:
         return validate_result_impl(raw)
 
+    @agent.tool
+    async def setup_workspace(ctx: RunContext[AgentDeps]) -> str:
+        return setup_workspace_impl(ctx.deps.workspace)
+
+    @agent.tool
+    async def cleanup_workspace(ctx: RunContext[AgentDeps], mode: str = "large") -> str:
+        return cleanup_workspace_impl(ctx.deps.workspace, mode)
+
+    @agent.tool
+    async def list_tables(ctx: RunContext[AgentDeps]) -> str:
+        return list_tables_impl(ctx.deps.workspace)
+
     return {
         "read_file": read_file,
         "write_file": write_file,
@@ -65,4 +78,7 @@ def register_pydantic_tools(agent):
         "read_context": read_context,
         "profile_table": profile_table,
         "validate_result": validate_result,
+        "setup_workspace": setup_workspace,
+        "cleanup_workspace": cleanup_workspace,
+        "list_tables": list_tables,
     }

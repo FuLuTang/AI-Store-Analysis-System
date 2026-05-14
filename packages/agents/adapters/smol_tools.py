@@ -7,10 +7,14 @@ from ..tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_
 from ..tools.impl.context_impl import read_context_impl
 from ..tools.impl.profile_impl import profile_table_impl
 from ..tools.impl.validate_impl import validate_result_impl
+from ..tools.impl.setup_impl import setup_workspace_impl, cleanup_workspace_impl, list_tables_impl
 
 
 def build_smol_tools(ws: Workspace):
-    from smolagents import tool
+    try:
+        from smolagents import tool
+    except ImportError:
+        raise ImportError("smolagents 未安装，请执行: pip install smolagents")
 
     @tool
     def read_file(path: str) -> str:
@@ -49,6 +53,18 @@ def build_smol_tools(ws: Workspace):
         data = json.loads(raw) if isinstance(raw, str) else raw
         return str(validate_result_impl(data))
 
+    @tool
+    def setup_workspace() -> str:
+        return setup_workspace_impl(ws)
+
+    @tool
+    def cleanup_workspace(mode: str = "large") -> str:
+        return cleanup_workspace_impl(ws, mode)
+
+    @tool
+    def list_tables() -> str:
+        return list_tables_impl(ws)
+
     return [
         read_file, write_file, list_files,
         run_python,
@@ -56,4 +72,5 @@ def build_smol_tools(ws: Workspace):
         read_context,
         profile_table,
         validate_result,
+        setup_workspace, cleanup_workspace, list_tables,
     ]

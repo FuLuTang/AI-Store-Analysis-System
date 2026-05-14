@@ -5,6 +5,13 @@
 - LLM 输出 Pydantic structured output（FlattenPlan / SemanticMapping / SqlPlan）
 - 程序执行展平、DuckDB 入库、SQL 校验与运行
 - 工具通过 ctx.deps.workspace 注入，禁止全局 get_workspace()
+
+init 流程（已可实现）:
+  1. 创建 Workspace → 目录 + 分区 + duckdb
+  2. 写原始数据为 parquet
+  3. 注入上下文文档
+  4. 注册 DuckDB 视图
+  5. 创建 Agent + 注入 deps
 """
 
 import time
@@ -24,25 +31,24 @@ class PydanticPipeline(AgentPipeline):
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
-        ws = Workspace(label="pydantic")
-        try:
-            # 1. 写原始 parquet
-            ws.write_raw_parquet(bundle.tables)
-            # 2. 注入上下文文档
-            self._stage_context(ws)
-            # 3. 创建 AgentDeps
-            deps = AgentDeps(workspace=ws, context_docs={})
-            # TODO: 创建 Pydantic AI Agent 实例
-            # from pydantic_ai import Agent as PydanticAgent
-            # agent = PydanticAgent(self.model, deps_type=AgentDeps, output_type=AgentResult)
-            # register_pydantic_tools(agent)  ← ctx.deps.workspace 模式
-            # result = await agent.run(prompt, deps=deps)
-            # return result
-            raise NotImplementedError("PydanticPipeline not yet implemented")
-        finally:
-            # 生产阶段不自动清，保留 audit trail
-            pass
 
+        # ── Phase 1: Init workspace ──
+        ws = Workspace(label="pydantic")
+        ws.write_raw_parquet(bundle.tables)
+        self._stage_context(ws)
+        ws.init_duckdb()
+        ws.save_trace({"step": "init", "tables": len(bundle.tables)})
+
+        # ── Phase 2: Create Agent + register tools ──
+        deps = AgentDeps(workspace=ws, context_docs={})
+        # from pydantic_ai import Agent as PydanticAgent
+        # agent = PydanticAgent(self.model, deps_type=AgentDeps, output_type=AgentResult)
+        # register_pydantic_tools(agent)
+        # result = await agent.run(self._prompt(ws), deps=deps)
+
+        raise NotImplementedError("PydanticPipeline: Agent 创建待 pydantic_ai 安装后实现")
+
+        # ── Phase 3: Return ──
         return AgentResult(
             report_id=ws.report_id,
             pipeline=self.name,
@@ -57,3 +63,11 @@ class PydanticPipeline(AgentPipeline):
             if os.path.exists(doc_path):
                 with open(doc_path) as f:
                     ws.write_context(doc_name, f.read())
+
+    def _prompt(self, ws: Workspace) -> str:
+        import os
+        prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "pydantic.md")
+        if os.path.exists(prompt_path):
+            with open(prompt_path) as f:
+                return f.read()
+        return "请根据 workspace 中的数据进行经营诊断分析。"

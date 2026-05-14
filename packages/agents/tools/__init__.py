@@ -5,6 +5,7 @@ from .python_tool import run_python_script
 from .context_tool import read_context
 from .validate_tool import validate_result
 from .profile_tool import profile_table
+from .setup_tool import setup_workspace, cleanup_workspace, list_tables
 
 __all__ = [
     "read_workspace_file", "write_workspace_file", "list_workspace_files",
@@ -13,4 +14,5 @@ __all__ = [
     "read_context",
     "validate_result",
     "profile_table",
+    "setup_workspace", "cleanup_workspace", "list_tables",
 ]

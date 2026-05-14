@@ -184,6 +184,57 @@ class Workspace:
         if duckdb_file.exists():
             duckdb_file.unlink()
 
+    # ---- DuckDB 初始化 ----
+
+    def scan_parquet_tables(self) -> list[dict]:
+        """扫描 tables/ 目录，返回可用 parquet 表清单（表名、路径、行数）"""
+        tables = []
+        for p in sorted(self._tables_dir.glob("*.parquet")):
+            df = pd.read_parquet(p)
+            tables.append({
+                "name": p.stem,
+                "path": str(p),
+                "columns": list(df.columns),
+                "row_count": len(df),
+                "size_kb": round(p.stat().st_size / 1024, 1),
+            })
+        return tables
+
+    def register_all_parquet(self) -> str:
+        """扫描 tables/ 并注册所有 parquet 为 DuckDB 视图，返回摘要"""
+        import duckdb
+        tables = self.scan_parquet_tables()
+        con = duckdb.connect(self.duckdb_path)
+        try:
+            lines = []
+            for t in tables:
+                safe_name = _quote_ident(t["name"])
+                con.execute(
+                    f"CREATE OR REPLACE VIEW {safe_name} AS "
+                    f"SELECT * FROM read_parquet('{t['path']}')"
+                )
+                row_count = con.execute(f"SELECT COUNT(*) FROM {safe_name}").fetchone()[0]
+                lines.append(f"  {t['name']}: {t['columns']} → {row_count} 行")
+            return "DuckDB 初始化完成，已注册:\n" + "\n".join(lines)
+        finally:
+            con.close()
+
+    def init_duckdb(self) -> str:
+        """初始化 DuckDB：扫描 parquet + 注册视图，返回摘要。幂等。"""
+        return self.register_all_parquet()
+
+    # ---- 快照 / trace ----
+
+    def save_trace(self, trace: dict) -> None:
+        p = self._dir / "agent_trace.json"
+        existing = []
+        if p.exists():
+            existing = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(existing, list):
+            existing = []
+        existing.append(trace)
+        p.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+
     # ---- 内部 ----
 
     @staticmethod
@@ -201,3 +252,7 @@ class Workspace:
 def _short_uuid() -> str:
     import uuid
     return uuid.uuid4().hex[:12]
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'

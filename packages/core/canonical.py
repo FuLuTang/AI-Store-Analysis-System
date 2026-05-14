@@ -96,7 +96,7 @@ def build_canonical_dataset(dataset_bundle: dict, mappings: list, scene: dict) -
         if date_index:
             if target not in canonical:
                 canonical[target] = []
-            for dk in sorted(date_index.keys()):
+            for dk in sorted(date_index.keys(), key=str):
                 canonical[target].append(date_index[dk])
 
         # 无 date 的行追加

@@ -17,7 +17,7 @@ class AgentDeps:
 
 
 def register_pydantic_tools(agent):
-    ws = None
+    from pydantic_ai import RunContext
 
     @agent.tool
     async def read_file(ctx: RunContext[AgentDeps], path: str) -> str:

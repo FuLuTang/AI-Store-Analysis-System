@@ -263,6 +263,80 @@ def _gross_margin_trend(rows: list) -> dict:
     }
 
 
+def _sum_field(rows: list, field: str) -> dict:
+    """字段求和"""
+    vals = [r.get(field) for r in rows if is_valid(r.get(field))]
+    if not vals:
+        return {"sum": 0, "count": 0, "mean": 0}
+    return {
+        "sum": round_to(sum(vals), 2),
+        "count": len(vals),
+        "mean": round_to(sum(vals) / len(vals), 2) if vals else 0
+    }
+
+
+def _distinct_count(rows: list, field: str) -> dict:
+    """去重计数"""
+    vals = set()
+    for r in rows:
+        v = r.get(field)
+        if v is not None:
+            vals.add(str(v))
+    return {"distinct_count": len(vals), "total_rows": len(rows)}
+
+
+def _field_stats(rows: list, field: str) -> dict:
+    """字段统计分布：min/max/avg/median"""
+    vals = sorted([r.get(field) for r in rows if is_valid(r.get(field))])
+    if not vals:
+        return {"min": 0, "max": 0, "avg": 0, "median": 0, "count": 0}
+    n = len(vals)
+    median = vals[n // 2] if n % 2 == 1 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+    return {
+        "min": round_to(min(vals), 2),
+        "max": round_to(max(vals), 2),
+        "avg": round_to(sum(vals) / n, 2),
+        "median": round_to(median, 2),
+        "count": n
+    }
+
+
+def _growth_decomposition(rows: list) -> dict:
+    """增长拆解：revenue = avg_order_value × order_count"""
+    pairs = []
+    for r in rows:
+        rev = r.get("revenue")
+        oc = r.get("order_count")
+        if is_valid(rev) and is_valid(oc) and oc != 0:
+            pairs.append({"revenue": rev, "aov": rev / oc, "order_count": oc, "date": r.get("date")})
+
+    if len(pairs) < 2:
+        return {"status": "insufficient_data", "decomposition": None}
+
+    curr = pairs[-1]
+    prev = pairs[-1 - 1] if len(pairs) >= 2 else None
+    if prev is None:
+        return {"status": "insufficient_data", "decomposition": None}
+
+    rev_change = curr["revenue"] - prev["revenue"]
+    aov_effect = (curr["aov"] - prev["aov"]) * prev["order_count"]
+    oc_effect = (curr["order_count"] - prev["order_count"]) * prev["aov"]
+    cross_effect = (curr["aov"] - prev["aov"]) * (curr["order_count"] - prev["order_count"])
+
+    return {
+        "status": "available",
+        "revenue_change": round_to(rev_change, 2),
+        "revenue_change_pct": round_to((rev_change / prev["revenue"]) * 100, 1) if prev["revenue"] != 0 else 0,
+        "aov_effect": round_to(aov_effect, 2),
+        "order_count_effect": round_to(oc_effect, 2),
+        "cross_effect": round_to(cross_effect, 2),
+        "current_aov": round_to(curr["aov"], 2),
+        "current_orders": int(curr["order_count"]),
+        "previous_aov": round_to(prev["aov"], 2),
+        "previous_orders": int(prev["order_count"]),
+    }
+
+
 # ── 计算器调度表 ──
 
 CALCULATOR_MAP = {
@@ -279,6 +353,10 @@ CALCULATOR_MAP = {
     "data_quality": _data_quality,
     "consecutive_change": _consecutive_change,
     "gross_margin_trend": _gross_margin_trend,
+    "sum_field": _sum_field,
+    "distinct_count": _distinct_count,
+    "field_stats": _field_stats,
+    "growth_decomposition": _growth_decomposition,
 }
 
 
@@ -374,6 +452,18 @@ def compute_metric(metric_def: dict, canonical_dataset: dict) -> dict:
 
         elif calculator == "gross_margin_trend":
             value = _gross_margin_trend(rows)
+
+        elif calculator == "sum_field":
+            value = _sum_field(rows, params.get("field", "revenue"))
+
+        elif calculator == "distinct_count":
+            value = _distinct_count(rows, params.get("field", "product_name"))
+
+        elif calculator == "field_stats":
+            value = _field_stats(rows, params.get("field", "retail_price"))
+
+        elif calculator == "growth_decomposition":
+            value = _growth_decomposition(rows)
 
         else:
             value = None

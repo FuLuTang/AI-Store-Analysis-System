@@ -1,6 +1,5 @@
-"""
-context_tool.py — 读上下文文档工具（两边共用）
-"""
+"""上下文工具：读取指标文档、字段定义、行业规则。"""
+
 from .file_tool import get_workspace
 
 

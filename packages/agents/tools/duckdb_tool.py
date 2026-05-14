@@ -1,7 +1,8 @@
-"""
-duckdb_tool.py — DuckDB SQL 查询工具（两边共用）
-"""
+"""DuckDB 工具：建临时库、注册 parquet、执行 SQL。"""
+
 import json
+
+from ..workspace import Workspace
 
 
 def duckdb_query(sql: str) -> str:
@@ -25,3 +26,13 @@ def duckdb_register_parquet(table_name: str, parquet_path: str) -> str:
         return f"表 {table_name} 已注册, {row_count} 行"
     finally:
         con.close()
+
+
+async def register_table(ws: Workspace, table_name: str) -> None:
+    """从 workspace 的 parquet 注册为 DuckDB 表（待实现）。"""
+    ...
+
+
+async def execute_sql(ws: Workspace, sql: str) -> list[dict]:
+    """在 workspace 的 DuckDB 上执行 SELECT SQL（待实现）。"""
+    ...

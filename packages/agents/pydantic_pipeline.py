@@ -1,61 +1,46 @@
-"""
-pydantic_pipeline.py — Pydantic AI 管线（方法3）
+"""Pydantic AI 管线：LLM 出策略 → 程序执行。
 
-LLM 出策略，程序执行。LLM 输出 FlattenPlan / SemanticMapping / SqlPlan，
-编排器按计划逐步调用工具执行，不依赖 LLM 写代码。
+特点：
+- LLM 不接触行数据，只通过 TableMeta 看结构
+- LLM 输出 Pydantic structured output（FlattenPlan / SemanticMapping / SqlPlan）
+- 程序执行展平、DuckDB 入库、SQL 校验与运行
+- 编排器不写死步骤，控制轮数上限，允许 Agent 多轮修复
 """
-import logging
+
+import time
+
 from .base import AgentPipeline
-from .models import DatasetBundle, AgentResult
-from .workspace import AgentWorkspace
-
-logger = logging.getLogger(__name__)
+from .models import AgentResult, DatasetBundle
+from .workspace import Workspace
 
 
 class PydanticPipeline(AgentPipeline):
+    name = "pydantic"
 
-    def __init__(self, model_id: str = "deepseek-chat"):
-        self.model_id = model_id
+    def __init__(self, model: str = "deepseek-chat", max_rounds: int = 12):
+        self.model = model
+        self.max_rounds = max_rounds
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
-        ws = AgentWorkspace(label="pydantic")
+        t0 = time.time()
+        ws = Workspace(label="pydantic")
+
         try:
-            self._stage_inputs(bundle, ws)
-            self._stage_context(ws)
-            plan = await self._plan_steps(ws)
-            await self._execute_plan(plan, ws)
-            raw = self._collect_result(ws)
-            return AgentResult.model_validate(raw)
+            # TODO: 完整实现
+            # 1. 写入原始 parquet (ws.write_raw_parquet)
+            # 2. 创建 Pydantic AI Agent，注册 tools
+            # 3. 循环调用 agent.run，轮数限制 max_rounds
+            # 4. Agent 输出 FlattenPlan → 程序执行展平
+            # 5. 程序 DuckDB 入库
+            # 6. Agent 输出 SemanticMapping[]
+            # 7. Agent 输出 SqlPlan → 程序校验+执行 SQL
+            # 8. 组装 AgentResult
+            raise NotImplementedError("PydanticPipeline not yet implemented")
         finally:
             ws.cleanup()
 
-    def _stage_inputs(self, bundle: DatasetBundle, ws: AgentWorkspace):
-        for table in bundle.tables:
-            ws.write_input_json(f"{table.name}.json", {
-                "name": table.name,
-                "columns": table.columns,
-                "rows": table.rows,
-            })
-
-    def _stage_context(self, ws: AgentWorkspace):
-        import os
-        docs_dir = os.path.join(os.path.dirname(__file__), "..", "..", "docs")
-        for doc_name in ["指标计算文档.md"]:
-            doc_path = os.path.join(docs_dir, doc_name)
-            if os.path.exists(doc_path):
-                with open(doc_path) as f:
-                    ws.write_context(doc_name, f.read())
-
-    async def _plan_steps(self, ws: AgentWorkspace) -> list:
-        """LLM 输出执行计划: [FlattenPlan, SemanticMapping, SqlPlan, ...]"""
-        # TODO: LLM 调用，返回结构化 plan
-        return []
-
-    async def _execute_plan(self, plan: list, ws: AgentWorkspace):
-        """按 plan 逐步用共享 tools 执行"""
-        # TODO: 遍历 plan，调用对应 tool
-        pass
-
-    def _collect_result(self, ws: AgentWorkspace) -> dict:
-        """从 workspace 收集最终产物"""
-        return {}
+        return AgentResult(
+            report_id=ws.report_id,
+            pipeline=self.name,
+            elapsed_ms=(time.time() - t0) * 1000,
+        )

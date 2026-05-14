@@ -1,10 +1,9 @@
-"""
-file_tool.py — workspace 文件读写工具（两边共用）
-"""
-from ..workspace import AgentWorkspace
+"""文件工具：工作区中的文件读写/列表。"""
+
+from ..workspace import Workspace
 
 
-def get_workspace() -> AgentWorkspace:
+def get_workspace() -> Workspace:
     """从上下文获取当前 workspace（由编排器注入）"""
     raise NotImplementedError("workspace 由编排器注入到工具上下文")
 

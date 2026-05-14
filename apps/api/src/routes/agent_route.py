@@ -1,13 +1,12 @@
-"""
-agent_route.py — 单路由，pipeline 参数切换
+"""Agent 路由：POST /api/agent/analyze?pipeline=smol|pydantic。
 
-POST /api/agent/analyze?pipeline=smol|pydantic
-"""
-from typing import List, Optional
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, UploadFile, File, Query
+单路由，pipeline 参数切换 PydanticPipeline 或 SmolPipeline，带文件解析。"""
+
+from typing import Optional
+from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Query
 from packages.agents.models import DatasetBundle, RawTable
-from packages.agents.smol_pipeline import SmolPipeline
 from packages.agents.pydantic_pipeline import PydanticPipeline
+from packages.agents.smol_pipeline import SmolPipeline
 
 router = APIRouter(prefix="/api/agent")
 
@@ -42,9 +41,9 @@ def _parse_uploads(files: list[UploadFile]) -> list[RawTable]:
             import json as _json
             parsed = _json.loads(raw.decode("utf-8-sig"))
             if isinstance(parsed, list):
-                tables.append(RawTable(name=filename, columns=list(parsed[0].keys()) if parsed else [], rows=parsed))
+                tables.append(RawTable(name=filename, rows=parsed))
             elif isinstance(parsed, dict):
-                tables.append(RawTable(name=filename, columns=list(parsed.keys()), rows=[parsed]))
+                tables.append(RawTable(name=filename, rows=[parsed]))
             else:
                 raise HTTPException(400, f"不支持的 JSON 格式: {filename}")
 
@@ -53,7 +52,7 @@ def _parse_uploads(files: list[UploadFile]) -> list[RawTable]:
             content = raw.decode("utf-8-sig")
             reader = csv.DictReader(_io.StringIO(content))
             rows = [dict(r) for r in reader]
-            tables.append(RawTable(name=filename, columns=reader.fieldnames or [], rows=rows))
+            tables.append(RawTable(name=filename, rows=rows))
 
         elif lower.endswith(".xlsx") or lower.endswith(".xls"):
             import openpyxl, io as _io
@@ -65,7 +64,7 @@ def _parse_uploads(files: list[UploadFile]) -> list[RawTable]:
                     continue
                 header = [str(h) if h is not None else f"col_{i}" for i, h in enumerate(all_rows[0])]
                 rows = [dict(zip(header, r)) for r in all_rows[1:] if any(v is not None for v in r)]
-                tables.append(RawTable(name=f"{filename}/{sheet_name}", columns=header, rows=rows))
+                tables.append(RawTable(name=f"{filename}/{sheet_name}", rows=rows))
             wb.close()
 
         else:

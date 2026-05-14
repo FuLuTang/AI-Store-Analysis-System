@@ -1,7 +1,8 @@
-"""
-profile_tool.py — 数据画像工具（两边共用）
-"""
+"""画像工具：查看表结构、列名、样本值、空值率。"""
+
 import json
+
+from ..workspace import Workspace
 
 
 def profile_table(parquet_path: str) -> str:
@@ -19,3 +20,8 @@ def profile_table(parquet_path: str) -> str:
         return json.dumps(profiles, ensure_ascii=False, default=str)
     finally:
         con.close()
+
+
+async def profile_workspace(ws: Workspace) -> list:
+    """返回 workspace 中所有表的 metadata（待实现）。"""
+    ...

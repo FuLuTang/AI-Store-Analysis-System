@@ -1,28 +1,34 @@
-"""
-workspace.py — 每次任务独立的沙箱工作区
+"""隔离工作区：每个 pipeline 一个临时目录，管理 parquet / manifest / 输入输出文件。"""
 
-- 创建临时目录
-- 写入输入文件
-- 读取输出文件
-- 清理资源
-"""
 import json
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 
-class AgentWorkspace:
+from .models import ColumnMeta, Manifest, RawTable, TableMeta
+
+
+class Workspace:
+    """每个 pipeline 一个独立临时目录，具备输入/上下文/输出分区 + parquet + manifest。"""
+
     def __init__(self, label: str = ""):
         prefix = f"agent_{label}_" if label else "agent_"
+        self.report_id = str(uuid.uuid4())
         self._dir = Path(tempfile.mkdtemp(prefix=prefix))
         self._input_dir = self._dir / "input"
         self._output_dir = self._dir / "output"
+        self._context_dir = self._dir / "context"
         self._input_dir.mkdir()
         self._output_dir.mkdir()
-        self._context_dir = self._dir / "context"
         self._context_dir.mkdir()
+        self._manifest = Manifest(
+            report_id=self.report_id,
+            workspace_dir=str(self._dir),
+        )
 
     @property
     def dir(self) -> Path:
@@ -39,6 +45,8 @@ class AgentWorkspace:
     @property
     def context_dir(self) -> Path:
         return self._context_dir
+
+    # ---- 输入输出 ----
 
     def write_input(self, name: str, data: bytes) -> Path:
         p = self._input_dir / name
@@ -76,5 +84,87 @@ class AgentWorkspace:
         raw = self.read_output(name)
         return json.loads(raw.decode()) if raw else None
 
-    def cleanup(self):
-        shutil.rmtree(self._dir, ignore_errors=True)
+    # ---- parquet 读写 ----
+
+    def write_raw_parquet(self, tables: list[RawTable]) -> list[TableMeta]:
+        """输入 RawTable[]，写 parquet 到 workspace，返回 TableMeta[]。"""
+        metas: list[TableMeta] = []
+        for t in tables:
+            df = pd.DataFrame(t.rows)
+            file_stem = t.name.replace(" ", "_")
+            path = self._dir / f"{file_stem}.parquet"
+            df.to_parquet(path, index=False)
+            meta = self._df_to_meta(t.name, str(path), df)
+            metas.append(meta)
+            self._manifest.tables.append(meta)
+        self._save_manifest()
+        return metas
+
+    def write_parquet(self, name: str, df: pd.DataFrame) -> TableMeta:
+        """写任意 DataFrame 为 parquet，返回 TableMeta。"""
+        file_stem = name.replace(" ", "_")
+        path = self._dir / f"{file_stem}.parquet"
+        df.to_parquet(path, index=False)
+        meta = self._df_to_meta(name, str(path), df)
+        self._manifest.tables.append(meta)
+        self._save_manifest()
+        return meta
+
+    def read_parquet(self, name: str) -> pd.DataFrame:
+        """按表名读取 parquet。"""
+        for t in self._manifest.tables:
+            if t.name == name:
+                return pd.read_parquet(t.path)
+        raise FileNotFoundError(f"table {name!r} not in workspace")
+
+    def list_parquet_files(self) -> list[str]:
+        return [p.name for p in self._dir.glob("*.parquet")]
+
+    # ---- 文本文件 ----
+
+    def write_file(self, filename: str, content: str) -> Path:
+        p = self._dir / filename
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def read_file(self, filename: str) -> str:
+        return (self._dir / filename).read_text(encoding="utf-8")
+
+    def list_files(self) -> list[str]:
+        return [p.name for p in self._dir.iterdir() if p.is_file()]
+
+    # ---- manifest ----
+
+    @property
+    def manifest(self) -> Manifest:
+        return self._manifest
+
+    def _save_manifest(self) -> None:
+        self._manifest.tables = sorted(self._manifest.tables, key=lambda t: t.name)
+        (self._dir / "manifest.json").write_text(
+            self._manifest.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+    def load_manifest(self) -> Manifest:
+        raw = json.loads((self._dir / "manifest.json").read_text(encoding="utf-8"))
+        self._manifest = Manifest(**raw)
+        return self._manifest
+
+    # ---- 清理 ----
+
+    def cleanup(self) -> None:
+        if self._dir.exists():
+            shutil.rmtree(self._dir, ignore_errors=True)
+
+    # ---- 内部 ----
+
+    @staticmethod
+    def _df_to_meta(name: str, path: str, df: pd.DataFrame) -> TableMeta:
+        columns: list[ColumnMeta] = []
+        for col in df.columns:
+            dtype = str(df[col].dtype)
+            samples = df[col].dropna().head(3).tolist()
+            null_count = int(df[col].isna().sum())
+            columns.append(ColumnMeta(name=col, dtype=dtype, null_count=null_count, sample_values=samples))
+        sample_rows = df.head(3).to_dict(orient="records")
+        return TableMeta(name=name, path=path, columns=columns, row_count=len(df), sample_rows=sample_rows)

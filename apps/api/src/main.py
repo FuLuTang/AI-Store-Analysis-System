@@ -28,15 +28,15 @@ from packages.core.metrics import (
     calc_channel_mix, calc_revenue_change, calc_o2o_vs_total,
     prepare_growth_decomposition, prepare_anomaly_summary
 )
-from packages.ai.ai_caller import call_ai, call_detailed_ai, call_simplified_ai, call_ai_new, call_detailed_ai_new
+from packages.ai.ai_caller import call_ai, call_detailed_ai, call_simplified_ai, call_ai_new, call_detailed_ai_new, call_ai_early, _build_data_context_text
 from packages.ai.error_reviewer import review_error, review_error_new
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
 
 # 新多文件管线
 from packages.core.input_adapter import parse_uploaded_files, infer_source_type
 from packages.core.profiler import profile_dataset
-from packages.core.semantic_mapper import map_profiles
-from packages.core.scene_classifier import classify_scene, classify_data_scope
+from packages.core.semantic_mapper import map_profiles, llm_map_profiles
+from packages.core.scene_classifier import classify_scene, classify_data_scope, llm_classify_scene
 from packages.core.canonical import build_canonical_dataset
 from packages.core.metric_registry import match_metrics
 from packages.core.metric_engine import run_metrics
@@ -800,96 +800,139 @@ async def run_multifile_analysis(session: SessionState, decoded_files: list):
         add_status(session, "profile", "success")
         ensure_not_stopped(session)
 
-        # 3) Scene Classifier
-        add_status(session, "scene", "active")
-        add_log(session, "scene", "开始场景识别...")
-        scene = classify_scene(profiles)
-        add_log(session, "scene", f"识别结果: {scene.get('industry')}/{scene.get('business_model')} (conf={scene.get('confidence')})")
-        add_status(session, "scene", "success")
-        ensure_not_stopped(session)
+        # ── 从 profile 开始分叉 ──
+        #   早路: AI-1 初诊 + AI-2 审计（纯数据结构，不等 scene/mapping/metrics）
+        #   晚路: scene → mapping → canonical → metrics → threshold → evidence
+        async def report_flow():
+            if not active_settings.get("apiKey"):
+                return None, None
 
-        # 4) Semantic Mapper
-        add_status(session, "mapping", "active")
-        add_log(session, "mapping", "开始字段语义映射（场景感知）...")
-        add_log(session, "mapping", f"共 {len(profiles)} 个字段待映射, 场景: {scene.get('industry')}")
-        mappings = map_profiles(profiles, scene)
-        mapped_count = sum(1 for m in mappings if m.get("semantic_field") != "unknown")
-        confirm_count = sum(1 for m in mappings if m.get("need_confirm"))
-        add_log(session, "mapping", f"结果: {mapped_count}/{len(mappings)} 已识别, {confirm_count} 需确认")
-        for m in mappings:
-            sf = m.get("semantic_field", "unknown")
-            conf = m.get("confidence", 0)
-            mark = " [需确认]" if m.get("need_confirm") else ""
-            table = m.get("table", "?")
-            add_log(session, "mapping", f"  `{m['raw_field']}` → `{sf}` (table={table}, conf={conf}){mark}")
-        if confirm_count > 0:
-            add_log(session, "mapping", f"低置信字段: {[m['raw_field'] for m in mappings if m.get('need_confirm')]}")
-        add_status(session, "mapping", "success")
-
-        # 完善 data_scope（基于语义映射结果）
-        scene["data_scope"] = classify_data_scope(mappings)
-        add_log(session, "scene", f"数据范围: {scene.get('data_scope')}")
-        ensure_not_stopped(session)
-
-        # 5) Canonical Dataset
-        add_status(session, "canonical", "active")
-        add_log(session, "canonical", "构建标准语义数据层...")
-        canonical = build_canonical_dataset(dataset_bundle, mappings, scene)
-        table_names = list(canonical.get("tables", {}).keys())
-        total_rows = sum(len(rows) for rows in canonical.get("tables", {}).values())
-        add_log(session, "canonical", f"标准数据集: {table_names}, 共 {total_rows} 行")
-        add_status(session, "canonical", "success")
-        ensure_not_stopped(session)
-
-        # 6) Metric Registry
-        add_status(session, "registry", "active")
-        add_log(session, "registry", "匹配可计算指标...")
-        metric_defs = match_metrics(canonical)
-        available = [m for m in metric_defs if m["available"]]
-        unavailable = [m for m in metric_defs if not m["available"]]
-        add_log(session, "registry", f"可计算: {len(available)} 项 - {[m['metric_id'] for m in available]}")
-        if unavailable:
-            add_log(session, "registry", f"不可计算: {len(unavailable)} 项 - {[m['metric_id'] for m in unavailable]}")
-        add_status(session, "registry", "success")
-        ensure_not_stopped(session)
-
-        # 7) Metric Engine
-        add_status(session, "engine", "active")
-        add_log(session, "engine", f"开始计算 {len(available)} 项指标...")
-        metric_results = run_metrics(available, canonical)
-        pass_count = sum(1 for r in metric_results if r.get("status") == "pass")
-        unc_count = sum(1 for r in metric_results if r.get("status") == "uncountable")
-        for r in metric_results:
-            val = r.get("value")
-            val_str = _json.dumps(val, ensure_ascii=False) if isinstance(val, (dict, list)) else str(val)
-            add_log(session, "engine", f"  {r.get('name', '?')} → {r.get('status')} | {val_str[:80]}")
-        add_log(session, "engine", f"完成: {pass_count} pass, {unc_count} uncountable")
-        add_status(session, "engine", "success")
-        ensure_not_stopped(session)
-
-        # 8) Threshold Resolver
-        add_status(session, "threshold", "active")
-        add_log(session, "threshold", "场景化健康判断...")
-        metric_results = resolve_all_statuses(metric_results, scene)
-        tally = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
-        for r in metric_results:
-            s = r.get("status", "uncountable")
-            tally[s] = tally.get(s, 0) + 1
-        add_log(session, "threshold", f"🟢 pass: {tally['pass']}, 🟡 attention: {tally['attention']}, 🔴 warning: {tally['warning']}, ⚪ uncountable: {tally['uncountable']}")
-        add_status(session, "threshold", "success")
-        ensure_not_stopped(session)
-
-        # 9) Evidence Builder
-        add_status(session, "evidence", "active")
-        add_log(session, "evidence", "构建证据包...")
-        evidence = build_evidence_bundle(metric_results, canonical)
-        add_log(session, "evidence", f"证据包: {len(evidence['items'])} 条证据")
-        add_status(session, "evidence", "success")
-        ensure_not_stopped(session)
-
-        # 10) AI Report (如果无 API Key 则生成摘要)
-        if not active_settings.get("apiKey"):
+            dummy_scene = {"industry": "generic", "business_model": "unknown"}
+            data_context = _build_data_context_text(profiles, None, dummy_scene)
+            add_log(session, "report", "并行: 调用 AI 生成初诊报告（基于数据字段结构）...")
             add_status(session, "report", "active")
+            try:
+                early_resp = await call_ai_early(active_settings, data_context, dummy_scene)
+                initial_report = early_resp["choices"][0]["message"]["content"]
+                add_log(session, "report", f"初诊报告已生成 ({len(initial_report)} 字符)")
+
+                add_status(session, "review", "active")
+                add_log(session, "review", "并行: 启动逻辑审计复核...")
+                review_resp = await review_error_new(active_settings, dummy_scene, initial_report, {"items": []})
+                review_text = review_resp["choices"][0]["message"]["content"] if isinstance(review_resp, dict) else str(review_resp)
+                add_log(session, "review", f"审计复核完成 ({len(review_text)} 字符)")
+                add_status(session, "review", "success")
+
+                return initial_report, review_text
+            except Exception as e:
+                add_log(session, "report", f"并行初诊报告失败: {e}")
+                return None, None
+
+        async def metrics_flow():
+            # 3) Scene Classifier (AI 优先)
+            add_status(session, "scene", "active")
+            add_log(session, "scene", "开始场景识别...")
+            scene = await llm_classify_scene(profiles, active_settings)
+            add_log(session, "scene", f"识别结果: {scene.get('industry')}/{scene.get('business_model')} (conf={scene.get('confidence')})")
+            if scene.get("llm_reason"):
+                add_log(session, "scene", f"  AI判断: {scene['llm_reason']}")
+            add_status(session, "scene", "success")
+            ensure_not_stopped(session)
+
+            # 4) Semantic Mapper (AI 优先)
+            add_status(session, "mapping", "active")
+            add_log(session, "mapping", "开始字段语义映射（场景感知）...")
+            add_log(session, "mapping", f"共 {len(profiles)} 个字段待映射, 场景: {scene.get('industry')}")
+            mappings = await llm_map_profiles(profiles, active_settings, scene)
+            mapped_count = sum(1 for m in mappings if m.get("semantic_field") not in ("unknown", "ignore"))
+            ignored_count = sum(1 for m in mappings if m.get("semantic_field") == "ignore")
+            confirm_count = sum(1 for m in mappings if m.get("need_confirm"))
+            add_log(session, "mapping", f"结果: {mapped_count}/{len(mappings)} 已识别, {ignored_count} 忽略, {confirm_count} 需确认")
+            for m in mappings:
+                sf = m.get("semantic_field", "unknown")
+                conf = m.get("confidence", 0)
+                mark = " [需确认]" if m.get("need_confirm") else ""
+                table = m.get("table", "?")
+                if sf == "ignore":
+                    add_log(session, "mapping", f"  `{m['raw_field']}` → ⛔忽略 ({table})")
+                else:
+                    add_log(session, "mapping", f"  `{m['raw_field']}` → `{sf}` (table={table}, conf={conf}){mark}")
+            if confirm_count > 0:
+                add_log(session, "mapping", f"低置信字段: {[m['raw_field'] for m in mappings if m.get('need_confirm')]}")
+            add_status(session, "mapping", "success")
+
+            # 完善 data_scope
+            scene["data_scope"] = classify_data_scope(mappings)
+            add_log(session, "scene", f"数据范围: {scene.get('data_scope')}")
+            ensure_not_stopped(session)
+
+            # 5) Canonical
+            add_status(session, "canonical", "active")
+            add_log(session, "canonical", "构建标准语义数据层...")
+            canonical = build_canonical_dataset(dataset_bundle, mappings, scene)
+            table_names = list(canonical.get("tables", {}).keys())
+            total_rows = sum(len(rows) for rows in canonical.get("tables", {}).values())
+            add_log(session, "canonical", f"标准数据集: {table_names}, 共 {total_rows} 行")
+            add_status(session, "canonical", "success")
+            ensure_not_stopped(session)
+
+            # 6) Metric Registry
+            add_status(session, "registry", "active")
+            add_log(session, "registry", "匹配可计算指标...")
+            metric_defs = match_metrics(canonical)
+            available = [m for m in metric_defs if m["available"]]
+            unavailable = [m for m in metric_defs if not m["available"]]
+            add_log(session, "registry", f"可计算: {len(available)} 项 - {[m['metric_id'] for m in available]}")
+            if unavailable:
+                add_log(session, "registry", f"不可计算: {len(unavailable)} 项 - {[m['metric_id'] for m in unavailable]}")
+            add_status(session, "registry", "success")
+            ensure_not_stopped(session)
+
+            # 7) Metric Engine
+            add_status(session, "engine", "active")
+            add_log(session, "engine", f"开始计算 {len(available)} 项指标...")
+            metric_results = run_metrics(available, canonical)
+            pass_count = sum(1 for r in metric_results if r.get("status") == "pass")
+            unc_count = sum(1 for r in metric_results if r.get("status") == "uncountable")
+            for r in metric_results:
+                val = r.get("value")
+                val_str = _json.dumps(val, ensure_ascii=False) if isinstance(val, (dict, list)) else str(val)
+                add_log(session, "engine", f"  {r.get('name', '?')} → {r.get('status')} | {val_str[:80]}")
+            add_log(session, "engine", f"完成: {pass_count} pass, {unc_count} uncountable")
+            add_status(session, "engine", "success")
+            ensure_not_stopped(session)
+
+            # 8) Threshold Resolver
+            add_status(session, "threshold", "active")
+            add_log(session, "threshold", "场景化健康判断...")
+            metric_results = resolve_all_statuses(metric_results, scene)
+            tally = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
+            for r in metric_results:
+                s = r.get("status", "uncountable")
+                tally[s] = tally.get(s, 0) + 1
+            add_log(session, "threshold", f"🟢 pass: {tally['pass']}, 🟡 attention: {tally['attention']}, 🔴 warning: {tally['warning']}, ⚪ uncountable: {tally['uncountable']}")
+            add_status(session, "threshold", "success")
+            ensure_not_stopped(session)
+
+            # 9) Evidence Builder
+            add_status(session, "evidence", "active")
+            add_log(session, "evidence", "构建证据包...")
+            evidence = build_evidence_bundle(metric_results, canonical)
+            add_log(session, "evidence", f"证据包: {len(evidence['items'])} 条证据")
+            add_status(session, "evidence", "success")
+            ensure_not_stopped(session)
+
+            return scene, mappings, metric_results, evidence, tally
+
+        # 并行执行两条路径
+        report_task = asyncio.create_task(report_flow())
+        metrics_task = asyncio.create_task(metrics_flow())
+
+        (initial_report, review_text), (scene, mappings, metric_results, evidence, tally) = \
+            await asyncio.gather(report_task, metrics_task)
+
+        # 没有 API Key 时走摘要模式
+        if not active_settings.get("apiKey"):
             add_log(session, "report", "未检测到 API Key，生成算法摘要...")
 
             lines = [f"# {scene.get('industry', '未知')} 经营分析摘要"]
@@ -917,9 +960,10 @@ async def run_multifile_analysis(session: SessionState, decoded_files: list):
 
             report_md = "\n".join(lines)
             session.full_result = report_md
+            tally_for_result = tally or {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
             session.result = _json.dumps({
-                "health_status": f"{tally['warning']}项报警/{tally['attention']}项关注",
-                "overview_text": f"{scene.get('industry')}场景分析完成，共{tally['warning'] + tally['attention']}项需关注。",
+                "health_status": f"{tally_for_result['warning']}项报警/{tally_for_result['attention']}项关注",
+                "overview_text": f"{scene.get('industry')}场景分析完成，共{tally_for_result['warning'] + tally_for_result['attention']}项需关注。",
                 "cards": [
                     {"title": r.get("name", ""), "explanation": r.get("reason", ""),
                      "suggestion": "", "color": "red" if r.get("status") == "warning" else "yellow" if r.get("status") == "attention" else "green"}
@@ -931,36 +975,19 @@ async def run_multifile_analysis(session: SessionState, decoded_files: list):
             save_latest_report(session)
             return
 
-        # AI-1: 初诊报告 (新管线 — 格式化输入)
-        add_status(session, "report", "active")
-        add_log(session, "report", f"调用 AI 生成报告 (模型: {active_settings['model']})...")
-        initial_resp = await call_ai_new(active_settings, scene, metric_results, evidence, mappings)
-        initial_report = initial_resp["choices"][0]["message"]["content"]
-        add_log(session, "report", f"初诊报告已生成 ({len(initial_report)} 字符)")
-        ensure_not_stopped(session)
-
-        # AI-2: 审计复核 (新管线 — 证据包对照)
-        add_status(session, "review", "active")
-        add_log(session, "review", "启动逻辑审计复核...")
-        review_resp = await review_error_new(active_settings, scene, initial_report, evidence)
-        review_text = review_resp["choices"][0]["message"]["content"] if isinstance(review_resp, dict) else str(review_resp)
-        add_log(session, "review", f"审计复核完成 ({len(review_text)} 字符)")
-        add_status(session, "review", "success")
-        ensure_not_stopped(session)
-
-        # 融合
+        # 融合：初诊报告 + 审计 + 指标证据
         add_status(session, "fusion", "active")
         add_log(session, "fusion", "数据融合：合并初级报告、错误评审、证据数据...")
         fused_context = (
-            f"【初级报告】\n{initial_report}\n\n"
-            f"【审计意见】\n{review_text}\n\n"
-            f"【证据包】\n{_json.dumps(evidence.get('items', [])[:10], ensure_ascii=False)}"
+            f"【初级报告】\n{initial_report or '(初诊未生成)'}\n\n"
+            f"【审计意见】\n{review_text or '(审计未完成)'}\n\n"
+            f"【指标证据包】\n{_json.dumps(evidence.get('items', [])[:10], ensure_ascii=False)}"
         )
         add_log(session, "fusion", f"融合上下文: {len(fused_context)} 字符")
         add_status(session, "fusion", "success")
         ensure_not_stopped(session)
 
-        # AI-3: 深度报告 (新管线)
+        # AI-3: 深度报告
         add_status(session, "rep1", "active")
         add_log(session, "rep1", "正在融合审计意见生成深度报告...")
         detailed_resp = await call_detailed_ai_new(active_settings, scene, fused_context)

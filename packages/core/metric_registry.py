@@ -91,7 +91,7 @@ _BUILTIN_METRICS = [
         "metric_id": "revenue_consecutive",
         "name": "营收连续涨跌",
         "required_fields": ["date", "revenue"],
-        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "domains": ["pharmacy", "restaurant", "retail", "hr", "generic"],
         "calculator": "consecutive_change",
         "params": {"field": "revenue"},
         "health_profiles": ["default"]
@@ -100,7 +100,7 @@ _BUILTIN_METRICS = [
         "metric_id": "customer_change",
         "name": "客流趋势",
         "required_fields": ["date", "customer_count"],
-        "domains": ["pharmacy", "restaurant", "retail"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
         "calculator": "period_change",
         "params": {"field": "customer_count"},
         "health_profiles": ["default"]
@@ -109,7 +109,7 @@ _BUILTIN_METRICS = [
         "metric_id": "gross_margin_trend",
         "name": "毛利率趋势",
         "required_fields": ["date", "revenue", "gross_profit"],
-        "domains": ["pharmacy", "restaurant", "retail"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
         "calculator": "gross_margin_trend",
         "health_profiles": ["default"]
     },
@@ -117,7 +117,7 @@ _BUILTIN_METRICS = [
         "metric_id": "customer_consecutive",
         "name": "客流连续涨跌",
         "required_fields": ["date", "customer_count"],
-        "domains": ["pharmacy", "restaurant", "retail"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
         "calculator": "consecutive_change",
         "params": {"field": "customer_count"},
         "health_profiles": ["default"]

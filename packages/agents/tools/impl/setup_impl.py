@@ -5,7 +5,7 @@ from ...workspace import Workspace
 
 
 def setup_workspace_impl(ws: Workspace) -> str:
-    """扫描输入 → 写 parquet → 注册 DuckDB → 返回状态摘要"""
+    """扫描 workspace 现有 parquet → 注册 DuckDB → 返回状态摘要"""
     inputs = ws.list_inputs()
     tables = ws.scan_parquet_tables()
     db_summary = ws.init_duckdb()

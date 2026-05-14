@@ -38,6 +38,7 @@ class ColumnMeta(BaseModel):
 
 class TableMeta(BaseModel):
     name: str
+    duckdb_name: str = ""
     path: str
     columns: list[ColumnMeta] = Field(default_factory=list)
     row_count: int = 0
@@ -147,3 +148,4 @@ class AgentResult(BaseModel):
     full_report: str = ""
     pipeline: str = ""
     elapsed_ms: float = 0.0
+    raw_output: str = ""

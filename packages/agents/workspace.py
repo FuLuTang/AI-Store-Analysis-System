@@ -87,7 +87,9 @@ class Workspace:
 
     def resolve(self, rel: str) -> Path:
         resolved = (self._dir / rel).resolve()
-        if not str(resolved).startswith(str(self._dir.resolve())):
+        try:
+            resolved.relative_to(self._dir.resolve())
+        except ValueError:
             raise ValueError(f"路径越界: {rel}")
         return resolved
 
@@ -117,7 +119,7 @@ class Workspace:
             file_stem = t.name.replace(" ", "_")
             path = self._tables_dir / f"{file_stem}.parquet"
             df.to_parquet(path, index=False)
-            meta = self._df_to_meta(t.name, str(path), df)
+            meta = self._df_to_meta(t.name, str(path), df, duckdb_name=file_stem)
             metas.append(meta)
             self._manifest.tables.append(meta)
         self._save_manifest()
@@ -127,7 +129,7 @@ class Workspace:
         file_stem = name.replace(" ", "_")
         path = self._tables_dir / f"{file_stem}.parquet"
         df.to_parquet(path, index=False)
-        meta = self._df_to_meta(name, str(path), df)
+        meta = self._df_to_meta(name, str(path), df, duckdb_name=file_stem)
         self._manifest.tables.append(meta)
         self._save_manifest()
         return meta
@@ -238,7 +240,7 @@ class Workspace:
     # ---- 内部 ----
 
     @staticmethod
-    def _df_to_meta(name: str, path: str, df: pd.DataFrame) -> TableMeta:
+    def _df_to_meta(name: str, path: str, df: pd.DataFrame, duckdb_name: str = "") -> TableMeta:
         columns: list[ColumnMeta] = []
         for col in df.columns:
             dtype = str(df[col].dtype)
@@ -246,7 +248,8 @@ class Workspace:
             null_count = int(df[col].isna().sum())
             columns.append(ColumnMeta(name=col, dtype=dtype, null_count=null_count, sample_values=samples))
         sample_rows = df.head(3).to_dict(orient="records")
-        return TableMeta(name=name, path=path, columns=columns, row_count=len(df), sample_rows=sample_rows)
+        return TableMeta(name=name, duckdb_name=duckdb_name, path=path, columns=columns,
+                         row_count=len(df), sample_rows=sample_rows)
 
 
 def _short_uuid() -> str:

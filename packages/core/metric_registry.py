@@ -87,6 +87,41 @@ _BUILTIN_METRICS = [
         "params": {"numerator": "member_revenue", "denominator": "revenue", "unit": "%"},
         "health_profiles": ["default"]
     },
+    {
+        "metric_id": "revenue_consecutive",
+        "name": "营收连续涨跌",
+        "required_fields": ["date", "revenue"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "consecutive_change",
+        "params": {"field": "revenue"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "customer_change",
+        "name": "客流趋势",
+        "required_fields": ["date", "customer_count"],
+        "domains": ["pharmacy", "restaurant", "retail"],
+        "calculator": "period_change",
+        "params": {"field": "customer_count"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "gross_margin_trend",
+        "name": "毛利率趋势",
+        "required_fields": ["date", "revenue", "gross_profit"],
+        "domains": ["pharmacy", "restaurant", "retail"],
+        "calculator": "gross_margin_trend",
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "customer_consecutive",
+        "name": "客流连续涨跌",
+        "required_fields": ["date", "customer_count"],
+        "domains": ["pharmacy", "restaurant", "retail"],
+        "calculator": "consecutive_change",
+        "params": {"field": "customer_count"},
+        "health_profiles": ["default"]
+    },
     # 餐饮专属
     {
         "metric_id": "delivery_timeout_rate",

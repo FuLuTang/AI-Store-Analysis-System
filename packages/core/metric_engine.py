@@ -204,10 +204,69 @@ def _data_quality(rows: list, profiles: Optional[list] = None) -> dict:
     }
 
 
+def _consecutive_change(rows: list, field: str = "revenue") -> dict:
+    """连续涨跌：判断最近几期连续上升/下降"""
+    vals = [(r.get(field), r.get("date")) for r in rows if is_valid(r.get(field))]
+    if len(vals) < 2:
+        return {"direction": "stable", "consecutive_days": 0, "change_pct": 0}
+
+    changes = []
+    for i in range(1, len(vals)):
+        prev = vals[i - 1][0]
+        cur = vals[i][0]
+        if prev != 0:
+            pct = (cur - prev) / prev
+            changes.append({"direction": "up" if pct > 0 else "down", "pct": round_to(pct * 100, 1)})
+
+    if not changes:
+        return {"direction": "stable", "consecutive_days": 0, "change_pct": 0}
+
+    # 从最近一期往前数连续同向
+    count = 0
+    ref_dir = changes[-1]["direction"]
+    for c in reversed(changes):
+        if c["direction"] == ref_dir:
+            count += 1
+        else:
+            break
+
+    return {
+        "direction": ref_dir,
+        "consecutive_days": count,
+        "change_pct": changes[-1]["pct"]
+    }
+
+
+def _gross_margin_trend(rows: list) -> dict:
+    """毛利率趋势：每期毛利率 + 整体趋势方向"""
+    pairs = []
+    for r in rows:
+        rev = r.get("revenue")
+        gp = r.get("gross_profit")
+        if is_valid(rev) and is_valid(gp) and rev != 0:
+            pairs.append(gp / rev)
+
+    if len(pairs) < 2:
+        return {"direction": "stable", "avg_margin": round_to(pairs[0] * 100) if pairs else 0}
+
+    current = pairs[-1]
+    previous = pairs[-2]
+    direction = "rising" if current > previous else ("falling" if current < previous else "stable")
+    avg_margin = sum(pairs) / len(pairs)
+
+    return {
+        "direction": direction,
+        "current_margin": round_to(current * 100),
+        "previous_margin": round_to(previous * 100),
+        "avg_margin": round_to(avg_margin * 100),
+        "change_pct": round_to((current - previous) * 100)
+    }
+
+
 # ── 计算器调度表 ──
 
 CALCULATOR_MAP = {
-    "sum": None,          # 使用内置 sum，比较简单，直接在 compute 中处理
+    "sum": None,
     "ratio": _ratio,
     "period_change": _period_change,
     "share_by_dimension": _share_by_dimension,
@@ -218,6 +277,8 @@ CALCULATOR_MAP = {
     "volatility": _volatility,
     "threshold_rate": _threshold_rate,
     "data_quality": _data_quality,
+    "consecutive_change": _consecutive_change,
+    "gross_margin_trend": _gross_margin_trend,
 }
 
 
@@ -307,6 +368,12 @@ def compute_metric(metric_def: dict, canonical_dataset: dict) -> dict:
 
         elif calculator == "data_quality":
             value = _data_quality(rows)
+
+        elif calculator == "consecutive_change":
+            value = _consecutive_change(rows, params.get("field", "revenue"))
+
+        elif calculator == "gross_margin_trend":
+            value = _gross_margin_trend(rows)
 
         else:
             value = None

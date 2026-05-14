@@ -1,3 +1,4 @@
+"""共享工具注册表。底层委托到 impl，适配器见 adapters/。"""
 from .file_tool import read_workspace_file, write_workspace_file, list_workspace_files
 from .duckdb_tool import duckdb_query, duckdb_register_parquet
 from .python_tool import run_python_script

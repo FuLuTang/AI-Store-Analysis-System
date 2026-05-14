@@ -1,9 +1,19 @@
-"""隔离工作区：每个 pipeline 一个临时目录，管理 parquet / manifest / 输入输出文件。"""
+"""隔离工作区：storage/artifacts/{report_id}，持久化，用于审计。
+
+目录结构：
+  storage/artifacts/{report_id}/
+    input/          原始上传文件
+    context/        注入的上下文文档
+    output/         中间 & 最终产物
+    scripts/        Agent 生成的 Python 脚本
+    tables/         parquet 文件
+    analysis.duckdb DuckDB 持久数据库
+    manifest.json   工作区表清单
+    agent_trace.json Agent 执行日志
+"""
 
 import json
 import shutil
-import tempfile
-import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -11,24 +21,24 @@ import pandas as pd
 
 from .models import ColumnMeta, Manifest, RawTable, TableMeta
 
+ARTIFACTS_ROOT = Path("storage/artifacts")
+
 
 class Workspace:
-    """每个 pipeline 一个独立临时目录，具备输入/上下文/输出分区 + parquet + manifest。"""
 
-    def __init__(self, label: str = ""):
-        prefix = f"agent_{label}_" if label else "agent_"
-        self.report_id = str(uuid.uuid4())
-        self._dir = Path(tempfile.mkdtemp(prefix=prefix))
+    def __init__(self, label: str = "", report_id: Optional[str] = None):
+        self.label = label
+        self.report_id = report_id or f"{label}_{_short_uuid()}"
+        self._dir = Path(ARTIFACTS_ROOT) / self.report_id
         self._input_dir = self._dir / "input"
         self._output_dir = self._dir / "output"
         self._context_dir = self._dir / "context"
-        self._input_dir.mkdir()
-        self._output_dir.mkdir()
-        self._context_dir.mkdir()
-        self._manifest = Manifest(
-            report_id=self.report_id,
-            workspace_dir=str(self._dir),
-        )
+        self._scripts_dir = self._dir / "scripts"
+        self._tables_dir = self._dir / "tables"
+        for d in [self._input_dir, self._output_dir, self._context_dir,
+                  self._scripts_dir, self._tables_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+        self._manifest = Manifest(report_id=self.report_id, workspace_dir=str(self._dir))
 
     @property
     def dir(self) -> Path:
@@ -45,6 +55,18 @@ class Workspace:
     @property
     def context_dir(self) -> Path:
         return self._context_dir
+
+    @property
+    def scripts_dir(self) -> Path:
+        return self._scripts_dir
+
+    @property
+    def tables_dir(self) -> Path:
+        return self._tables_dir
+
+    @property
+    def duckdb_path(self) -> str:
+        return str(self._dir / "analysis.duckdb")
 
     # ---- 输入输出 ----
 
@@ -64,7 +86,6 @@ class Workspace:
         return p
 
     def resolve(self, rel: str) -> Path:
-        """解析相对路径到 workspace 内（限制不能跳出）"""
         resolved = (self._dir / rel).resolve()
         if not str(resolved).startswith(str(self._dir.resolve())):
             raise ValueError(f"路径越界: {rel}")
@@ -75,6 +96,9 @@ class Workspace:
 
     def list_outputs(self) -> list[str]:
         return [p.name for p in self._output_dir.iterdir() if p.is_file()]
+
+    def list_scripts(self) -> list[str]:
+        return [p.name for p in self._scripts_dir.iterdir() if p.is_file()]
 
     def read_output(self, name: str) -> Optional[bytes]:
         p = self._output_dir / name
@@ -87,12 +111,11 @@ class Workspace:
     # ---- parquet 读写 ----
 
     def write_raw_parquet(self, tables: list[RawTable]) -> list[TableMeta]:
-        """输入 RawTable[]，写 parquet 到 workspace，返回 TableMeta[]。"""
         metas: list[TableMeta] = []
         for t in tables:
             df = pd.DataFrame(t.rows)
             file_stem = t.name.replace(" ", "_")
-            path = self._dir / f"{file_stem}.parquet"
+            path = self._tables_dir / f"{file_stem}.parquet"
             df.to_parquet(path, index=False)
             meta = self._df_to_meta(t.name, str(path), df)
             metas.append(meta)
@@ -101,9 +124,8 @@ class Workspace:
         return metas
 
     def write_parquet(self, name: str, df: pd.DataFrame) -> TableMeta:
-        """写任意 DataFrame 为 parquet，返回 TableMeta。"""
         file_stem = name.replace(" ", "_")
-        path = self._dir / f"{file_stem}.parquet"
+        path = self._tables_dir / f"{file_stem}.parquet"
         df.to_parquet(path, index=False)
         meta = self._df_to_meta(name, str(path), df)
         self._manifest.tables.append(meta)
@@ -111,14 +133,13 @@ class Workspace:
         return meta
 
     def read_parquet(self, name: str) -> pd.DataFrame:
-        """按表名读取 parquet。"""
         for t in self._manifest.tables:
             if t.name == name:
                 return pd.read_parquet(t.path)
         raise FileNotFoundError(f"table {name!r} not in workspace")
 
     def list_parquet_files(self) -> list[str]:
-        return [p.name for p in self._dir.glob("*.parquet")]
+        return [p.name for p in self._tables_dir.glob("*.parquet")]
 
     # ---- 文本文件 ----
 
@@ -142,19 +163,26 @@ class Workspace:
     def _save_manifest(self) -> None:
         self._manifest.tables = sorted(self._manifest.tables, key=lambda t: t.name)
         (self._dir / "manifest.json").write_text(
-            self._manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
+            self._manifest.model_dump_json(indent=2), encoding="utf-8")
 
     def load_manifest(self) -> Manifest:
         raw = json.loads((self._dir / "manifest.json").read_text(encoding="utf-8"))
         self._manifest = Manifest(**raw)
         return self._manifest
 
-    # ---- 清理 ----
+    # ---- 清理（需显式调用，生产不自动删） ----
 
     def cleanup(self) -> None:
         if self._dir.exists():
             shutil.rmtree(self._dir, ignore_errors=True)
+
+    def cleanup_large_files(self) -> None:
+        """仅删除 parquet 和 duckdb，保留 manifest / scripts / trace"""
+        for path in list(self._tables_dir.glob("*.parquet")):
+            path.unlink(missing_ok=True)
+        duckdb_file = self._dir / "analysis.duckdb"
+        if duckdb_file.exists():
+            duckdb_file.unlink()
 
     # ---- 内部 ----
 
@@ -168,3 +196,8 @@ class Workspace:
             columns.append(ColumnMeta(name=col, dtype=dtype, null_count=null_count, sample_values=samples))
         sample_rows = df.head(3).to_dict(orient="records")
         return TableMeta(name=name, path=path, columns=columns, row_count=len(df), sample_rows=sample_rows)
+
+
+def _short_uuid() -> str:
+    import uuid
+    return uuid.uuid4().hex[:12]

@@ -8,23 +8,30 @@
 - **程序负责执行**：展平、DuckDB 操作、SQL 校验和运行
 - 你**不接触行数据**，只通过 metadata 了解表结构
 
-## 计划类型
+## 工具
 
-| 计划 | 说明 |
+| 工具 | 说明 |
 |------|------|
-| `FlattenPlan` | 指定展平策略（unnest / unfold / pass）和字段映射 |
-| `SemanticMapping[]` | raw_field → semantic_field 映射，含置信度 |
-| `SqlPlan` | 包含多个 MetricSql，每一条有 SQL + required_fields |
+| `read_file` | 读取 workspace 内文件 |
+| `write_file` | 写入文件到 workspace |
+| `list_files` | 列出 workspace 目录 |
+| `run_python` | 在沙箱执行 Python 脚本 |
+| `duckdb_query` | 执行只读 DuckDB SQL |
+| `duckdb_register_parquet` | 注册 parquet 为 DuckDB 表 |
+| `read_context` | 读取上下文文档（指标计算文档等） |
+| `profile_table` | 查看 parquet 字段画像 |
+| `validate_result` | 校验 AgentResult 结构 |
+
+所有工具通过 `ctx.deps.workspace` 自动注入 workspace，你无需关心 workspace 路径。
 
 ## 流程
 
 1. 用 `profile_table` 了解数据样貌
-2. 用 `read_context` 读取标准字段和指标定义
-3. 输出 `FlattenPlan`（调用 flatten_tool）
-4. 等待程序执行展平和 DuckDB 入库
-5. 输出 `SemanticMapping[]`
-6. 输出 `SqlPlan`，等待程序校验和执行
-7. 最终输出 `AgentResult`
+2. 用 `read_context("指标计算文档.md")` 读取标准字段和指标定义
+3. 输出 `FlattenPlan` → 程序执行展平
+4. 程序 DuckDB 入库后，输出 `SemanticMapping[]`
+5. 输出 `SqlPlan` → 程序校验和执行 SQL
+6. 最终输出 `AgentResult`
 
 ## 输出规范
 

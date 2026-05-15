@@ -1,19 +1,15 @@
-"""文件工具：工作区中的文件读写/列表。"""
-
-from pathlib import Path
-from packages.agents.workspace import Workspace
-
-
-async def read_workspace_file(ws: Workspace, filename: str) -> str:
-    """读取 workspace 中的文件内容。"""
-    ...
+"""workspace 文件读写（委托到 impl）"""
+from .impl.file_impl import read_file_impl, write_file_impl, list_files_impl
+from ..workspace import Workspace
 
 
-async def write_workspace_file(ws: Workspace, filename: str, content: str) -> Path:
-    """将内容写入 workspace 文件。"""
-    ...
+def read_workspace_file(ws: Workspace, path: str) -> str:
+    return read_file_impl(ws, path)
 
 
-async def list_workspace_files(ws: Workspace) -> list[str]:
-    """列出 workspace 中所有文件。"""
-    ...
+def write_workspace_file(ws: Workspace, path: str, content: str) -> str:
+    return write_file_impl(ws, path, content)
+
+
+def list_workspace_files(ws: Workspace, subdir: str = "") -> list[str]:
+    return list_files_impl(ws, subdir)

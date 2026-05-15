@@ -10,32 +10,32 @@
 
 ## 可用工具
 
-| 工具 | 用途 |
+| 工具 | 说明 |
 |------|------|
-| `read_workspace_file` | 读 workspace 文件 |
-| `write_workspace_file` | 写脚本/中间文件 |
-| `run_python_script` | 在沙箱中执行 Python 脚本 |
-| `duckdb_tool` | DuckDB 建表、注册 parquet、执行 SQL |
-| `read_context_tool` | 读指标文档、字段定义 |
-| `validate_result_tool` | 校验 manifest/mapping/metrics |
-| `profile_table_tool` | 查看表结构 |
-| `list_workspace_files` | 列出 workspace 目录 |
-| `submit_final_result_tool` | 提交标准 AgentResult |
+| `read_file(path)` | 读 workspace 内文件 |
+| `write_file(path, content)` | 写文件到 workspace |
+| `list_files(subdir)` | 列出 workspace 文件 |
+| `run_python(script_path, timeout)` | 在沙箱内执行 Python 脚本 |
+| `duckdb_query(sql)` | 执行只读 DuckDB SQL |
+| `duckdb_register_parquet(name, path)` | 注册 parquet 为 DuckDB 表 |
+| `read_context(doc_name)` | 读上下文文档（指标定义/字段规则） |
+| `profile_table(parquet_path)` | 读取 parquet 字段画像 |
+| `validate_result(raw)` | 校验输出是否符合 AgentResult 结构 |
 
-## 流程
+## 任务流程
 
-1. 用 `profile_table_tool` 查看数据样貌
-2. 用 `read_context_tool` 读取标准字段定义
-3. 写 Python 脚本展平嵌套数据 → `run_python_script` 执行
-4. 输出 manifest（parquet 文件清单）
-5. 用 `duckdb_tool` 注册 parquet 并查表结构
-6. 写 Python 脚本做字段映射 → 输出 `SemanticMapping[]`
-7. 写 SQL 计算指标 → `duckdb_tool` 执行
-8. 用 `validate_result_tool` 校验结果
-9. 用 `submit_final_result_tool` 提交最终 AgentResult
+你收到 `input/` 目录下的 JSON/CSV/Excel 数据文件。请完成：
 
-## 约束
+1. **展平**：写 Python 脚本展平嵌套数据为二维表，输出为 parquet 到 `tables/`
+2. **入库**：用 `duckdb_register_parquet` 注册表
+3. **画像**：用 `profile_table` 获取字段信息
+4. **映射**：读 `read_context("指标计算文档.md")`，将原始字段映射到标准字段
+5. **计算**：用 `duckdb_query` 写 SQL 计算指标（ratio / group_by / period_change / top_contribution）
+6. **输出**：整理为 AgentResult JSON 格式，写入 `output/result.json`，用 `validate_result` 校验后提交
 
-- 脚本必须在 workspace 内读写文件，不访问外部路径
-- 超时/内存受限
-- 报错后自行修复，重试直到成功或达到轮数上限
+## 安全规则
+
+- Python 脚本必须写入 `scripts/` 目录下先，再用 `run_python` 执行
+- 禁止访问 input/、output/、tables/ 以外的系统路径
+- DuckDB SQL 只读查询，禁止 DROP / DELETE / INSERT / ALTER
+- 最终输出必须通过 `validate_result` 校验

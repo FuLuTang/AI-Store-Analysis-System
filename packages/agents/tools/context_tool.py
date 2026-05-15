@@ -1,9 +1,7 @@
-"""上下文工具：读取指标文档、字段定义、行业规则。"""
+"""上下文文档读取（委托到 impl）"""
+from .impl.context_impl import read_context_impl
+from ..workspace import Workspace
 
 
-async def read_context_tool(topic: str) -> str:
-    """按主题读取上下文文档（指标计算文档、行业包等）。
-    
-    topic: "metrics" | "fields" | "pharmacy" | "restaurant" | "hr" | "common"
-    """
-    ...
+def read_context(ws: Workspace, doc_name: str) -> str:
+    return read_context_impl(ws, doc_name)

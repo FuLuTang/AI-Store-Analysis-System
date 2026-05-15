@@ -24,7 +24,8 @@ from packages.agents.models import (
     SqlPlan,
     TableMeta,
 )
-from packages.agents.workspace import Workspace, quote_identifier
+from packages.agents.workspace import Workspace
+from packages.agents.workspace import _quote_ident as _q
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +56,13 @@ class PydanticPipeline(AgentPipeline):
         all_phases: list[PhaseResult] = []
 
         raw_metas = ws.write_raw_parquet(bundle.tables)
-        self._register_raw_tables(ws, raw_metas)
+        ws.init_duckdb()
 
         flat_result = await self._run_flatten_phase(ws, raw_metas)
         all_phases.append(flat_result)
         flat_metas = flat_result.output if flat_result.status != "failed" else raw_metas
         all_warnings.extend(flat_result.warnings)
+        ws.init_duckdb()  # 重新扫描，注册展平后新产生的 parquet
 
         mapping_result = await self._run_mapping_phase(ws, flat_metas)
         all_phases.append(mapping_result)
@@ -382,7 +384,7 @@ class PydanticPipeline(AgentPipeline):
 
         errors: list[str] = []
         metrics: list[MetricResult] = []
-        db_path = ws.dir / "data.ddb"
+        db_path = ws.duckdb_path
         conn = duckdb.connect(str(db_path))
 
         try:
@@ -505,7 +507,7 @@ class PydanticPipeline(AgentPipeline):
                 """在 DuckDB 上执行 SELECT 查询并返回结果。"""
                 import duckdb
                 w = ctx.deps
-                db_path = w.dir / "data.ddb"
+                db_path = w.duckdb_path
                 conn = duckdb.connect(str(db_path))
                 try:
                     df = conn.execute(sql).fetchdf()
@@ -521,7 +523,7 @@ class PydanticPipeline(AgentPipeline):
                 """在 DuckDB 上执行 SELECT 查询并返回结果。"""
                 import duckdb
                 w = ctx.deps
-                db_path = w.dir / "data.ddb"
+                db_path = w.duckdb_path
                 conn = duckdb.connect(str(db_path))
                 try:
                     df = conn.execute(sql).fetchdf()
@@ -539,8 +541,8 @@ class PydanticPipeline(AgentPipeline):
                 parquet_path = w.dir / parquet_filename
                 if not parquet_path.is_file():
                     return f"parquet 文件不存在: {parquet_filename}"
-                qname = quote_identifier(table_name)
-                db_path = w.dir / "data.ddb"
+                qname = _q(table_name)
+                db_path = w.duckdb_path
                 conn = duckdb.connect(str(db_path))
                 try:
                     conn.execute(
@@ -572,18 +574,5 @@ class PydanticPipeline(AgentPipeline):
         return agent
 
     # ================================================================
-    # DuckDB 辅助
+    # DuckDB 通过 workspace.init_duckdb() 统一管理，无需单独方法
     # ================================================================
-
-    def _register_raw_tables(self, ws: Workspace, metas: list[TableMeta]) -> None:
-        import duckdb
-        db_path = ws.dir / "data.ddb"
-        conn = duckdb.connect(str(db_path))
-        try:
-            for meta in metas:
-                qname = quote_identifier(meta.name)
-                conn.execute(
-                    f"CREATE OR REPLACE VIEW {qname} AS SELECT * FROM '{meta.path}'"
-                )
-        finally:
-            conn.close()

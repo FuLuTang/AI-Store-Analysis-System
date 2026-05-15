@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -20,14 +19,14 @@ class RawTable(BaseModel):
 
 
 class DatasetBundle(BaseModel):
-    source_type: Literal["json", "excel", "csv", "api", "database"]
+    source_type: Literal["json", "excel", "csv", "api", "database"] = "json"
     tables: list[RawTable]
     received_at: datetime = Field(default_factory=datetime.now)
     tenant_id: str | None = None
 
 
 # ============================================================
-# 工作区 metadata（不传行数据，只传结构信息）
+# 工作区 metadata
 # ============================================================
 
 class ColumnMeta(BaseModel):
@@ -39,14 +38,14 @@ class ColumnMeta(BaseModel):
 
 class TableMeta(BaseModel):
     name: str
-    path: str  # parquet 路径，相对于 workspace 根
+    duckdb_name: str = ""
+    path: str
     columns: list[ColumnMeta] = Field(default_factory=list)
     row_count: int = 0
     sample_rows: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class Manifest(BaseModel):
-    """工作区清单：描述当前 workspace 中所有表的状态。"""
     report_id: str
     workspace_dir: str
     tables: list[TableMeta] = Field(default_factory=list)
@@ -60,7 +59,7 @@ class Manifest(BaseModel):
 
 
 # ============================================================
-# Pydantic 管线：LLM 出策略 → 程序执行
+# Pydantic 管线结构化输出
 # ============================================================
 
 class FlattenColumnPlan(BaseModel):
@@ -164,3 +163,4 @@ class AgentResult(BaseModel):
     full_report: str = ""
     pipeline: str = ""
     elapsed_ms: float = 0.0
+    raw_output: str = ""

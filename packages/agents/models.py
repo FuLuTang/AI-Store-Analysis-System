@@ -56,7 +56,7 @@ class Manifest(BaseModel):
     def tables_by_name(self) -> dict[str, TableMeta]:
         return {t.name: t for t in self.tables}
 
-    model_config = {"ignored_types": [property]}
+    model_config = {"ignored_types": (property,)}
 
 
 # ============================================================

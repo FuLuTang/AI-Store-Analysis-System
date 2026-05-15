@@ -52,6 +52,12 @@ class Manifest(BaseModel):
     tables: list[TableMeta] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
 
+    @property
+    def tables_by_name(self) -> dict[str, TableMeta]:
+        return {t.name: t for t in self.tables}
+
+    model_config = {"ignored_types": [property]}
+
 
 # ============================================================
 # Pydantic 管线：LLM 出策略 → 程序执行

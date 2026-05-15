@@ -69,6 +69,7 @@ class PydanticPipeline(AgentPipeline):
             from pydantic_ai import Agent
             from pydantic_ai.models.openai import OpenAIChatModel
             from pydantic_ai.providers.openai import OpenAIProvider
+            from pydantic_ai.settings import ModelSettings
         except ImportError:
             raise ImportError(
                 "pydantic-ai 未安装，请执行: pip install pydantic-ai"
@@ -85,7 +86,11 @@ class PydanticPipeline(AgentPipeline):
         agent = Agent(
             model,
             deps_type=Workspace,
-            system_prompt=self._load_prompt(),
+            output_type=AgentResult,
+            instructions=self._load_prompt(),
+            model_settings=ModelSettings(temperature=0.0),
+            tool_retries=3,
+            output_retries=3,
         )
 
         self._register_tools(agent)
@@ -289,7 +294,6 @@ class PydanticPipeline(AgentPipeline):
     ) -> AgentResult:
         from pydantic_ai import UsageLimits
 
-        table_names = [m.name for m in metas]
         table_info = "\n".join(
             f"- {m.name} ({m.row_count} 行, {len(m.columns)} 列: "
             f"{', '.join(c.name for c in m.columns[:10])}"
@@ -311,7 +315,7 @@ class PydanticPipeline(AgentPipeline):
 4. 用 register_parquet_tool 注册展平后的 parquet
 5. 做字段映射，输出为 JSON（包含 rawField, semanticField, confidence）
 6. 写 SQL 计算指标并执行
-7. 最终汇总为 AgentResult JSON：
+7. 最终用 submit_final_result_tool 提交 AgentResult JSON：
    {{
      "tables": [...],
      "mapping": [...],
@@ -327,58 +331,21 @@ class PydanticPipeline(AgentPipeline):
                 usage_limits=UsageLimits(request_limit=self.max_rounds),
             )
             output = result.output
+            if isinstance(output, AgentResult):
+                output.report_id = ws.report_id
+                output.pipeline = self.name
+                output.tables = metas
+                return output
+            return AgentResult(
+                report_id=ws.report_id,
+                tables=metas,
+                warnings=["Agent 未返回 AgentResult 结构化输出"],
+                pipeline=self.name,
+            )
         except Exception as e:
             logger.exception("Agent 执行失败")
             return AgentResult(
                 report_id=ws.report_id,
                 warnings=[f"Agent 执行异常: {str(e)}"],
-                pipeline=self.name,
-            )
-
-        return self._parse_agent_output(ws, output, metas)
-
-    def _parse_agent_output(
-        self, ws: Workspace, output, metas: list[TableMeta]
-    ) -> AgentResult:
-        """从 submit_final_result_tool 写入的 result.json 读取 AgentResult。"""
-        import json
-
-        # 优先从 workspace 的 result.json 读取（submit_final_result_tool 写入）
-        result_path = ws.dir / "result.json"
-        if result_path.is_file():
-            try:
-                data = json.loads(result_path.read_text(encoding="utf-8"))
-                return AgentResult(
-                    report_id=ws.report_id,
-                    tables=metas,
-                    mapping=data.get("mapping", []),
-                    metrics=data.get("metrics", []),
-                    warnings=data.get("warnings", []),
-                    pipeline=self.name,
-                )
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # 回退：从 Agent 文本输出中提取 JSON
-        text = str(output) if not isinstance(output, str) else output
-        try:
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            data = json.loads(text.strip())
-            return AgentResult(
-                report_id=ws.report_id,
-                tables=metas,
-                mapping=data.get("mapping", []),
-                metrics=data.get("metrics", []),
-                warnings=data.get("warnings", []),
-                pipeline=self.name,
-            )
-        except (json.JSONDecodeError, IndexError):
-            return AgentResult(
-                report_id=ws.report_id,
-                tables=metas,
-                warnings=[f"Agent 输出非标准 JSON，原文: {text[:500]}"],
                 pipeline=self.name,
             )

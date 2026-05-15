@@ -144,6 +144,15 @@ class ReportCard(BaseModel):
     color: Literal["green", "yellow", "pink", "red"] = "green"
 
 
+class PhaseResult(BaseModel):
+    phase: str
+    status: Literal["success", "partial", "failed"]
+    attempts: int = 0
+    output: Any = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AgentResult(BaseModel):
     report_id: str
     tables: list[TableMeta] = Field(default_factory=list)

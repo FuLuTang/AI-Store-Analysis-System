@@ -14,6 +14,10 @@ from packages.agents.models import ColumnMeta, Manifest, RawTable, TableMeta
 ARTIFACTS_ROOT = Path("storage/artifacts")
 
 
+def quote_identifier(name: str) -> str:
+    return f'"{name.replace(chr(34), chr(34)+chr(34))}"'
+
+
 def _ensure_artifacts_root() -> Path:
     ARTIFACTS_ROOT.mkdir(parents=True, exist_ok=True)
     return ARTIFACTS_ROOT

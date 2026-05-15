@@ -13,6 +13,7 @@
 - `read_context(doc_name)` — 读上下文文档（指标定义/字段规则）
 - `validate_result(dict)` — 校验输出是否符合 AgentResult 结构
 - `profile_table(parquet_path)` — 读取 parquet 字段画像
+- `submit_final_result(result_json)` — **最终提交** AgentResult JSON（最后一轮必须调用）
 
 ## 任务流程
 

@@ -1,11 +1,11 @@
-"""
-smol_pipeline.py — Smolagents CodeAgent 管线（方法2）
-
+"""smol_pipeline.py — Smolagents CodeAgent 管线（方法2）
 编排器职责：创建 workspace → 注入上下文/tools → 启动 CodeAgent → 限制轮数 → 校验输出 → 清理
-内部步骤由 Agent 自行决定，编排器不写死步骤顺序。
-"""
+内部步骤由 Agent 自行决定，编排器不写死步骤顺序。"""
+import asyncio
 import json
 import logging
+import re
+from pathlib import Path
 from .base import AgentPipeline
 from .models import DatasetBundle, AgentResult
 from .workspace import AgentWorkspace
@@ -24,16 +24,19 @@ class SmolPipeline(AgentPipeline):
         try:
             self._stage_inputs(bundle, ws)
             self._stage_context(ws)
-            tool_list = self._load_tools(ws)
-            agent = self._create_agent(tool_list)
-            raw_output = await self._execute_agent(agent, ws)
-            validated = self._validate_output(raw_output)
-            return validated
+
+            tools = self._make_tools(ws)
+            agent = self._make_agent(tools)
+            prompt = self._build_prompt(ws)
+
+            raw_output = await asyncio.to_thread(agent.run, prompt)
+            return self._collect_result(raw_output, ws)
         finally:
             ws.cleanup()
 
+    # ── staging ──
+
     def _stage_inputs(self, bundle: DatasetBundle, ws: AgentWorkspace):
-        """写入上传文件到 workspace input/"""
         for table in bundle.tables:
             ws.write_input_json(f"{table.name}.json", {
                 "name": table.name,
@@ -42,39 +45,66 @@ class SmolPipeline(AgentPipeline):
             })
 
     def _stage_context(self, ws: AgentWorkspace):
-        """注入上下文文档到 workspace context/"""
-        # 第一阶段：注入指标文档
-        import os
-        docs_dir = os.path.join(os.path.dirname(__file__), "..", "..", "docs")
-        for doc_name in ["指标计算文档.md"]:
-            doc_path = os.path.join(docs_dir, doc_name)
-            if os.path.exists(doc_path):
-                with open(doc_path) as f:
-                    ws.write_context(doc_name, f.read())
+        ROOT = Path(__file__).parent.parent.parent
+        docs_dir = ROOT / "docs"
+        for name in ["指标计算文档.md"]:
+            doc = docs_dir / name
+            if doc.exists():
+                ws.write_context(name, doc.read_text(encoding="utf-8"))
 
-    def _load_tools(self, ws: AgentWorkspace):
-        """加载共享工具，注入 workspace 引用"""
-        from .tools import (
-            read_workspace_file, write_workspace_file, list_workspace_files,
-            duckdb_query, duckdb_register_parquet,
-            run_python_script, read_context, validate_result, profile_table,
+    # ── tools ──
+
+    def _make_tools(self, ws: AgentWorkspace) -> list:
+        from .adapters.smol_tool_adapter import create_smol_tools
+        return create_smol_tools(ws)
+
+    # ── agent ──
+
+    def _make_agent(self, tools: list):
+        from smolagents import CodeAgent, HfApiModel
+        return CodeAgent(
+            tools=tools,
+            model=HfApiModel(self.model_id),
+            max_iterations=self.max_rounds,
         )
-        # TODO: 注入 workspace 到每个 tool
-        return []
 
-    def _create_agent(self, tool_list: list):
-        """创建 smolagents CodeAgent"""
-        # TODO: from smolagents import CodeAgent, HfApiModel
-        pass
+    def _build_prompt(self, ws: AgentWorkspace) -> str:
+        prompt_file = Path(__file__).parent / "prompts" / "smol.md"
+        base = prompt_file.read_text(encoding="utf-8")
+        task = (
+            f"\n\n## 当前任务\n"
+            f"- workspace: {ws.dir}\n"
+            f"- input 目录文件: {ws.list_inputs()}\n"
+            f"- 上下文文档: context/ 目录\n"
+            f"\n请按流程完成展平→入库→画像→映射→计算→输出，最终调用 `submit_final_result` 提交。"
+        )
+        return base + task
 
-    async def _execute_agent(self, agent, ws: AgentWorkspace) -> dict:
-        """启动 Agent，限制轮数，收集输出"""
-        # TODO: agent.run(prompt)
-        pass
+    # ── collect ──
 
-    def _validate_output(self, raw: dict) -> AgentResult:
-        """校验输出结构"""
+    def _collect_result(self, raw_output: str, ws: AgentWorkspace) -> AgentResult:
+        # 优先从 agent 写的 output/result.json 取
+        data = ws.read_output_json("result.json")
+        if data:
+            try:
+                return AgentResult.model_validate(data)
+            except Exception:
+                pass
+
+        # 其次从 agent.run() 返回值里提取 JSON
         try:
-            return AgentResult.model_validate(raw)
-        except Exception:
-            return AgentResult(raw_output=str(raw))
+            data = json.loads(raw_output)
+            return AgentResult.model_validate(data)
+        except (json.JSONDecodeError, Exception):
+            pass
+
+        # 最后尝试提取 markdown code block
+        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw_output, re.DOTALL)
+        if m:
+            try:
+                data = json.loads(m.group(1))
+                return AgentResult.model_validate(data)
+            except (json.JSONDecodeError, Exception):
+                pass
+
+        return AgentResult(raw_output=raw_output[:2000])

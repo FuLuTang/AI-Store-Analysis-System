@@ -340,35 +340,45 @@ class PydanticPipeline(AgentPipeline):
     def _parse_agent_output(
         self, ws: Workspace, output, metas: list[TableMeta]
     ) -> AgentResult:
-        """从 Agent 输出中提取 AgentResult。"""
+        """从 submit_final_result_tool 写入的 result.json 读取 AgentResult。"""
         import json
+
+        # 优先从 workspace 的 result.json 读取（submit_final_result_tool 写入）
+        result_path = ws.dir / "result.json"
+        if result_path.is_file():
+            try:
+                data = json.loads(result_path.read_text(encoding="utf-8"))
+                return AgentResult(
+                    report_id=ws.report_id,
+                    tables=metas,
+                    mapping=data.get("mapping", []),
+                    metrics=data.get("metrics", []),
+                    warnings=data.get("warnings", []),
+                    pipeline=self.name,
+                )
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # 回退：从 Agent 文本输出中提取 JSON
         text = str(output) if not isinstance(output, str) else output
-
-        warnings: list[str] = []
-
-        # 尝试从输出中提取 JSON
         try:
-            # 可能包裹在 ```json ... ``` 中
             if "```json" in text:
                 text = text.split("```json")[1].split("```")[0]
             elif "```" in text:
                 text = text.split("```")[1].split("```")[0]
-
             data = json.loads(text.strip())
-            result = AgentResult(
+            return AgentResult(
                 report_id=ws.report_id,
                 tables=metas,
                 mapping=data.get("mapping", []),
                 metrics=data.get("metrics", []),
-                warnings=data.get("warnings", warnings),
+                warnings=data.get("warnings", []),
                 pipeline=self.name,
             )
         except (json.JSONDecodeError, IndexError):
-            result = AgentResult(
+            return AgentResult(
                 report_id=ws.report_id,
                 tables=metas,
-                warnings=[*warnings, f"Agent 输出非标准 JSON，原文: {text[:500]}"],
+                warnings=[f"Agent 输出非标准 JSON，原文: {text[:500]}"],
                 pipeline=self.name,
             )
-
-        return result

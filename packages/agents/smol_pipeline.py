@@ -1,6 +1,5 @@
 """smol_pipeline.py — Smolagents CodeAgent 管线（方法2）
-编排器职责：创建 workspace → 注入上下文/tools → 启动 CodeAgent → 限制轮数 → 校验输出 → 清理
-内部步骤由 Agent 自行决定，编排器不写死步骤顺序。"""
+编排器：创建 workspace → 注入上下文 → 加载精简 tools → 启动 CodeAgent → 收结果 → 清理"""
 import asyncio
 import json
 import logging
@@ -12,11 +11,13 @@ from .workspace import AgentWorkspace
 
 logger = logging.getLogger(__name__)
 
+AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib"]
+
 
 class SmolPipeline(AgentPipeline):
 
-    def __init__(self, model_id: str = "deepseek-chat", max_rounds: int = 15):
-        self.model_id = model_id
+    def __init__(self, model=None, max_rounds: int = 15):
+        self.model = model
         self.max_rounds = max_rounds
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
@@ -61,12 +62,25 @@ class SmolPipeline(AgentPipeline):
     # ── agent ──
 
     def _make_agent(self, tools: list):
-        from smolagents import CodeAgent, HfApiModel
+        from smolagents import CodeAgent
+        model = self._resolve_model()
         return CodeAgent(
             tools=tools,
-            model=HfApiModel(self.model_id),
+            model=model,
             max_iterations=self.max_rounds,
+            additional_authorized_imports=AUTHORIZED_IMPORTS,
         )
+
+    def _resolve_model(self):
+        if self.model is not None:
+            return self.model
+        # 默认: DeepSeek via LiteLLM (OpenAI-compatible)
+        import os
+        from smolagents import LiteLLMModel
+        model_id = os.getenv("SMOL_MODEL_ID", "deepseek/deepseek-chat")
+        api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+        api_base = os.getenv("SMOL_API_BASE", "https://api.deepseek.com/v1")
+        return LiteLLMModel(model_id=model_id, api_key=api_key, api_base=api_base)
 
     def _build_prompt(self, ws: AgentWorkspace) -> str:
         prompt_file = Path(__file__).parent / "prompts" / "smol.md"
@@ -74,16 +88,15 @@ class SmolPipeline(AgentPipeline):
         task = (
             f"\n\n## 当前任务\n"
             f"- workspace: {ws.dir}\n"
-            f"- input 目录文件: {ws.list_inputs()}\n"
+            f"- input 文件: {ws.list_inputs()}\n"
             f"- 上下文文档: context/ 目录\n"
-            f"\n请按流程完成展平→入库→画像→映射→计算→输出，最终调用 `submit_final_result` 提交。"
+            f"\n完成后调用 `submit_final_result` 提交。"
         )
         return base + task
 
     # ── collect ──
 
     def _collect_result(self, raw_output: str, ws: AgentWorkspace) -> AgentResult:
-        # 优先从 agent 写的 output/result.json 取
         data = ws.read_output_json("result.json")
         if data:
             try:
@@ -91,14 +104,12 @@ class SmolPipeline(AgentPipeline):
             except Exception:
                 pass
 
-        # 其次从 agent.run() 返回值里提取 JSON
         try:
             data = json.loads(raw_output)
             return AgentResult.model_validate(data)
         except (json.JSONDecodeError, Exception):
             pass
 
-        # 最后尝试提取 markdown code block
         m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw_output, re.DOTALL)
         if m:
             try:

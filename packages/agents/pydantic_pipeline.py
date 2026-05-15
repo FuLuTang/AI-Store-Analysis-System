@@ -221,6 +221,53 @@ class PydanticPipeline(AgentPipeline):
             finally:
                 conn.close()
 
+        @agent.tool
+        async def read_workspace_file(ctx: RunContext[Workspace], filename: str) -> str:
+            """读取 workspace 中指定文件的内容。"""
+            ws = ctx.deps
+            try:
+                return ws.read_file(filename)
+            except FileNotFoundError:
+                return f"文件不存在: {filename}"
+
+        @agent.tool
+        async def write_workspace_file(ctx: RunContext[Workspace], filename: str, content: str) -> str:
+            """将内容写入 workspace 文件（脚本/manifest/中间结果）。"""
+            ws = ctx.deps
+            path = ws.write_file(filename, content)
+            return f"已写入: {path}"
+
+        @agent.tool
+        async def list_workspace_files(ctx: RunContext[Workspace]) -> list[str]:
+            """列出 workspace 目录下所有文件。"""
+            return ctx.deps.list_files()
+
+        @agent.tool
+        async def validate_result_tool(ctx: RunContext[Workspace], result_json: str) -> str:
+            """校验 AgentResult JSON 的完整性（tables/mapping/metrics/warnings）。"""
+            import json
+            errors = []
+            try:
+                data = json.loads(result_json)
+                if not isinstance(data.get("mapping"), list):
+                    errors.append("mapping 必须是数组")
+                if not isinstance(data.get("metrics"), list):
+                    errors.append("metrics 必须是数组")
+                if not isinstance(data.get("warnings"), list):
+                    errors.append("warnings 必须是数组（可为空）")
+                if not isinstance(data.get("tables"), list):
+                    errors.append("tables 必须是数组")
+            except json.JSONDecodeError as e:
+                errors.append(f"JSON 解析失败: {e}")
+            return "校验通过" if not errors else "校验失败: " + "; ".join(errors)
+
+        @agent.tool
+        async def submit_final_result_tool(ctx: RunContext[Workspace], result_json: str) -> str:
+            """强制提交标准 AgentResult JSON，写入 workspace 的 result.json。"""
+            ws = ctx.deps
+            ws.write_file("result.json", result_json)
+            return f"结果已提交至: {ws.dir / 'result.json'}"
+
     # ---- 内部执行 ----
 
     def _register_duckdb(self, ws: Workspace, metas: list[TableMeta]) -> None:

@@ -14,9 +14,11 @@
             <a href="index.html" class="active">用户工作台</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
-            <button class="settings-btn" onclick="openSettings()">
-                <i class="fas fa-cog"></i> 设置
-            </button>
+            <select id="reasoningEffortSelect" class="settings-btn" style="width:auto; padding:0 12px; margin-right:8px;">
+                <option value="medium">medium（默认）</option>
+                <option value="low">low（快速）</option>
+                <option value="high">high（深度）</option>
+            </select>
             <button class="settings-btn" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';" style="color:#ef4444;">
                 <i class="fas fa-sign-out-alt"></i> 退出
             </button>
@@ -92,27 +94,6 @@
         </div>
     </div>
 
-    <!-- 设置弹窗 -->
-    <div id="settingsModal" class="modal-overlay">
-        <div class="modal">
-            <h2><i class="fas fa-sliders-h"></i> 推理强度设置</h2>
-            <div class="form-group">
-                <label>reasoning_effort（仅支持 low / medium / high）</label>
-                <select id="settingReasoningEffort">
-                    <option value="low">low（快速）</option>
-                    <option value="medium">medium（默认）</option>
-                    <option value="high">high（深度）</option>
-                </select>
-            </div>
-            <div class="modal-actions">
-                <button class="btn-secondary" onclick="closeSettings()">取消</button>
-                <button class="btn" onclick="saveSettings()">
-                    <i class="fas fa-save"></i> 保存
-                </button>
-            </div>
-        </div>
-    </div>
-
     <script>
         // ========== 鉴权守卫 ==========
         function authHeaders() {
@@ -124,7 +105,7 @@
             const key = localStorage.getItem('X-FZT-Key');
             if (!key) { window.location.href = '/login.html'; return; }
             try {
-                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
                 if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
             } catch(e) { window.location.href = '/login.html'; }
         })();
@@ -406,53 +387,6 @@
             }
         }
 
-        let currentSettings = {
-            reasoningEffort: 'medium'
-        };
-        let currentHasKey = false;
-
-        // 页面加载时获取云端设置
-        fetch('/api/config', { headers: authHeaders() }).then(res => res.json()).then(data => {
-            if (data.reasoningEffort) currentSettings.reasoningEffort = data.reasoningEffort;
-            currentHasKey = !!data.hasKey;
-        }).catch(e => console.error('获取配置失败', e));
-
-        // === 设置相关 ===
-        function loadSettings() {
-            return currentSettings;
-        }
-
-        function openSettings() {
-            const s = loadSettings();
-            document.getElementById('settingReasoningEffort').value = s.reasoningEffort || 'medium';
-            document.getElementById('settingsModal').classList.add('open');
-        }
-
-        function closeSettings() {
-            document.getElementById('settingsModal').classList.remove('open');
-        }
-
-        async function saveSettings() {
-            const newSettings = {
-                reasoningEffort: document.getElementById('settingReasoningEffort').value
-            };
-            
-            try {
-                const resp = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-                    body: JSON.stringify(newSettings)
-                });
-                const latest = await resp.json();
-                currentSettings = newSettings;
-                if (typeof latest.hasKey === 'boolean') currentHasKey = latest.hasKey;
-                closeSettings();
-            } catch (err) {
-                alert('保存配置到云端失败！');
-                console.error(err);
-            }
-        }
-
         // === 文件上传 ===
         dropZone.onclick = () => fileInput.click();
         fileInput.onchange = (e) => handleFiles(e.target.files);
@@ -477,36 +411,23 @@
             fileListDisplay.innerHTML = '';
 
             Array.from(files).forEach(file => {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const arrayBuffer = e.target.result;
-                    const bytes = new Uint8Array(arrayBuffer);
-                    let binary = '';
-                    for (let i = 0; i < bytes.length; i++) {
-                        binary += String.fromCharCode(bytes[i]);
-                    }
-                    const b64 = btoa(binary);
-                    filesData.push({ name: file.name, base64: b64 });
+                filesData.push(file);
 
-                    const item = document.createElement('div');
-                    item.className = 'file-item';
-                    item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
-                    fileListDisplay.appendChild(item);
-
-                    if (filesData.length > 0) {
-                        startBtn.disabled = false;
-                        document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
-                    }
-                };
-                reader.readAsArrayBuffer(file);
+                const item = document.createElement('div');
+                item.className = 'file-item';
+                item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
+                fileListDisplay.appendChild(item);
             });
+
+            startBtn.disabled = false;
+            document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
         }
 
         // === 开始分析 ===
         startBtn.onclick = async () => {
             if (filesData.length === 0) return;
 
-            const settings = loadSettings();
+            const reasoningEffort = document.getElementById('reasoningEffortSelect').value || 'medium';
 
             startBtn.disabled = true;
             stopBtn.style.display = 'inline-flex';
@@ -516,20 +437,17 @@
             globalLogContainer.style.display = 'block';
             connectSSE();
             resultSection.classList.remove('visible');
-            statusText.innerText = currentHasKey
-                ? '正在提交分析任务...'
-                : '正在使用模拟模式（未配置 API）...';
+            statusText.innerText = '正在提交分析任务...';
 
             try {
-                const response = await fetch('/api/run', {
+                const formData = new FormData();
+                filesData.forEach(file => formData.append('files', file));
+                formData.append('reasoningEffort', reasoningEffort);
+
+                const response = await fetch('/api/analyze', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-                    body: JSON.stringify({
-                        files: filesData,
-                        settings: {
-                            reasoningEffort: settings.reasoningEffort
-                        }
-                    })
+                    headers: authHeaders(),
+                    body: formData
                 });
 
                 const data = await response.json();
@@ -566,9 +484,15 @@
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
 
-                filesData = data.files;
+                filesData = [];
                 fileListDisplay.innerHTML = '';
-                filesData.forEach((f) => {
+                data.files.forEach((f) => {
+                    const byteStr = atob(f.base64);
+                    const bytes = new Uint8Array(byteStr.length);
+                    for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
+                    const file = new File([bytes], f.name, { type: 'application/octet-stream' });
+                    filesData.push(file);
+
                     const item = document.createElement('div');
                     item.className = 'file-item';
                     item.innerHTML = `<i class="fas fa-file-code"></i> ${f.name || '案例文件'}`;

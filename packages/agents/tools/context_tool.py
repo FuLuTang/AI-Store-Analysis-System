@@ -1,14 +1,7 @@
-"""
-context_tool.py — 读上下文文档工具（两边共用）
-"""
-from .file_tool import get_workspace
+"""上下文文档读取（委托到 impl）"""
+from .impl.context_impl import read_context_impl
+from ..workspace import Workspace
 
 
-def read_context(doc_name: str) -> str:
-    """读取已注入 context/ 目录的文档"""
-    ws = get_workspace()
-    doc = ws.context_dir / doc_name
-    if not doc.exists():
-        available = [p.name for p in ws.context_dir.iterdir() if p.is_file()]
-        return f"文档不存在: {doc_name}。可用文档: {available}"
-    return doc.read_text(encoding="utf-8")
+def read_context(ws: Workspace, doc_name: str) -> str:
+    return read_context_impl(ws, doc_name)

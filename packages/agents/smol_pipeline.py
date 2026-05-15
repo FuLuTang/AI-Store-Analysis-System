@@ -1,13 +1,27 @@
-"""smol_pipeline.py — Smolagents CodeAgent 管线（方法2）
-编排器：创建 workspace → 注入上下文 → 加载精简 tools → 启动 CodeAgent → 收结果 → 清理"""
+"""Smolagents CodeAgent 管线（方法2）：写代码 → 沙箱执行。
+
+编排器职责：创建 workspace → 写 parquet → 初始化 DuckDB → 加载 tools → 启动 CodeAgent → 收集结果
+内部步骤由 Agent 自行决定，编排器不写死步骤顺序。
+工具通过 build_smol_tools(ws) 闭包注入，消除全局 get_workspace()。
+
+init 流程:
+  1. 创建 Workspace → 目录 + duckdb
+  2. 写原始数据为 parquet
+  3. 注入上下文文档
+  4. 注册 DuckDB 视图
+  5. 构建 tools + 创建 CodeAgent
+"""
 import asyncio
 import json
 import logging
+import os
 import re
+import time
 from pathlib import Path
+
 from .base import AgentPipeline
-from .models import DatasetBundle, AgentResult
-from .workspace import AgentWorkspace
+from .models import AgentResult, DatasetBundle
+from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -15,37 +29,37 @@ AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib", "os", "glob", "re"]
 
 
 class SmolPipeline(AgentPipeline):
+    name = "smol"
 
     def __init__(self, model=None, max_rounds: int = 15):
         self.model = model
         self.max_rounds = max_rounds
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
-        ws = AgentWorkspace(label="smol")
+        t0 = time.time()
+        ws = Workspace(label="smol")
+
         try:
-            self._stage_inputs(bundle, ws)
+            ws.write_raw_parquet(bundle.tables)
             self._stage_context(ws)
+            ws.init_duckdb()
+            ws.save_trace({"step": "init", "tables": len(bundle.tables)})
 
             tools = self._make_tools(ws)
             agent = self._make_agent(tools)
             prompt = self._build_prompt(ws)
 
+            ws.save_trace({"step": "agent_start", "tools": len(tools)})
             raw_output = await asyncio.to_thread(agent.run, prompt)
-            return self._collect_result(raw_output, ws)
+            ws.save_trace({"step": "agent_done"})
+
+            return self._collect_result(raw_output, ws, t0)
         finally:
             ws.cleanup()
 
     # ── staging ──
 
-    def _stage_inputs(self, bundle: DatasetBundle, ws: AgentWorkspace):
-        for table in bundle.tables:
-            ws.write_input_json(f"{table.name}.json", {
-                "name": table.name,
-                "columns": table.columns,
-                "rows": table.rows,
-            })
-
-    def _stage_context(self, ws: AgentWorkspace):
+    def _stage_context(self, ws: Workspace):
         ROOT = Path(__file__).parent.parent.parent
         docs_dir = ROOT / "docs"
         for name in ["指标计算文档.md"]:
@@ -55,9 +69,9 @@ class SmolPipeline(AgentPipeline):
 
     # ── tools ──
 
-    def _make_tools(self, ws: AgentWorkspace) -> list:
-        from .adapters.smol_tool_adapter import create_smol_tools
-        return create_smol_tools(ws)
+    def _make_tools(self, ws: Workspace) -> list:
+        from .adapters.smol_tools import build_smol_tools
+        return build_smol_tools(ws)
 
     # ── agent ──
 
@@ -74,15 +88,13 @@ class SmolPipeline(AgentPipeline):
     def _resolve_model(self):
         if self.model is not None:
             return self.model
-        # 默认: DeepSeek via LiteLLM (OpenAI-compatible)
-        import os
         from smolagents import LiteLLMModel
         model_id = os.getenv("SMOL_MODEL_ID", "deepseek/deepseek-chat")
         api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         api_base = os.getenv("SMOL_API_BASE", "https://api.deepseek.com/v1")
         return LiteLLMModel(model_id=model_id, api_key=api_key, api_base=api_base)
 
-    def _build_prompt(self, ws: AgentWorkspace) -> str:
+    def _build_prompt(self, ws: Workspace) -> str:
         prompt_file = Path(__file__).parent / "prompts" / "smol.md"
         base = prompt_file.read_text(encoding="utf-8")
         task = (
@@ -96,26 +108,40 @@ class SmolPipeline(AgentPipeline):
 
     # ── collect ──
 
-    def _collect_result(self, raw_output: str, ws: AgentWorkspace) -> AgentResult:
+    def _collect_result(self, raw_output: str, ws: Workspace, t0: float) -> AgentResult:
+        elapsed_ms = (time.time() - t0) * 1000
         data = ws.read_output_json("result.json")
-        if data:
-            try:
-                return AgentResult.model_validate(data)
-            except Exception:
-                pass
+
+        if not data:
+            data = self._extract_json(raw_output)
 
         try:
-            data = json.loads(raw_output)
-            return AgentResult.model_validate(data)
-        except (json.JSONDecodeError, Exception):
-            pass
+            return AgentResult(
+                report_id=ws.report_id,
+                pipeline=self.name,
+                elapsed_ms=elapsed_ms,
+                raw_output=raw_output[:2000],
+                **({"scene": data.get("scene"), "mapping": data.get("mapping", []),
+                    "metrics": data.get("metrics", []), "warnings": data.get("warnings", [])}
+                   if isinstance(data, dict) else {}),
+            )
+        except Exception:
+            return AgentResult(
+                report_id=ws.report_id,
+                pipeline=self.name,
+                elapsed_ms=elapsed_ms,
+                raw_output=raw_output[:2000],
+            )
 
-        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw_output, re.DOTALL)
+    def _extract_json(self, raw: str) -> dict | None:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
         if m:
             try:
-                data = json.loads(m.group(1))
-                return AgentResult.model_validate(data)
-            except (json.JSONDecodeError, Exception):
+                return json.loads(m.group(1))
+            except json.JSONDecodeError:
                 pass
-
-        return AgentResult(raw_output=raw_output[:2000])
+        return None

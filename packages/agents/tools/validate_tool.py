@@ -1,13 +1,6 @@
-"""
-validate_tool.py — 校验 Agent 输出（两边共用）
-"""
-from ..models import AgentResult
+"""AgentResult 校验（委托到 impl）"""
+from .impl.validate_impl import validate_result_impl
 
 
 def validate_result(raw: dict) -> dict:
-    """用 Pydantic 校验输出，兜底缺省值"""
-    try:
-        result = AgentResult.model_validate(raw)
-        return {"valid": True, "result": result.model_dump()}
-    except Exception as e:
-        return {"valid": False, "errors": str(e)[:500]}
+    return validate_result_impl(raw)

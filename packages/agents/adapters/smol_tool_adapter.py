@@ -6,12 +6,12 @@ CodeAgent 自己写 Python 能做的事：
   - 写文件: open("output/xxx", "w").write()
   - 列文件: os.listdir() / glob.glob()
   - 数据画像: pandas.read_parquet().info()
+  - DuckDB: duckdb.connect(":memory:").execute(...)  （agent 有 duckdb import 权限）
 
 保留为 tool 的事：
   - duckdb_query         — 只读 SQL 查询（防 Agent 写错 DuckDB API）
   - duckdb_register      — 固定注册步骤，减少犯蠢
   - read_context         — 稳定读指标文档
-  - list_tables          — 快速看 DuckDB 里有什么
   - validate_result      — 必须过 Pydantic 校验
   - submit_final_result  — smol 独有的提交动作
 """
@@ -32,9 +32,8 @@ def create_smol_tools(ws: AgentWorkspace) -> list:
     )
 
     @tool
-    def t_duckdb_query(sql: str) -> str:
+    def duckdb_query(sql: str) -> str:
         """Execute read-only SQL on DuckDB. Returns JSON.
-        The DuckDB instance already has registered tables.
 
         Args:
             sql: SELECT-only SQL query
@@ -42,7 +41,7 @@ def create_smol_tools(ws: AgentWorkspace) -> list:
         return duckdb_query(sql)
 
     @tool
-    def t_duckdb_register(table_name: str, parquet_path: str) -> str:
+    def duckdb_register(table_name: str, parquet_path: str) -> str:
         """Register a parquet file as a DuckDB table.
 
         Args:
@@ -52,7 +51,7 @@ def create_smol_tools(ws: AgentWorkspace) -> list:
         return duckdb_register_parquet(table_name, parquet_path)
 
     @tool
-    def t_read_context(doc_name: str) -> str:
+    def read_context(doc_name: str) -> str:
         """Read a context document from workspace context/ directory.
 
         Args:
@@ -61,24 +60,7 @@ def create_smol_tools(ws: AgentWorkspace) -> list:
         return read_context(doc_name)
 
     @tool
-    def t_list_tables() -> str:
-        """List all registered DuckDB tables and their row counts."""
-        import duckdb, json
-        con = duckdb.connect(":memory:")
-        try:
-            tables = con.execute(
-                "SELECT table_name, estimated_size FROM duckdb_tables()"
-            ).fetchall()
-            result = {}
-            for name, _ in tables:
-                count = con.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
-                result[name] = count
-            return json.dumps(result, ensure_ascii=False)
-        finally:
-            con.close()
-
-    @tool
-    def t_validate_result(result_json: str) -> str:
+    def validate_result(result_json: str) -> str:
         """Validate output JSON against AgentResult schema.
         Call this before submit_final_result.
 
@@ -93,7 +75,7 @@ def create_smol_tools(ws: AgentWorkspace) -> list:
         return _json.dumps(validate_result(data), ensure_ascii=False)
 
     @tool
-    def t_submit_final_result(result_json: str) -> str:
+    def submit_final_result(result_json: str) -> str:
         """Submit the final AgentResult. Writes to output/result.json.
         MUST call this as the LAST step after validate_result passes.
 
@@ -111,12 +93,11 @@ def create_smol_tools(ws: AgentWorkspace) -> list:
         return "Final result submitted to output/result.json"
 
     return [
-        t_duckdb_query,
-        t_duckdb_register,
-        t_read_context,
-        t_list_tables,
-        t_validate_result,
-        t_submit_final_result,
+        duckdb_query,
+        duckdb_register,
+        read_context,
+        validate_result,
+        submit_final_result,
     ]
 
 

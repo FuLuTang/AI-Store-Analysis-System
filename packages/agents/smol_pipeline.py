@@ -11,7 +11,7 @@ from .workspace import AgentWorkspace
 
 logger = logging.getLogger(__name__)
 
-AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib"]
+AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib", "os", "glob", "re"]
 
 
 class SmolPipeline(AgentPipeline):

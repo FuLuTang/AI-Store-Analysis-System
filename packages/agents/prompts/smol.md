@@ -6,12 +6,13 @@
 
 你是 CodeAgent，每一步可以**直接写 Python 代码**并执行。
 
-已授权的 Python 库：`json`, `pandas`, `duckdb`, `pathlib`
+已授权的 Python 库：`json`, `pandas`, `duckdb`, `pathlib`, `os`, `glob`, `re`
 
 文件操作直接用 Python，无需调工具：
 - 读文件: `open("input/xxx.json").read()`
 - 写文件: `open("output/xxx.parquet", "wb").write(...)`
-- 列文件: `os.listdir("input/")`
+- 列文件: `os.listdir("input/")` 或 `glob.glob("input/**/*")`
+- DuckDB 直连: `duckdb.connect(":memory:").execute(...)` — agent 有权限直接 import duckdb
 
 ## 可用工具
 
@@ -20,7 +21,6 @@
 | `duckdb_query(sql)` | 执行只读 DuckDB SQL，返回 JSON |
 | `duckdb_register(name, path)` | 注册 parquet 为 DuckDB 表 |
 | `read_context(doc)` | 读上下文文档（如 `指标计算文档.md`）|
-| `list_tables()` | 查看 DuckDB 中已注册的表 |
 | `validate_result(json_str)` | 校验输出是否符合 AgentResult schema |
 | `submit_final_result(json_str)` | **最终提交**，写 output/result.json |
 

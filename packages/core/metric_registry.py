@@ -87,6 +87,94 @@ _BUILTIN_METRICS = [
         "params": {"numerator": "member_revenue", "denominator": "revenue", "unit": "%"},
         "health_profiles": ["default"]
     },
+    {
+        "metric_id": "revenue_consecutive",
+        "name": "营收连续涨跌",
+        "required_fields": ["date", "revenue"],
+        "domains": ["pharmacy", "restaurant", "retail", "hr", "generic"],
+        "calculator": "consecutive_change",
+        "params": {"field": "revenue"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "customer_change",
+        "name": "客流趋势",
+        "required_fields": ["date", "customer_count"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "period_change",
+        "params": {"field": "customer_count"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "gross_margin_trend",
+        "name": "毛利率趋势",
+        "required_fields": ["date", "revenue", "gross_profit"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "gross_margin_trend",
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "customer_consecutive",
+        "name": "客流连续涨跌",
+        "required_fields": ["date", "customer_count"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "consecutive_change",
+        "params": {"field": "customer_count"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "growth_decomposition",
+        "name": "增长拆解",
+        "required_fields": ["date", "revenue", "order_count"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "growth_decomposition",
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "total_sales_quantity",
+        "name": "总销量",
+        "required_fields": ["sales_quantity"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "sum_field",
+        "params": {"field": "sales_quantity"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "product_diversity",
+        "name": "商品种类",
+        "required_fields": ["product_name"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "distinct_count",
+        "params": {"field": "product_name"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "price_range",
+        "name": "价格带",
+        "required_fields": ["retail_price"],
+        "domains": ["pharmacy", "retail", "generic"],
+        "calculator": "field_stats",
+        "params": {"field": "retail_price"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "cost_ratio",
+        "name": "成本率",
+        "required_fields": ["cost", "revenue"],
+        "domains": ["pharmacy", "restaurant", "retail", "generic"],
+        "calculator": "ratio",
+        "params": {"numerator": "cost", "denominator": "revenue", "unit": "%"},
+        "health_profiles": ["default"]
+    },
+    {
+        "metric_id": "member_rate",
+        "name": "会员占比",
+        "required_fields": ["member_revenue", "revenue"],
+        "domains": ["pharmacy", "retail", "generic"],
+        "calculator": "ratio",
+        "params": {"numerator": "member_revenue", "denominator": "revenue", "unit": "%"},
+        "health_profiles": ["default"]
+    },
     # 餐饮专属
     {
         "metric_id": "delivery_timeout_rate",

@@ -1,0 +1,29 @@
+{
+  "method": "XiaoTangPush",
+  "time": "1778825283",
+  "plat": "11",
+  "company_code": "4366454557",
+  "data": {
+    "summary_short": {
+        "health_status": "整体状态",
+        "overview_text": "一句话解释",
+        "cards": [
+            {
+            "title": "卡片1",
+            "explanation": "解释原因",
+            "suggestion": "建议",
+            "evidence": "证据",
+            "color": "red"
+            },
+            {
+            "title": "卡片2",
+            "explanation": "解释原因",
+            "suggestion": "建议",
+            "evidence": "证据",
+            "color": "green"
+            }
+        ]
+    },
+    "summary_long": "完整报告，markdown，以string回传"
+  }
+}

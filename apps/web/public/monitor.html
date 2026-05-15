@@ -43,87 +43,99 @@
                     </div>
                 </div>
 
-                <div class="v-connector"></div>
-
-                <!-- 语义理解 · AI辅助 -->
-                <div class="flow-row">
-                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #a78bfa; background: #faf5ff;">
-                        <div style="font-size: 0.65rem; color: #a78bfa; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">语义理解 · AI辅助</div>
-                        <div id="scene" class="node pending">
-                            <div class="node-title"><i class="fas fa-lightbulb"></i> <span>场景识别 (AI)</span></div>
-                            <div class="node-log" id="log-scene"></div>
-                        </div>
-                        <div class="v-connector"></div>
-                        <div id="mapping" class="node pending">
-                            <div class="node-title"><i class="fas fa-tags"></i> <span>语义映射 (AI)</span></div>
-                            <div class="node-log" id="log-mapping"></div>
-                        </div>
-                    </div>
+                <!-- 并行分支标识 -->
+                <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin:4px 0;">
+                    <div style="height:2px;flex:1;background:#94a3b8;"></div>
+                    <span style="font-size:0.7rem;color:#64748b;font-weight:600;">⬇ 并行 ⬇</span>
+                    <div style="height:2px;flex:1;background:#94a3b8;"></div>
                 </div>
 
-                <div class="v-connector"></div>
-
-                <!-- 标准数据与指标 · 纯算法 -->
-                <div class="flow-row">
-                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                        <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">标准数据与指标 · 纯算法</div>
-                        <div id="canonical" class="node pending">
-                            <div class="node-title"><i class="fas fa-layer-group"></i> <span>标准数据层</span></div>
-                            <div class="node-log" id="log-canonical"></div>
-                        </div>
-                        <div class="v-connector"></div>
-                        <div id="registry" class="node pending">
-                            <div class="node-title"><i class="fas fa-list-check"></i> <span>指标匹配</span></div>
-                            <div class="node-log" id="log-registry"></div>
-                        </div>
-                        <div class="v-connector"></div>
-                        <div id="engine" class="node pending">
-                            <div class="node-title">
-                                <i class="fas fa-calculator"></i> <span>指标计算</span>
-                                <span id="engine-progress" class="progress-badge" style="display:none;">0/0</span>
+                <!-- 并行：左边 AI 初诊，右边 语义+指标 -->
+                <div style="display:flex;gap:1rem;">
+                    <!-- 左侧：AI 初诊 · 并行 -->
+                    <div style="flex:1;min-width:0;">
+                        <div class="flow-row">
+                            <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #8b5cf6; background: #faf5ff;">
+                                <div style="font-size: 0.65rem; color: #8b5cf6; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">AI 初诊 · 并行（纯数据结构）</div>
+                                <div id="report" class="node pending">
+                                    <div class="node-title"><i class="fas fa-robot"></i> <span>AI初诊报告</span></div>
+                                    <div class="node-log" id="log-report"></div>
+                                </div>
+                                <div class="v-connector"></div>
+                                <div id="review" class="node pending">
+                                    <div class="node-title"><i class="fas fa-search-check"></i> <span>错误评审 (AI)</span></div>
+                                    <div class="node-log" id="log-review"></div>
+                                </div>
                             </div>
-                            <div class="node-log" id="log-engine"></div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：语义理解 + 标准数据与指标 -->
+                    <div style="flex:1;min-width:0;">
+                        <div class="flow-row">
+                            <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #a78bfa; background: #faf5ff;">
+                                <div style="font-size: 0.65rem; color: #a78bfa; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">语义理解 · AI辅助</div>
+                                <div id="scene" class="node pending">
+                                    <div class="node-title"><i class="fas fa-lightbulb"></i> <span>场景识别 (AI)</span></div>
+                                    <div class="node-log" id="log-scene"></div>
+                                </div>
+                                <div class="v-connector"></div>
+                                <div id="mapping" class="node pending">
+                                    <div class="node-title"><i class="fas fa-tags"></i> <span>语义映射 (AI)</span></div>
+                                    <div class="node-log" id="log-mapping"></div>
+                                </div>
+                            </div>
                         </div>
                         <div class="v-connector"></div>
-                        <div id="threshold" class="node pending">
-                            <div class="node-title">
-                                <i class="fas fa-scale-balanced"></i> <span>健康判断</span>
-                                <span id="threshold-tally" class="tally-badges" style="display:none;"></span>
+                        <div class="flow-row">
+                            <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
+                                <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">标准数据与指标 · 纯算法</div>
+                                <div id="canonical" class="node pending">
+                                    <div class="node-title"><i class="fas fa-layer-group"></i> <span>标准数据层</span></div>
+                                    <div class="node-log" id="log-canonical"></div>
+                                </div>
+                                <div class="v-connector"></div>
+                                <div id="registry" class="node pending">
+                                    <div class="node-title"><i class="fas fa-list-check"></i> <span>指标匹配</span></div>
+                                    <div class="node-log" id="log-registry"></div>
+                                </div>
+                                <div class="v-connector"></div>
+                                <div id="engine" class="node pending">
+                                    <div class="node-title">
+                                        <i class="fas fa-calculator"></i> <span>指标计算</span>
+                                        <span id="engine-progress" class="progress-badge" style="display:none;">0/0</span>
+                                    </div>
+                                    <div class="node-log" id="log-engine"></div>
+                                </div>
+                                <div class="v-connector"></div>
+                                <div id="threshold" class="node pending">
+                                    <div class="node-title">
+                                        <i class="fas fa-scale-balanced"></i> <span>健康判断</span>
+                                        <span id="threshold-tally" class="tally-badges" style="display:none;"></span>
+                                    </div>
+                                    <div class="node-log" id="log-threshold"></div>
+                                </div>
+                                <div class="v-connector"></div>
+                                <div id="evidence" class="node pending">
+                                    <div class="node-title"><i class="fas fa-database"></i> <span>证据包</span></div>
+                                    <div class="node-log" id="log-evidence"></div>
+                                </div>
                             </div>
-                            <div class="node-log" id="log-threshold"></div>
                         </div>
                     </div>
                 </div>
 
-                <div class="v-connector"></div>
-
-                <!-- 证据构建 · 纯算法 -->
-                <div class="flow-row">
-                    <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                        <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">证据构建 · 纯算法</div>
-                        <div id="evidence" class="node pending">
-                            <div class="node-title"><i class="fas fa-database"></i> <span>证据包</span></div>
-                            <div class="node-log" id="log-evidence"></div>
-                        </div>
-                    </div>
+                <!-- 合并分支标识 -->
+                <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin:4px 0;">
+                    <div style="height:2px;flex:1;background:#94a3b8;"></div>
+                    <span style="font-size:0.7rem;color:#64748b;font-weight:600;">⬇ 合并 ⬇</span>
+                    <div style="height:2px;flex:1;background:#94a3b8;"></div>
                 </div>
 
-                <div class="v-connector"></div>
-
-                <!-- AI 报告生成 -->
+                <!-- 融合 + 深度报告 · AI -->
                 <div class="flow-row">
                     <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #8b5cf6; background: #faf5ff;">
-                        <div style="font-size: 0.65rem; color: #8b5cf6; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">AI 报告生成</div>
-                        <div id="report" class="node pending">
-                            <div class="node-title"><i class="fas fa-robot"></i> <span>AI初诊报告</span></div>
-                            <div class="node-log" id="log-report"></div>
-                        </div>
-                        <div class="v-connector"></div>
-                        <div id="review" class="node pending">
-                            <div class="node-title"><i class="fas fa-search-check"></i> <span>错误评审 (AI)</span></div>
-                            <div class="node-log" id="log-review"></div>
-                        </div>
-                        <div class="v-connector"></div>
+                        <div style="font-size: 0.65rem; color: #8b5cf6; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">报告生成 · AI</div>
                         <div id="fusion" class="node pending">
                             <div class="node-title"><i class="fas fa-object-group"></i> <span>数据融合</span></div>
                             <div class="node-log" id="log-fusion"></div>
@@ -155,7 +167,7 @@
             const key = localStorage.getItem('X-FZT-Key');
             if (!key) { window.location.href = '/login.html'; return; }
             try {
-                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
                 if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
             } catch(e) { window.location.href = '/login.html'; }
         })();

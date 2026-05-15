@@ -26,11 +26,12 @@ def build_canonical_dataset(dataset_bundle: dict, mappings: list, scene: dict) -
     # 构建 raw_field → semantic_field 的查找表
     field_map = {}
     for m in mappings:
-        if m.get("semantic_field") != "unknown":
+        sf = m.get("semantic_field", "unknown")
+        if sf not in ("unknown", "ignore"):
             table_name = m.get("table", "")
             raw_field = m["raw_field"]
-            field_map[f"{table_name}::{raw_field}"] = m["semantic_field"]
-            field_map[raw_field] = m["semantic_field"]
+            field_map[f"{table_name}::{raw_field}"] = sf
+            field_map[raw_field] = sf
 
     # 第一遍：收集所有待归类的行
     pending = {}  # target → list of dicts
@@ -95,7 +96,7 @@ def build_canonical_dataset(dataset_bundle: dict, mappings: list, scene: dict) -
         if date_index:
             if target not in canonical:
                 canonical[target] = []
-            for dk in sorted(date_index.keys()):
+            for dk in sorted(date_index.keys(), key=str):
                 canonical[target].append(date_index[dk])
 
         # 无 date 的行追加

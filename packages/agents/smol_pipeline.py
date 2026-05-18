@@ -81,9 +81,8 @@ class SmolPipeline(AgentPipeline):
                 ws.write_context(name, doc.read_text(encoding="utf-8"))
 
     def _write_plan(self, ws: Workspace):
-        plan_path = ws.resolve("output/plan.json")
-        plan_path.parent.mkdir(parents=True, exist_ok=True)
-        plan_path.write_text(json.dumps(PLAN_TEMPLATE, ensure_ascii=False, indent=2), encoding="utf-8")
+        from .tools.impl.setup_impl import design_plan_impl
+        design_plan_impl(ws, json.dumps(PLAN_TEMPLATE, ensure_ascii=False))
 
     # ── tools ──
 

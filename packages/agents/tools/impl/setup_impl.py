@@ -50,3 +50,12 @@ def list_tables_impl(ws: Workspace) -> str:
         return f"DuckDB 可用表 ({len(names)}): {', '.join(names)}" if names else "DuckDB 中暂无表"
     finally:
         con.close()
+
+
+def design_plan_impl(ws: Workspace, plan_json: str) -> str:
+    """初始化任务清单：写入 output/plan.json。仅启动时由编排器调用，不暴露给 Agent。"""
+    plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+    plan_path = ws.resolve("output/plan.json")
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    return f"Plan registered: {len(plan)} steps"

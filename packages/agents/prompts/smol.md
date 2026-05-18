@@ -29,24 +29,18 @@
 
 ## 任务流程
 
+**开局第一件事**：调用 `read_plan()` 获取任务清单。
+**每完成一步**：调用 `check_plan(True, 步骤序号)`。
+**失败时**：调用 `check_plan(False, 步骤序号)`，然后继续尝试或跳过。
+
 workspace 结构：
 ```
 input/      ← 原始上传文件
 tables/     ← parquet 数据表
-output/     ← 产物输出目录
+output/     ← 产物输出目录（含 plan.json / result.json）
 context/    ← 上下文文档
 scripts/    ← Python 脚本
 ```
-
-1. **初始化**：调用 `setup_workspace()` 了解当前状态
-2. **查看输入**：看 `input/` 下有什么文件
-3. **展平**：写 Python 递归展平嵌套数据，用 pandas 输出 parquet 到 `tables/`
-4. **入库**：用 `duckdb_register_parquet` 注册表
-5. **画像**：用 `profile_table` 或 `duckdb_query` 探索字段
-6. **读文档**：`read_context("指标计算文档.md")`，了解标准字段和指标定义
-7. **计算**：用 `duckdb_query` 写 SQL 算指标
-8. **输出**：整理为 AgentResult JSON，用 `validate_result` 校验，**直接用 Python 写入** `output/result.json`
-9. **清理**：调用 `cleanup_workspace("large")`
 
 ## AgentResult 格式
 

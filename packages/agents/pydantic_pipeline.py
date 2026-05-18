@@ -71,7 +71,7 @@ class PydanticPipeline(AgentPipeline):
 
         sql_result = await self._run_sql_phase(ws, flat_metas, mappings)
         all_phases.append(sql_result)
-        metrics = sql_result.output if sql_result.status != "failed" else []
+        metrics = sql_result.output  # 始终保留，含 UNCOUNTABLE
         all_warnings.extend(sql_result.warnings)
 
         return AgentResult(
@@ -279,6 +279,7 @@ class PydanticPipeline(AgentPipeline):
     ) -> PhaseResult:
         errors: list[str] = []
         msg_history = None
+        last_metrics: list = []
 
         for attempt in range(1, MAX_RETRIES + 1):
             agent = self._build_phase_agent(ws, SqlPlan, "sql")
@@ -299,22 +300,26 @@ class PydanticPipeline(AgentPipeline):
                 errors.append(f"Agent 调用失败: {e}")
                 continue
 
-            sql_errors = self._validate_sql_plan(plan, flat_metas)
-            if sql_errors:
-                errors = sql_errors
+            val_errors = self._validate_sql_plan(plan, flat_metas)
+            if val_errors:
+                errors = val_errors
                 continue
 
             metrics, exec_errors = self._execute_sql(ws, plan)
+            last_metrics = metrics
+
             if not exec_errors:
                 return PhaseResult(
                     phase="sql", status="success",
                     attempts=attempt, output=metrics,
                 )
+
+            # 执行错误保留 retry，但不丢 uncountable 结果
             errors = exec_errors
 
         return PhaseResult(
-            phase="sql", status="failed", attempts=MAX_RETRIES,
-            errors=errors, output=[],
+            phase="sql", status="partial", attempts=MAX_RETRIES,
+            errors=errors, output=last_metrics,
         )
 
     def _build_sql_prompt(

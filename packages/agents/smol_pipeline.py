@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 
 AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib", "os", "glob", "re"]
 
+PLAN_TEMPLATE = [
+    {"title": "查看输入文件", "detail": "列出 input/ 下所有文件，了解数据格式和结构", "status": "pending"},
+    {"title": "展平并输出 parquet", "detail": "写 Python 递归展平嵌套数据为二维表，用 pandas 输出 parquet 到 tables/", "status": "pending"},
+    {"title": "入库，用 duckdb_register_parquet 注册表", "detail": "把展平后的结构化数据注册到 DuckDB，通过写 Python 检查所有数据都入库了才标记完成（出错的噪声数据可以除外）", "status": "pending"},
+    {"title": "画像，用 profile_table 或 duckdb_query 探索字段", "detail": "获取每个表的列名、类型、样本、空值率", "status": "pending"},
+    {"title": "读文档，read_context('指标计算文档.md')", "detail": "了解标准字段定义和指标计算公式", "status": "pending"},
+    {"title": "映射，原始字段→标准字段", "detail": "根据上下文文档将原始字段映射到标准语义字段", "status": "pending"},
+    {"title": "计算指标", "detail": "用 duckdb_query 写 SQL 计算各项指标", "status": "pending"},
+    {"title": "输出 AgentResult", "detail": "整理结果，validate_result 校验，写入 output/result.json", "status": "pending"},
+    {"title": "清理大文件", "detail": "调用 cleanup_workspace('large')", "status": "pending"},
+]
+
 
 class SmolPipeline(AgentPipeline):
     name = "smol"
@@ -45,6 +57,7 @@ class SmolPipeline(AgentPipeline):
             ws.init_duckdb()
             ws.save_trace({"step": "init", "tables": len(bundle.tables)})
 
+            self._write_plan(ws)
             tools = self._make_tools(ws)
             agent = self._make_agent(tools)
             prompt = self._build_prompt(ws)
@@ -66,6 +79,11 @@ class SmolPipeline(AgentPipeline):
             doc = docs_dir / name
             if doc.exists():
                 ws.write_context(name, doc.read_text(encoding="utf-8"))
+
+    def _write_plan(self, ws: Workspace):
+        plan_path = ws.resolve("output/plan.json")
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(json.dumps(PLAN_TEMPLATE, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # ── tools ──
 

@@ -23,6 +23,8 @@
 | `profile_table(path)` | 读取 parquet 字段画像 |
 | `validate_result(json_str)` | 校验输出是否符合 AgentResult schema |
 | `list_tables()` | 查看 DuckDB 中已注册的表 |
+| `read_plan()` | 读取任务清单（output/plan.json） |
+| `check_plan(success, step_index)` | 标记某步完成或失败，如 `check_plan(True, 0)` |
 | `cleanup_workspace(mode)` | 清理大文件（完成后调用） |
 
 ## 任务流程

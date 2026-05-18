@@ -65,6 +65,32 @@ def build_smol_tools(ws: Workspace):
     def list_tables() -> str:
         return list_tables_impl(ws)
 
+    @tool
+    def read_plan() -> str:
+        """Read the task plan from output/plan.json. Returns JSON array of steps with status."""
+        plan_path = ws.resolve("output/plan.json")
+        if not plan_path.exists():
+            return json.dumps({"error": "plan.json not found"})
+        return plan_path.read_text(encoding="utf-8")
+
+    @tool
+    def check_plan(success: bool, step_index: int) -> str:
+        """Mark a plan step as success or failed.
+
+        Args:
+            success: True = success, False = failed
+            step_index: Index of the step in the plan (0-based)
+        """
+        plan_path = ws.resolve("output/plan.json")
+        if not plan_path.exists():
+            return json.dumps({"error": "plan.json not found"})
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if step_index < 0 or step_index >= len(plan):
+            return json.dumps({"error": f"step_index {step_index} out of range (0-{len(plan)-1})"})
+        plan[step_index]["status"] = "success" if success else "failed"
+        plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        return f"Step {step_index} marked as {'success' if success else 'failed'}"
+
     return [
         read_file, write_file, list_files,
         run_python,
@@ -73,4 +99,5 @@ def build_smol_tools(ws: Workspace):
         profile_table,
         validate_result,
         setup_workspace, cleanup_workspace, list_tables,
+        read_plan, check_plan,
     ]

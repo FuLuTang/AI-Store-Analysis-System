@@ -6,13 +6,16 @@
 3. SQL Phase: Agent 输出 SqlPlan → 程序校验 + 执行
 
 每阶段允许多轮 retry，程序判断成功/部分成功/失败。
+记录 token 用量和 DeepSeek KV Cache 命中情况。
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
+from typing import Any
 
 from packages.agents.base import AgentPipeline
 from packages.agents.models import (
@@ -27,9 +30,41 @@ from packages.agents.models import (
 from packages.agents.workspace import Workspace
 from packages.agents.workspace import _quote_ident as _q
 
-logger = logging.getLogger(__name__)
+# pydantic-ai 必须在模块级导入，否则 tool 函数的 RunContext[Workspace] 标注 get_type_hints() 解析失败
+try:
+    from pydantic_ai import RunContext  # noqa: F811
+except ImportError:
+    RunContext = None  # type: ignore[assignment]
+
+logger = logging.getLogger("agent.pydantic")
 
 MAX_RETRIES = 3
+
+
+def _extract_usage(usage: Any) -> dict:
+    """提取 token 用量为 dict。"""
+    try:
+        return {
+            "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+            "cache_read_tokens": getattr(usage, "cache_read_tokens", 0) or 0,
+            "requests": getattr(usage, "requests", 0) or 0,
+            "tool_calls": getattr(usage, "tool_calls", 0) or 0,
+        }
+    except Exception:
+        return {}
+
+
+def _usage_to_phase(usage_dict: dict) -> dict:
+    """将 usage dict 转为 PhaseResult 字段。"""
+    return {
+        "input_tokens": usage_dict.get("input_tokens", 0),
+        "output_tokens": usage_dict.get("output_tokens", 0),
+        "cache_hit_tokens": usage_dict.get("cache_read_tokens", 0),
+        "cache_miss_tokens": usage_dict.get("input_tokens", 0) - usage_dict.get("cache_read_tokens", 0),
+        "requests": usage_dict.get("requests", 0),
+        "tool_calls": usage_dict.get("tool_calls", 0),
+    }
 
 
 class PydanticPipeline(AgentPipeline):
@@ -41,7 +76,7 @@ class PydanticPipeline(AgentPipeline):
         base_url: str | None = None,
         api_key: str | None = None,
     ):
-        self.model = model or os.getenv("AGENT_MODEL", "deepseek-chat")
+        self.model = model or os.getenv("AGENT_MODEL", "deepseek-v4-pro")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
 
@@ -54,25 +89,48 @@ class PydanticPipeline(AgentPipeline):
         ws = Workspace()
         all_warnings: list[str] = []
         all_phases: list[PhaseResult] = []
+        total_tokens = input_tokens_total = cache_hit_total = 0
+
+        logger.info(f"[run] report_id={ws.report_id} tables={len(bundle.tables)} model={self.model}")
 
         raw_metas = ws.write_raw_parquet(bundle.tables)
+        logger.info(f"[run] raw parquet: {len(raw_metas)} 张, workspace={ws.report_id}")
         ws.init_duckdb()
 
+        # Phase 1: Flatten
         flat_result = await self._run_flatten_phase(ws, raw_metas)
         all_phases.append(flat_result)
         flat_metas = flat_result.output if flat_result.status != "failed" else raw_metas
         all_warnings.extend(flat_result.warnings)
-        ws.init_duckdb()  # 重新扫描，注册展平后新产生的 parquet
+        total_tokens += flat_result.input_tokens + flat_result.output_tokens
+        input_tokens_total += flat_result.input_tokens
+        cache_hit_total += flat_result.cache_hit_tokens
+        ws.init_duckdb()
 
+        # Phase 2: Mapping
         mapping_result = await self._run_mapping_phase(ws, flat_metas)
         all_phases.append(mapping_result)
         mappings = mapping_result.output if mapping_result.status != "failed" else []
         all_warnings.extend(mapping_result.warnings)
+        total_tokens += mapping_result.input_tokens + mapping_result.output_tokens
+        input_tokens_total += mapping_result.input_tokens
+        cache_hit_total += mapping_result.cache_hit_tokens
 
+        # Phase 3: SQL
         sql_result = await self._run_sql_phase(ws, flat_metas, mappings)
         all_phases.append(sql_result)
         metrics = sql_result.output  # 始终保留，含 UNCOUNTABLE
         all_warnings.extend(sql_result.warnings)
+        total_tokens += sql_result.input_tokens + sql_result.output_tokens
+        input_tokens_total += sql_result.input_tokens
+        cache_hit_total += sql_result.cache_hit_tokens
+
+        elapsed = (time.time() - t0) * 1000
+        logger.info(
+            f"[run] 完成 elapsed={elapsed:.0f}ms total_tokens={total_tokens} "
+            f"input_tokens={input_tokens_total} cache_hit={cache_hit_total} "
+            f"ratio={cache_hit_total / max(input_tokens_total, 1) * 100:.1f}%"
+        )
 
         return AgentResult(
             report_id=ws.report_id,
@@ -81,7 +139,11 @@ class PydanticPipeline(AgentPipeline):
             metrics=metrics,
             warnings=all_warnings,
             pipeline=self.name,
-            elapsed_ms=(time.time() - t0) * 1000,
+            elapsed_ms=elapsed,
+            total_tokens=total_tokens,
+            input_tokens=input_tokens_total,
+            cache_hit_tokens=cache_hit_total,
+            phases=all_phases,
         )
 
     # ================================================================
@@ -93,6 +155,9 @@ class PydanticPipeline(AgentPipeline):
     ) -> PhaseResult:
         errors: list[str] = []
         msg_history = None
+        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "requests": 0, "tool_calls": 0}
+
+        logger.info(f"[flatten] 开始, 原始表 {len(raw_metas)} 张")
 
         for attempt in range(1, MAX_RETRIES + 1):
             agent = self._build_phase_agent(ws, FlattenPlan, "flatten")
@@ -109,22 +174,35 @@ class PydanticPipeline(AgentPipeline):
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
                 plan: FlattenPlan = result.output
                 msg_history = result.all_messages()
+                u = _extract_usage(result.usage)
+                logger.info(
+                    f"[flatten#{attempt}] tokens: in={u.get('input_tokens')} out={u.get('output_tokens')} "
+                    f"cache_hit={u.get('cache_read_tokens')} tools={u.get('tool_calls')}"
+                )
+                for k in usage_sum:
+                    usage_sum[k] += u.get(k, 0)
             except Exception as e:
+                logger.error(f"[flatten#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
                 continue
 
             flat_metas, exec_errors = self._execute_flatten(ws, plan, raw_metas)
             if not exec_errors:
+                logger.info(f"[flatten#{attempt}] 成功, 产出 {len(flat_metas)} 张 flat table")
                 return PhaseResult(
                     phase="flatten", status="success",
                     attempts=attempt, output=flat_metas,
+                    **_usage_to_phase(usage_sum),
                 )
             errors = exec_errors
+            logger.warning(f"[flatten#{attempt}] 失败: {'; '.join(errors)}")
 
+        logger.error(f"[flatten] 全部 {MAX_RETRIES} 次失败")
         return PhaseResult(
             phase="flatten", status="failed", attempts=MAX_RETRIES,
             errors=errors, output=raw_metas,
             warnings=["Flatten 阶段失败，使用原始表继续"],
+            **_usage_to_phase(usage_sum),
         )
 
     def _build_flatten_prompt(self, metas: list[TableMeta]) -> str:
@@ -190,6 +268,9 @@ class PydanticPipeline(AgentPipeline):
         errors: list[str] = []
         msg_history = None
         mappings: list[SemanticMapping] = []
+        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "requests": 0, "tool_calls": 0}
+
+        logger.info(f"[mapping] 开始, flat table {len(flat_metas)} 张")
 
         for attempt in range(1, MAX_RETRIES + 1):
             agent = self._build_phase_agent(ws, list[SemanticMapping], "mapping")
@@ -206,21 +287,34 @@ class PydanticPipeline(AgentPipeline):
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
                 mappings = result.output
                 msg_history = result.all_messages()
+                u = _extract_usage(result.usage)
+                logger.info(
+                    f"[mapping#{attempt}] tokens: in={u.get('input_tokens')} out={u.get('output_tokens')} "
+                    f"cache_hit={u.get('cache_read_tokens')} tools={u.get('tool_calls')}"
+                )
+                for k in usage_sum:
+                    usage_sum[k] += u.get(k, 0)
             except Exception as e:
+                logger.error(f"[mapping#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
                 continue
 
             map_errors = self._validate_mappings(mappings, flat_metas)
             if not map_errors:
+                logger.info(f"[mapping#{attempt}] 成功, {len(mappings)} 条映射")
                 return PhaseResult(
                     phase="mapping", status="success",
                     attempts=attempt, output=mappings,
+                    **_usage_to_phase(usage_sum),
                 )
             errors = map_errors
+            logger.warning(f"[mapping#{attempt}] 失败: {'; '.join(errors)}")
 
+        logger.error(f"[mapping] 全部 {MAX_RETRIES} 次失败")
         return PhaseResult(
             phase="mapping", status="failed", attempts=MAX_RETRIES,
             errors=errors, output=mappings,
+            **_usage_to_phase(usage_sum),
         )
 
     def _build_mapping_prompt(self, metas: list[TableMeta]) -> str:
@@ -280,6 +374,9 @@ class PydanticPipeline(AgentPipeline):
         errors: list[str] = []
         msg_history = None
         last_metrics: list = []
+        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "requests": 0, "tool_calls": 0}
+
+        logger.info(f"[sql] 开始, {len(flat_metas)} 张表, {len(mappings)} 条映射")
 
         for attempt in range(1, MAX_RETRIES + 1):
             agent = self._build_phase_agent(ws, SqlPlan, "sql")
@@ -296,30 +393,43 @@ class PydanticPipeline(AgentPipeline):
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
                 plan: SqlPlan = result.output
                 msg_history = result.all_messages()
+                u = _extract_usage(result.usage)
+                logger.info(
+                    f"[sql#{attempt}] tokens: in={u.get('input_tokens')} out={u.get('output_tokens')} "
+                    f"cache_hit={u.get('cache_read_tokens')} tools={u.get('tool_calls')}"
+                )
+                for k in usage_sum:
+                    usage_sum[k] += u.get(k, 0)
             except Exception as e:
+                logger.error(f"[sql#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
                 continue
 
             val_errors = self._validate_sql_plan(plan, flat_metas)
             if val_errors:
                 errors = val_errors
+                logger.warning(f"[sql#{attempt}] 校验失败: {'; '.join(val_errors)}")
                 continue
 
             metrics, exec_errors = self._execute_sql(ws, plan)
             last_metrics = metrics
 
             if not exec_errors:
+                logger.info(f"[sql#{attempt}] 成功, {len(metrics)} 条指标")
                 return PhaseResult(
                     phase="sql", status="success",
                     attempts=attempt, output=metrics,
+                    **_usage_to_phase(usage_sum),
                 )
 
-            # 执行错误保留 retry，但不丢 uncountable 结果
             errors = exec_errors
+            logger.warning(f"[sql#{attempt}] 执行失败: {'; '.join(exec_errors)}")
 
+        logger.error(f"[sql] 全部 {MAX_RETRIES} 次失败, 保留 {len(last_metrics)} 条指标")
         return PhaseResult(
             phase="sql", status="partial", attempts=MAX_RETRIES,
             errors=errors, output=last_metrics,
+            **_usage_to_phase(usage_sum),
         )
 
     def _build_sql_prompt(
@@ -361,13 +471,6 @@ class PydanticPipeline(AgentPipeline):
             errors.append("SqlPlan 中 metrics 为空")
             return errors
 
-        valid_tables = {m.name for m in metas}
-        valid_columns = {
-            (m.name, col.name)
-            for m in metas
-            for col in m.columns
-        }
-
         for ms in plan.metrics:
             if not ms.metric_id:
                 errors.append("metric_id 为空")
@@ -404,6 +507,7 @@ class PydanticPipeline(AgentPipeline):
                         status=MetricStatus.PASS,
                         required_fields=ms.required_fields,
                     ))
+                    logger.debug(f"[sql] {ms.metric_id} OK → {json.dumps(value, ensure_ascii=False)[:100]}")
                 except Exception as e:
                     errors.append(f"{ms.metric_id}: SQL 执行失败: {e}")
                     metrics.append(MetricResult(
@@ -414,6 +518,7 @@ class PydanticPipeline(AgentPipeline):
                         required_fields=ms.required_fields,
                         missing_fields=ms.required_fields,
                     ))
+                    logger.warning(f"[sql] {ms.metric_id} FAILED → {e}")
         finally:
             conn.close()
 
@@ -434,6 +539,8 @@ class PydanticPipeline(AgentPipeline):
             provider=OpenAIProvider(base_url=self.base_url, api_key=self.api_key),
         )
 
+        logger.debug(f"[{phase}] 创建 Agent, model={self.model} output_type={output_type}")
+
         return Agent(
             model,
             deps_type=Workspace,
@@ -444,8 +551,6 @@ class PydanticPipeline(AgentPipeline):
         )
 
     def _register_phase_tools(self, agent, ws: Workspace, phase: str):
-        from pydantic_ai import RunContext
-
         # ---- 公共工具 ----
 
         @agent.tool
@@ -458,6 +563,7 @@ class PydanticPipeline(AgentPipeline):
                 meta = w.manifest.tables_by_name.get(table_name)
             if not meta:
                 raise ValueError(f"表 {table_name!r} 不在 workspace 中")
+            logger.debug(f"[{phase}] profile_table_tool: {table_name}")
             return meta
 
         @agent.tool
@@ -474,9 +580,9 @@ class PydanticPipeline(AgentPipeline):
                 "common": root / "packages" / "domain_packs" / "common.yaml",
             }
             path = doc_map.get(topic)
-            if not path or not path.is_file():
-                return f"未找到文档: topic={topic}"
-            return path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8") if path and path.is_file() else f"未找到文档: topic={topic}"
+            logger.debug(f"[{phase}] read_context_tool: {topic} → {len(content)} chars")
+            return content
 
         # ---- Flatten 阶段工具 ----
 
@@ -485,6 +591,7 @@ class PydanticPipeline(AgentPipeline):
             async def write_workspace_file(ctx: RunContext[Workspace], filename: str, content: str) -> str:
                 """将内容写入 workspace 文件。"""
                 p = ctx.deps.write_file(filename, content)
+                logger.debug(f"[{phase}] write_file: {filename} ({len(content)} chars)")
                 return f"已写入: {p}"
 
             @agent.tool
@@ -500,6 +607,7 @@ class PydanticPipeline(AgentPipeline):
                         ["python", str(script_path)],
                         capture_output=True, text=True, timeout=30,
                     )
+                    logger.debug(f"[{phase}] run_python: {script_filename} → {len(r.stdout)} chars")
                     return r.stdout or r.stderr or "(no output)"
                 except subprocess.TimeoutExpired:
                     return "脚本执行超时 (30s)"
@@ -512,10 +620,10 @@ class PydanticPipeline(AgentPipeline):
                 """在 DuckDB 上执行 SELECT 查询并返回结果。"""
                 import duckdb
                 w = ctx.deps
-                db_path = w.duckdb_path
-                conn = duckdb.connect(str(db_path))
+                conn = duckdb.connect(w.duckdb_path)
                 try:
                     df = conn.execute(sql).fetchdf()
+                    logger.debug(f"[{phase}] duckdb_sql: {sql[:80]} → {len(df)} 行")
                     return df.head(20).to_dict(orient="records")
                 finally:
                     conn.close()
@@ -528,10 +636,10 @@ class PydanticPipeline(AgentPipeline):
                 """在 DuckDB 上执行 SELECT 查询并返回结果。"""
                 import duckdb
                 w = ctx.deps
-                db_path = w.duckdb_path
-                conn = duckdb.connect(str(db_path))
+                conn = duckdb.connect(w.duckdb_path)
                 try:
                     df = conn.execute(sql).fetchdf()
+                    logger.debug(f"[{phase}] duckdb_sql: {sql[:80]} → {len(df)} 行")
                     return df.head(20).to_dict(orient="records")
                 finally:
                     conn.close()
@@ -547,12 +655,12 @@ class PydanticPipeline(AgentPipeline):
                 if not parquet_path.is_file():
                     return f"parquet 文件不存在: {parquet_filename}"
                 qname = _q(table_name)
-                db_path = w.duckdb_path
-                conn = duckdb.connect(str(db_path))
+                conn = duckdb.connect(w.duckdb_path)
                 try:
                     conn.execute(
                         f"CREATE OR REPLACE VIEW {qname} AS SELECT * FROM '{parquet_path}'"
                     )
+                    logger.debug(f"[{phase}] register_parquet: {table_name} ← {parquet_filename}")
                     return f"视图 {qname} 已注册"
                 finally:
                     conn.close()
@@ -560,24 +668,23 @@ class PydanticPipeline(AgentPipeline):
             @agent.tool
             async def list_workspace_files(ctx: RunContext[Workspace]) -> list[str]:
                 """列出 workspace 目录下所有文件。"""
-                return ctx.deps.list_files()
+                files = ctx.deps.list_files()
+                logger.debug(f"[{phase}] list_files: {files}")
+                return files
 
             @agent.tool
             async def validate_result_tool(ctx: RunContext[Workspace], result_json: str) -> str:
                 """校验 AgentResult JSON 的完整性。"""
-                import json
-                errors = []
+                errors_local = []
                 try:
                     data = json.loads(result_json)
                     for field in ["mapping", "metrics", "warnings", "tables"]:
                         if not isinstance(data.get(field), list):
-                            errors.append(f"{field} 必须是数组")
+                            errors_local.append(f"{field} 必须是数组")
                 except json.JSONDecodeError as e:
-                    errors.append(f"JSON 解析失败: {e}")
-                return "校验通过" if not errors else "校验失败: " + "; ".join(errors)
+                    errors_local.append(f"JSON 解析失败: {e}")
+                msg = "校验通过" if not errors_local else "校验失败: " + "; ".join(errors_local)
+                logger.debug(f"[{phase}] validate_result: {msg}")
+                return msg
 
         return agent
-
-    # ================================================================
-    # DuckDB 通过 workspace.init_duckdb() 统一管理，无需单独方法
-    # ================================================================

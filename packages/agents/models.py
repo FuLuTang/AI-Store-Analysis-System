@@ -150,6 +150,12 @@ class PhaseResult(BaseModel):
     output: Any = None
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+    requests: int = 0
+    tool_calls: int = 0
 
 
 class AgentResult(BaseModel):
@@ -157,6 +163,16 @@ class AgentResult(BaseModel):
     tables: list[TableMeta] = Field(default_factory=list)
     mapping: list[SemanticMapping] = Field(default_factory=list)
     metrics: list[MetricResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scene: SceneContext | None = None
+    cards: list[ReportCard] = Field(default_factory=list)
+    full_report: str = ""
+    pipeline: str = ""
+    elapsed_ms: float = 0.0
+    total_tokens: int = 0
+    input_tokens: int = 0
+    cache_hit_tokens: int = 0
+    phases: list[PhaseResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     scene: SceneContext | None = None
     cards: list[ReportCard] = Field(default_factory=list)

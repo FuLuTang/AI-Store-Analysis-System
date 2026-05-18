@@ -55,7 +55,7 @@ class SmolPipeline(AgentPipeline):
 
             return self._collect_result(raw_output, ws, t0)
         finally:
-            ws.cleanup()
+            ws.cleanup_large_files()
 
     # ── staging ──
 

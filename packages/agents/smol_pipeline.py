@@ -28,19 +28,54 @@ logger = logging.getLogger(__name__)
 AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib", "os", "glob", "re"]
 
 PLAN_TEMPLATE = [
-    {"title": "查看输入文件", "detail": "列出 input/ 下所有文件，了解数据格式和结构", "status": "pending"},
-    {"title": "展平并输出 parquet", "detail": "写 Python 递归展平嵌套数据为二维表，用 pandas 输出 parquet 到 tables/", "status": "pending"},
-    {"title": "入库，用 duckdb_register_parquet 注册表", "detail": "把展平后的结构化数据注册到 DuckDB，通过写 Python 检查所有数据都入库了才标记完成（出错的噪声数据可以除外）", "status": "pending"},
-    {"title": "画像，用 profile_table 或 duckdb_query 探索字段", "detail": "获取每个表的列名、类型、样本、空值率", "status": "pending"},
-    {"title": "读文档，read_context('指标计算文档.md')", "detail": "了解标准字段定义和指标计算公式", "status": "pending"},
-    {"title": "映射，原始字段→标准字段", "detail": "根据上下文文档将原始字段映射到标准语义字段", "status": "pending"},
-    {"title": "计算指标", "detail": "用 duckdb_query 写 SQL 计算各项指标", "status": "pending"},
-    {"title": "输出 AgentResult", "detail": "整理结果，validate_result 校验，写入 output/result.json", "status": "pending"},
-    {"title": "清理大文件", "detail": "调用 cleanup_workspace('large')", "status": "pending"},
+    {"title": "查看输入文件",
+     "detail": "列出 input/ 下所有文件了解格式结构。可用: Python open()/os.listdir()。检查: 确认文件数 > 0 且可读。",
+     "status": "pending"},
+    {"title": "展平并输出 parquet",
+     "detail": "写 Python 递归展平嵌套数据为二维表，用 pandas.to_parquet 输出到 tables/。检查: pd.read_parquet 读回验证 row_count > 0。",
+     "status": "pending"},
+    {"title": "入库，用 duckdb_register_parquet 注册表",
+     "detail": "调用 duckdb_register_parquet(name, path) 注册所有 parquet，再用 duckdb_query('SELECT COUNT(*) FROM ...') 逐表验证行数匹配。",
+     "status": "pending"},
+    {"title": "画像，用 profile_table 或 duckdb_query 探索字段",
+     "detail": "用 profile_table(path) 获取列名/类型/样本/空值率。也可 duckdb_query('DESCRIBE ...')。检查: 确认核心字段（金额/数量/日期类）已识别。",
+     "status": "pending"},
+    {"title": "读文档，read_context('指标计算文档.md')",
+     "detail": "用 read_context('指标计算文档.md') 获取标准字段定义和指标公式。可用工具: read_context。检查: 确认理解了 revenue/order_count/channel 等核心字段含义。",
+     "status": "pending"},
+    {"title": "映射，原始字段→标准字段",
+     "detail": "根据文档中的标准字段定义，将原始字段映射到 semantic_field。检查: 每个核心指标所需的 required_fields 都有对应映射，无遗漏。",
+     "status": "pending"},
+    {"title": "计算指标",
+     "detail": "用 duckdb_query 写 SQL 计算: revenue_change/avg_order_value/gross_margin_rate/channel_share/top_contribution 等。检查: 每个指标 value 不为 None，status 合理。",
+     "status": "pending"},
+    {"title": "输出 AgentResult",
+     "detail": "整理 scene/mapping/metrics/warnings，调用 validate_result(json)，通过后用 Python open().write() 写入 output/result.json。检查: validate_result 返回 valid=true。",
+     "status": "pending"},
+    {"title": "清理大文件",
+     "detail": "调用 cleanup_workspace('large') 删除 parquet + duckdb。检查: 确认 output/result.json 已保存。",
+     "status": "pending"},
 ]
 
 
 class SmolPipeline(AgentPipeline):
+
+    class _PlanInjectModel:
+        """Model wrapper：每次 LLM 调用前自动注入 read_plan_short 结果。"""
+        def __init__(self, model, ws: Workspace):
+            self._model = model
+            self._ws = ws
+
+        def __call__(self, messages: list, **kwargs):
+            from .tools.impl.setup_impl import read_plan_short_impl
+            plan_text = read_plan_short_impl(self._ws)
+            messages = list(messages)
+            messages.append({"role": "system", "content": plan_text})
+            return self._model(messages, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._model, name)
+
     name = "smol"
 
     def __init__(self, model=None, max_rounds: int = 15):
@@ -59,7 +94,7 @@ class SmolPipeline(AgentPipeline):
 
             self._write_plan(ws)
             tools = self._make_tools(ws)
-            agent = self._make_agent(tools)
+            agent = self._make_agent(tools, ws)
             prompt = self._build_prompt(ws)
 
             ws.save_trace({"step": "agent_start", "tools": len(tools)})
@@ -92,9 +127,10 @@ class SmolPipeline(AgentPipeline):
 
     # ── agent ──
 
-    def _make_agent(self, tools: list):
+    def _make_agent(self, tools: list, ws: Workspace):
         from smolagents import CodeAgent
         model = self._resolve_model()
+        model = self._PlanInjectModel(model, ws)
         return CodeAgent(
             tools=tools,
             model=model,

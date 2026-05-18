@@ -23,15 +23,18 @@
 | `profile_table(path)` | 读取 parquet 字段画像 |
 | `validate_result(json_str)` | 校验输出是否符合 AgentResult schema |
 | `list_tables()` | 查看 DuckDB 中已注册的表 |
-| `read_plan()` | 读取任务清单（output/plan.json） |
+| `read_plan()` | 阅读任务清单完整版（含detail），plan 进度已自动注入 |
 | `check_plan(success, step_index)` | 标记某步完成或失败，如 `check_plan(True, 0)` |
 | `cleanup_workspace(mode)` | 清理大文件（完成后调用） |
 
 ## 任务流程
 
-**开局第一件事**：调用 `read_plan()` 获取任务清单。
-**每完成一步**：调用 `check_plan(True, 步骤序号)`。
-**失败时**：调用 `check_plan(False, 步骤序号)`，然后继续尝试或跳过。
+**plan 进度已自动附在每次对话末尾**，无需手动调用。
+
+- 根据 plan 逐项推进
+- **每完成一步**：调用 `check_plan(True, 步骤序号)`
+- **失败时**：调用 `check_plan(False, 步骤序号)`，然后继续尝试或跳过
+- 需要查看完整 step detail 时：调用 `read_plan()`
 
 workspace 结构：
 ```

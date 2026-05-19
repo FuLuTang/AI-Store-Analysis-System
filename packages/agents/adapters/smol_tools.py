@@ -132,28 +132,52 @@ def build_smol_tools(ws: Workspace):
         return plan_path.read_text(encoding="utf-8")
 
     @tool
-    def check_plan(success: bool, step_index: int) -> str:
-        """Mark a plan step as completed or failed.
+    def check_plan(step_index: int) -> str:
+        """自动检查当前步骤的产物，根据 checks 判定 success/partial/failed。
 
         Args:
-            success: True to mark as 'success', False to mark as 'failed'.
-            step_index: 0-based index of the step in the plan.
+            step_index: plan 中步骤的 0-based 索引。
         """
+        from ..tools.impl.plan_check_impl import run_step_checks
+
         plan_path = ws.resolve("output/plan.json")
         if not plan_path.exists():
             return json.dumps({"error": "plan.json not found"})
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         if step_index < 0 or step_index >= len(plan):
             return json.dumps({"error": f"step_index {step_index} out of range (0-{len(plan)-1})"})
-        plan[step_index]["status"] = "success" if success else "failed"
 
-        for i in range(step_index + 1, len(plan)):
-            if plan[i]["status"] == "pending":
-                plan[i]["status"] = "in_progress"
-                break
+        step = plan[step_index]
+        passed, failed = run_step_checks(ws, step)
+
+        ok = len(failed) == 0
+        step["errors"] = failed
+
+        if ok:
+            step["status"] = "success"
+        elif passed:
+            step["status"] = "partial"
+        else:
+            step["status"] = "failed"
 
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-        return f"Step {step_index} marked as {'success' if success else 'failed'}"
+
+        if ok:
+            for i in range(step_index + 1, len(plan)):
+                if plan[i]["status"] == "pending":
+                    plan[i]["status"] = "in_progress"
+                    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+                    break
+
+        result = {
+            "step_index": step_index,
+            "ok": ok,
+            "passed": passed,
+            "failed": failed,
+        }
+        if failed:
+            result["next_action"] = f"Step {step_index} ({step['title']}) 未通过 {len(failed)} 个检查，请修正后重新 check_plan({step_index})"
+        return json.dumps(result, ensure_ascii=False, indent=2)
 
     return [
         read_file, write_file, list_files,

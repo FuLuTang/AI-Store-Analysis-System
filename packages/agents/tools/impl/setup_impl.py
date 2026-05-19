@@ -62,18 +62,50 @@ def design_plan_impl(ws: Workspace, plan_json: str) -> str:
 
 
 def read_plan_short_impl(ws: Workspace) -> str:
-    """读取 plan.json，pending/in_progress 时附带 detail 字段。由 model wrapper 自动注入。"""
+    """读取 plan.json，返回简短版本。由 model wrapper 自动注入。
+
+    展示规则：
+      - success: 仅 title/status
+      - 第一个非 success 步骤: 展示 title/status/detail/checks/errors
+      - 后续 pending: 仅 title/status
+      - failed: 展示 detail/checks/errors
+    """
     plan_path = ws.resolve("output/plan.json")
     if not plan_path.exists():
         return "(plan 尚未初始化)"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    first_non_success = None
+    for idx, s in enumerate(plan):
+        if s["status"] != "success":
+            first_non_success = idx
+            break
+
     lines = ["以下为plan进度："]
-    for step in plan:
+    for idx, step in enumerate(plan):
         status = step["status"]
-        if status in ("in_progress", "failed"):
-            lines.append(json.dumps({"title": step["title"], "status": status, "detail": step["detail"]}, ensure_ascii=False))
-        else:
+
+        if status == "success":
             lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
+
+        elif status in ("in_progress", "partial"):
+            entry = {"title": step["title"], "status": status, "detail": step["detail"],
+                     "checks": step.get("checks", []), "errors": step.get("errors", [])}
+            lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
+
+        elif status == "failed":
+            entry = {"title": step["title"], "status": status, "detail": step["detail"],
+                     "checks": step.get("checks", []), "errors": step.get("errors", [])}
+            lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
+
+        elif status == "pending":
+            if idx == first_non_success:
+                entry = {"title": step["title"], "status": status, "detail": step["detail"],
+                         "checks": step.get("checks", [])}
+                lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
+            else:
+                lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
+
     lines.append("使用read_plan工具阅读完整plan")
-    lines.append("每完成一步请调用check_plan(success=True, step_index=N)标记成功，失败则标记failed")
+    lines.append("每完成一步后调用 check_plan(step_index=N) 自动验证产物")
     return "\n".join(lines)

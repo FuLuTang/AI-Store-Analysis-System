@@ -62,13 +62,17 @@ def design_plan_impl(ws: Workspace, plan_json: str) -> str:
 
 
 def read_plan_short_impl(ws: Workspace) -> str:
-    """读取 plan.json，只返回 title + status 的简短版本。由 model wrapper 自动注入。"""
+    """读取 plan.json，pending/in_progress 时附带 detail 字段。由 model wrapper 自动注入。"""
     plan_path = ws.resolve("output/plan.json")
     if not plan_path.exists():
         return "(plan 尚未初始化)"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     lines = ["以下为plan进度："]
     for step in plan:
-        lines.append(json.dumps({"title": step["title"], "status": step["status"]}, ensure_ascii=False))
+        status = step["status"]
+        if status in ("in_progress", "failed"):
+            lines.append(json.dumps({"title": step["title"], "status": status, "detail": step["detail"]}, ensure_ascii=False))
+        else:
+            lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
     lines.append("使用read_plan工具阅读完整plan")
     return "\n".join(lines)

@@ -72,7 +72,11 @@ class SmolPipeline(AgentPipeline):
             from .tools.impl.setup_impl import read_plan_short_impl
             plan_text = read_plan_short_impl(self._ws)
             messages = list(messages)
-            messages.append({"role": "system", "content": plan_text})
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i]["role"] == "user":
+                    plan_block = f"<current_plan>\n{plan_text}\n</current_plan>\n\n"
+                    messages[i] = {**messages[i], "content": plan_block + messages[i]["content"]}
+                    break
 
             t_start = time.time()
             result = self._model(messages, **kwargs)
@@ -129,7 +133,13 @@ class SmolPipeline(AgentPipeline):
 
     def _write_plan(self, ws: Workspace):
         from .tools.impl.setup_impl import design_plan_impl
-        design_plan_impl(ws, json.dumps(PLAN_TEMPLATE, ensure_ascii=False))
+        import json as _json
+        design_plan_impl(ws, _json.dumps(PLAN_TEMPLATE, ensure_ascii=False))
+        plan_path = ws.resolve("output/plan.json")
+        plan = _json.loads(plan_path.read_text(encoding="utf-8"))
+        if plan and plan[0]["status"] == "pending":
+            plan[0]["status"] = "in_progress"
+            plan_path.write_text(_json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # ── tools ──
 

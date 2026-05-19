@@ -146,6 +146,12 @@ def build_smol_tools(ws: Workspace):
         if step_index < 0 or step_index >= len(plan):
             return json.dumps({"error": f"step_index {step_index} out of range (0-{len(plan)-1})"})
         plan[step_index]["status"] = "success" if success else "failed"
+
+        for i in range(step_index + 1, len(plan)):
+            if plan[i]["status"] == "pending":
+                plan[i]["status"] = "in_progress"
+                break
+
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
         return f"Step {step_index} marked as {'success' if success else 'failed'}"
 

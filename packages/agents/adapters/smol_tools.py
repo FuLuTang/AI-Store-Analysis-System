@@ -185,6 +185,6 @@ def build_smol_tools(ws: Workspace):
         read_context,
         profile_table,
         validate_result,
-        setup_workspace, cleanup_workspace, list_tables,
+        setup_workspace, list_tables,
         read_plan, check_plan,
     ]

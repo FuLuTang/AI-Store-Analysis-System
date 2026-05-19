@@ -34,15 +34,15 @@ PLAN_TEMPLATE = [
      "check": "",
      "errors": []},
     {"title": "展平并输出 parquet",
-     "detail": "写 Python 递归展平嵌套数据为二维表，用 pandas.to_parquet 输出到 tables/*.parquet。检查: parquet 可被 pandas 读回且行数 > 0。",
+     "detail": "写 Python 递归展平嵌套数据为二维表，用 pandas.to_parquet 输出到 output/flat/*.parquet。检查: parquet 可被 pandas 读回且行数 > 0。",
      "status": "pending",
-     "check": """# 检查 tables/*.parquet 是否存在且行数 > 0
+     "check": """# 检查 output/flat/*.parquet 是否存在且行数 > 0
 import glob, pandas as pd
-files = glob.glob("tables/*.parquet")
+files = glob.glob("output/flat/*.parquet")
 assert files, "没有找到展平后的 parquet 文件"
 for f in files:
     df = pd.read_parquet(f)
-    assert len(df) > 0, f"{f} 行数为 0\"""",
+    assert len(df) > 0, f'{f} 行数为 0'""",
      "errors": []},
     {"title": "入库，用 duckdb_register_parquet 注册表",
      "detail": "推荐用 duckdb_register_parquet(name, path) 注册所有 parquet，再用 duckdb_query('SELECT COUNT(*) FROM ...') 逐表验证行数匹配。",

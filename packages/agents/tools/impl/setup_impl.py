@@ -115,6 +115,6 @@ def read_plan_short_impl(ws: Workspace) -> str:
             else:
                 lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
 
-    lines.append("使用 read_plan(show_checks=True) 查看完整检查脚本")
+    lines.append("使用 read_plan 工具查看完整 plan")
     lines.append("每完成一步后调用 check_plan(step_index=N) 自动验证产物")
     return "\n".join(lines)

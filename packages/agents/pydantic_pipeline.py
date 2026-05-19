@@ -29,6 +29,7 @@ from packages.agents.models import (
 )
 from packages.agents.workspace import Workspace
 from packages.agents.workspace import _quote_ident as _q
+from packages.agents.logging_utils import log_llm_usage
 
 # pydantic-ai 必须在模块级导入，否则 tool 函数的 RunContext[Workspace] 标注 get_type_hints() 解析失败
 try:
@@ -41,27 +42,28 @@ logger = logging.getLogger("agent.pydantic")
 MAX_RETRIES = 3
 
 
-def _extract_usage(usage: Any) -> dict:
-    """提取 token 用量为 dict。"""
+def _extract_reasoning(result) -> str | None:
+    """从 AgentRunResult 的 messages 中提取 reasoning_content。"""
     try:
-        return {
-            "input_tokens": getattr(usage, "input_tokens", 0) or 0,
-            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
-            "cache_read_tokens": getattr(usage, "cache_read_tokens", 0) or 0,
-            "requests": getattr(usage, "requests", 0) or 0,
-            "tool_calls": getattr(usage, "tool_calls", 0) or 0,
-        }
+        for msg in result.all_messages():
+            parts = getattr(msg, "parts", [])
+            for part in parts:
+                if getattr(part, "part_kind", "") == "thinking":
+                    return getattr(part, "content", None)
     except Exception:
-        return {}
+        pass
+    return None
 
 
 def _usage_to_phase(usage_dict: dict) -> dict:
     """将 usage dict 转为 PhaseResult 字段。"""
+    inp = usage_dict.get("input_tokens", 0)
+    cached = usage_dict.get("cached_input_tokens", 0)
     return {
-        "input_tokens": usage_dict.get("input_tokens", 0),
+        "input_tokens": inp,
         "output_tokens": usage_dict.get("output_tokens", 0),
-        "cache_hit_tokens": usage_dict.get("cache_read_tokens", 0),
-        "cache_miss_tokens": usage_dict.get("input_tokens", 0) - usage_dict.get("cache_read_tokens", 0),
+        "cache_hit_tokens": cached,
+        "cache_miss_tokens": max(0, inp - cached),
         "requests": usage_dict.get("requests", 0),
         "tool_calls": usage_dict.get("tool_calls", 0),
     }
@@ -155,7 +157,7 @@ class PydanticPipeline(AgentPipeline):
     ) -> PhaseResult:
         errors: list[str] = []
         msg_history = None
-        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "requests": 0, "tool_calls": 0}
+        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0, "requests": 0, "tool_calls": 0}
 
         logger.info(f"[flatten] 开始, 原始表 {len(raw_metas)} 张")
 
@@ -171,16 +173,21 @@ class PydanticPipeline(AgentPipeline):
                 )
 
             try:
+                t_call = time.time()
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
+                latency_ms = (time.time() - t_call) * 1000
                 plan: FlattenPlan = result.output
                 msg_history = result.all_messages()
-                u = _extract_usage(result.usage)
-                logger.info(
-                    f"[flatten#{attempt}] tokens: in={u.get('input_tokens')} out={u.get('output_tokens')} "
-                    f"cache_hit={u.get('cache_read_tokens')} tools={u.get('tool_calls')}"
+                reasoning = _extract_reasoning(result)
+
+                u_rec = log_llm_usage(
+                    report_id=ws.report_id, pipeline=self.name, phase="flatten",
+                    attempt=attempt, model=self.model,
+                    usage=result.usage,
+                    reasoning_content=reasoning, latency_ms=latency_ms,
                 )
-                for k in usage_sum:
-                    usage_sum[k] += u.get(k, 0)
+                for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
+                    usage_sum[k] += u_rec.get(k, 0)
             except Exception as e:
                 logger.error(f"[flatten#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
@@ -268,7 +275,7 @@ class PydanticPipeline(AgentPipeline):
         errors: list[str] = []
         msg_history = None
         mappings: list[SemanticMapping] = []
-        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "requests": 0, "tool_calls": 0}
+        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0, "requests": 0, "tool_calls": 0}
 
         logger.info(f"[mapping] 开始, flat table {len(flat_metas)} 张")
 
@@ -284,16 +291,21 @@ class PydanticPipeline(AgentPipeline):
                 )
 
             try:
+                t_call = time.time()
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
+                latency_ms = (time.time() - t_call) * 1000
                 mappings = result.output
                 msg_history = result.all_messages()
-                u = _extract_usage(result.usage)
-                logger.info(
-                    f"[mapping#{attempt}] tokens: in={u.get('input_tokens')} out={u.get('output_tokens')} "
-                    f"cache_hit={u.get('cache_read_tokens')} tools={u.get('tool_calls')}"
+                reasoning = _extract_reasoning(result)
+
+                u_rec = log_llm_usage(
+                    report_id=ws.report_id, pipeline=self.name, phase="mapping",
+                    attempt=attempt, model=self.model,
+                    usage=result.usage,
+                    reasoning_content=reasoning, latency_ms=latency_ms,
                 )
-                for k in usage_sum:
-                    usage_sum[k] += u.get(k, 0)
+                for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
+                    usage_sum[k] += u_rec.get(k, 0)
             except Exception as e:
                 logger.error(f"[mapping#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
@@ -374,7 +386,7 @@ class PydanticPipeline(AgentPipeline):
         errors: list[str] = []
         msg_history = None
         last_metrics: list = []
-        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "requests": 0, "tool_calls": 0}
+        usage_sum = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0, "requests": 0, "tool_calls": 0}
 
         logger.info(f"[sql] 开始, {len(flat_metas)} 张表, {len(mappings)} 条映射")
 
@@ -390,16 +402,21 @@ class PydanticPipeline(AgentPipeline):
                 )
 
             try:
+                t_call = time.time()
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
+                latency_ms = (time.time() - t_call) * 1000
                 plan: SqlPlan = result.output
                 msg_history = result.all_messages()
-                u = _extract_usage(result.usage)
-                logger.info(
-                    f"[sql#{attempt}] tokens: in={u.get('input_tokens')} out={u.get('output_tokens')} "
-                    f"cache_hit={u.get('cache_read_tokens')} tools={u.get('tool_calls')}"
+                reasoning = _extract_reasoning(result)
+
+                u_rec = log_llm_usage(
+                    report_id=ws.report_id, pipeline=self.name, phase="sql",
+                    attempt=attempt, model=self.model,
+                    usage=result.usage,
+                    reasoning_content=reasoning, latency_ms=latency_ms,
                 )
-                for k in usage_sum:
-                    usage_sum[k] += u.get(k, 0)
+                for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
+                    usage_sum[k] += u_rec.get(k, 0)
             except Exception as e:
                 logger.error(f"[sql#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")

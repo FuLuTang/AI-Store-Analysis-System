@@ -1,88 +1,59 @@
-"""check_plan 的检查执行器：验证每个 step 的产物"""
+"""check_plan 的执行器：subprocess 跑 Python assert 脚本"""
+import sys
+import subprocess
 from pathlib import Path
-from glob import glob
 
 from ...workspace import Workspace
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 
-def run_step_checks(ws: Workspace, step: dict) -> tuple[list[str], list[str]]:
-    """执行 checks 列表，返回 (passed, failed) 各一条描述字符串。"""
-    passed = []
-    failed = []
 
-    for check in step.get("checks", []):
-        typ = check["type"]
-        try:
-            if typ == "file_exists":
-                path = ws.resolve(check["path"])
-                if path.exists():
-                    passed.append(f"file_exists: {check['path']}")
-                else:
-                    failed.append(f"file_exists: {check['path']} 不存在")
+def extract_check_summary(check: str) -> str:
+    """从 check 脚本第一行注释提取摘要，供 LLM 了解验收标准。"""
+    if not check or not check.strip():
+        return ""
+    lines = check.strip().split("\n")
+    for line in lines:
+        line = line.strip()
+        if line.startswith("#"):
+            return line.lstrip("#").strip()
+    return "有自动验收检查"
 
-            elif typ == "glob_exists":
-                pattern = str(ws.resolve(check["pattern"]))
-                matches = glob(pattern)
-                if matches:
-                    passed.append(f"glob_exists: {check['pattern']} -> {len(matches)} 个文件")
-                else:
-                    failed.append(f"glob_exists: {check['pattern']} 未匹配到任何文件")
 
-            elif typ == "parquet_non_empty":
-                pattern = str(ws.resolve(check["pattern"]))
-                matches = glob(pattern)
-                if not matches:
-                    failed.append(f"parquet_non_empty: {check['pattern']} 无匹配文件")
-                else:
-                    import pandas as pd
-                    errors = []
-                    for f in matches:
-                        try:
-                            df = pd.read_parquet(f)
-                            if len(df) == 0:
-                                errors.append(f"{Path(f).name} 行数为 0")
-                        except Exception as e:
-                            errors.append(f"{Path(f).name} 读取失败 - {e}")
-                    if errors:
-                        for e in errors:
-                            failed.append(f"parquet_non_empty: {e}")
-                    else:
-                        passed.append(f"parquet_non_empty: {check['pattern']} 所有文件行数 > 0")
+def run_step_check(ws: Workspace, step: dict) -> tuple[bool, list[str]]:
+    """执行 step["check"] Python 脚本。
 
-            elif typ == "duckdb_query_ok":
-                import duckdb
-                con = duckdb.connect(str(ws.duckdb_path))
-                try:
-                    con.execute(check["sql"]).fetchall()
-                    passed.append(f"duckdb_query_ok: SQL 执行成功")
-                except Exception as e:
-                    failed.append(f"duckdb_query_ok: SQL 执行失败 - {e}")
-                finally:
-                    con.close()
+    返回 (ok, errors)：
+      - check 为空 → (True, [])
+      - check 执行成功 → (True, [])
+      - check 执行失败 → (False, [错误信息])
+    """
+    check = step.get("check", "").strip()
+    if not check:
+        return True, []
 
-            elif typ == "validate_result":
-                path = ws.resolve(check["path"])
-                if not path.exists():
-                    failed.append(f"validate_result: {check['path']} 不存在")
-                else:
-                    from .validate_impl import validate_result_impl
-                    import json
-                    try:
-                        data = json.loads(path.read_text(encoding="utf-8"))
-                        result = validate_result_impl(data)
-                        if result["valid"]:
-                            passed.append(f"validate_result: {check['path']} 验证通过")
-                        else:
-                            failed.append(f"validate_result: {check['path']} 验证失败 - {result['errors']}")
-                    except json.JSONDecodeError as e:
-                        failed.append(f"validate_result: {check['path']} JSON 解析失败 - {e}")
-                    except Exception as e:
-                        failed.append(f"validate_result: {check['path']} 执行异常 - {e}")
+    prelude = f"import sys; sys.path.insert(0, {str(_PROJECT_ROOT)!r})\n"
+    full_script = prelude + check
 
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", full_script],
+            cwd=str(ws.dir),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return True, []
+        else:
+            stderr = result.stderr.strip()
+            err_lines = [l for l in stderr.split("\n") if l.strip()]
+            if err_lines:
+                msg = err_lines[-1]
             else:
-                failed.append(f"未知检查类型: {typ}")
-
-        except Exception as e:
-            failed.append(f"{typ} 检查异常: {e}")
-
-    return passed, failed
+                msg = "检查执行失败（无错误输出）"
+            return False, [msg]
+    except subprocess.TimeoutExpired:
+        return False, ["检查超时（10秒）"]
+    except Exception as e:
+        return False, [str(e)]

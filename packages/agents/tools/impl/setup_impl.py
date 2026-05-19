@@ -66,10 +66,12 @@ def read_plan_short_impl(ws: Workspace) -> str:
 
     展示规则：
       - success: 仅 title/status
-      - 第一个非 success 步骤: 展示 title/status/detail/checks/errors
+      - 第一个非 success: title/status/detail/check_summary/errors
       - 后续 pending: 仅 title/status
-      - failed: 展示 detail/checks/errors
+      - failed: title/status/detail/check_summary/errors
     """
+    from .plan_check_impl import extract_check_summary
+
     plan_path = ws.resolve("output/plan.json")
     if not plan_path.exists():
         return "(plan 尚未初始化)"
@@ -84,28 +86,35 @@ def read_plan_short_impl(ws: Workspace) -> str:
     lines = ["以下为plan进度："]
     for idx, step in enumerate(plan):
         status = step["status"]
+        check_summary = extract_check_summary(step.get("check", ""))
+        errors = step.get("errors", [])
 
         if status == "success":
             lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
 
         elif status in ("in_progress", "partial"):
             entry = {"title": step["title"], "status": status, "detail": step["detail"],
-                     "checks": step.get("checks", []), "errors": step.get("errors", [])}
+                     "errors": errors}
+            if check_summary:
+                entry["check_summary"] = check_summary
             lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
 
         elif status == "failed":
             entry = {"title": step["title"], "status": status, "detail": step["detail"],
-                     "checks": step.get("checks", []), "errors": step.get("errors", [])}
+                     "errors": errors}
+            if check_summary:
+                entry["check_summary"] = check_summary
             lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
 
         elif status == "pending":
             if idx == first_non_success:
-                entry = {"title": step["title"], "status": status, "detail": step["detail"],
-                         "checks": step.get("checks", [])}
+                entry = {"title": step["title"], "status": status, "detail": step["detail"]}
+                if check_summary:
+                    entry["check_summary"] = check_summary
                 lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
             else:
                 lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
 
-    lines.append("使用read_plan工具阅读完整plan")
+    lines.append("使用 read_plan(show_checks=True) 查看完整检查脚本")
     lines.append("每完成一步后调用 check_plan(step_index=N) 自动验证产物")
     return "\n".join(lines)

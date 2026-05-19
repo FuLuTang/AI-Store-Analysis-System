@@ -121,24 +121,29 @@ def build_smol_tools(ws: Workspace):
         return list_tables_impl(ws)
 
     @tool
-    def read_plan() -> str:
+    def read_plan(show_checks: bool = False) -> str:
         """Read the full task plan from output/plan.json with all step details.
 
-        Returns JSON array. Plan progress summary is already auto-injected before each step.
+        Args:
+            show_checks: True to include raw check scripts (debug only).
         """
         plan_path = ws.resolve("output/plan.json")
         if not plan_path.exists():
             return json.dumps({"error": "plan.json not found"})
-        return plan_path.read_text(encoding="utf-8")
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if not show_checks:
+            for step in plan:
+                step.pop("check", None)
+        return json.dumps(plan, ensure_ascii=False, indent=2)
 
     @tool
     def check_plan(step_index: int) -> str:
-        """自动检查当前步骤的产物，根据 checks 判定 success/partial/failed。
+        """自动检查当前步骤的产物。执行 step.check Python 脚本判定通过与否。
 
         Args:
             step_index: plan 中步骤的 0-based 索引。
         """
-        from ..tools.impl.plan_check_impl import run_step_checks
+        from ..tools.impl.plan_check_impl import run_step_check
 
         plan_path = ws.resolve("output/plan.json")
         if not plan_path.exists():
@@ -148,17 +153,9 @@ def build_smol_tools(ws: Workspace):
             return json.dumps({"error": f"step_index {step_index} out of range (0-{len(plan)-1})"})
 
         step = plan[step_index]
-        passed, failed = run_step_checks(ws, step)
-
-        ok = len(failed) == 0
-        step["errors"] = failed
-
-        if ok:
-            step["status"] = "success"
-        elif passed:
-            step["status"] = "partial"
-        else:
-            step["status"] = "failed"
+        ok, errors = run_step_check(ws, step)
+        step["errors"] = errors
+        step["status"] = "success" if ok else "failed"
 
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -172,11 +169,13 @@ def build_smol_tools(ws: Workspace):
         result = {
             "step_index": step_index,
             "ok": ok,
-            "passed": passed,
-            "failed": failed,
+            "errors": errors,
         }
-        if failed:
-            result["next_action"] = f"Step {step_index} ({step['title']}) 未通过 {len(failed)} 个检查，请修正后重新 check_plan({step_index})"
+        if errors:
+            result["next_action"] = (
+                f"Step {step_index}（{step['title']}）未通过检查，请根据报错排查后重新 check_plan({step_index})\n"
+                + "\n".join(errors)
+            )
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     return [

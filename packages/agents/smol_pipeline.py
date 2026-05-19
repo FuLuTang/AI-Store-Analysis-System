@@ -155,7 +155,7 @@ class SmolPipeline(AgentPipeline):
             f"- workspace: {ws.dir}\n"
             f"- input 文件: {ws.list_inputs()}\n"
             f"- 上下文文档: context/ 目录\n"
-            f"\n完成后调用 `submit_final_result` 提交。"
+            f"\n按 plan 逐项推进，完成后用 Python 写入 output/result.json。"
         )
         return base + task
 
@@ -175,7 +175,8 @@ class SmolPipeline(AgentPipeline):
                 elapsed_ms=elapsed_ms,
                 raw_output=raw_output[:2000],
                 **({"scene": data.get("scene"), "mapping": data.get("mapping", []),
-                    "metrics": data.get("metrics", []), "warnings": data.get("warnings", [])}
+                    "metrics": data.get("metrics", []), "warnings": data.get("warnings", []),
+                    "cards": data.get("cards", []), "full_report": data.get("full_report", "")}
                    if isinstance(data, dict) else {}),
             )
         except Exception:

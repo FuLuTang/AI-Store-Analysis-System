@@ -47,12 +47,15 @@ scripts/    ← Python 脚本
 
 ## AgentResult 格式
 
+`validate_result` 会按以下完整 schema 校验，所有字段缺一不可：
+
 ```json
 {
   "scene": {
     "industry": "pharmacy",
     "business_model": "o2o_driven",
     "data_scope": ["sales", "channel"],
+    "analysis_goal": "经营诊断",
     "confidence": 0.9
   },
   "mapping": [
@@ -63,13 +66,30 @@ scripts/    ← Python 脚本
       "metric_id": "revenue_change",
       "name": "营收趋势",
       "value": {"current": 10000, "previous": 9000, "change_pct": 11.1},
+      "unit": "%",
       "status": "pass",
-      "reason": "环比增长正常"
+      "reason": "环比增长正常",
+      "confidence": 0.9
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "cards": [
+    {
+      "title": "营收环比增长11.1%",
+      "explanation": "本月营收10000元，较上月9000元增长11.1%",
+      "suggestion": "继续保持渠道推广力度",
+      "evidence": "overview表环比计算得出",
+      "color": "green"
+    }
+  ],
+  "full_report": "# 经营诊断报告\n\n## 现状诊断\n...\n\n## 优化行动方案\n..."
 }
 ```
+
+字段说明：
+- `cards[].color`: green(正常) / yellow(关注) / pink(口径不一致) / red(报警)
+- `metrics[].status`: pass / attention / warning / uncountable
+- `mapping[].need_confirm`: true 表示该映射需人工确认
 
 ## 安全规则
 

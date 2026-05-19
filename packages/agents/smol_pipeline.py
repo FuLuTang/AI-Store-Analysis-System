@@ -72,11 +72,7 @@ class SmolPipeline(AgentPipeline):
             from .tools.impl.setup_impl import read_plan_short_impl
             plan_text = read_plan_short_impl(self._ws)
             messages = list(messages)
-            for i in range(len(messages) - 1, -1, -1):
-                if messages[i]["role"] == "user":
-                    plan_block = f"<current_plan>\n{plan_text}\n</current_plan>\n\n"
-                    messages[i] = {**messages[i], "content": plan_block + messages[i]["content"]}
-                    break
+            messages.append({"role": "user", "content": f"<current_plan>\n{plan_text}\n</current_plan>"})
 
             t_start = time.time()
             result = self._model(messages, **kwargs)

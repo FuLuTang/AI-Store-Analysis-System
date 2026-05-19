@@ -75,4 +75,5 @@ def read_plan_short_impl(ws: Workspace) -> str:
         else:
             lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
     lines.append("使用read_plan工具阅读完整plan")
+    lines.append("每完成一步请调用check_plan(success=True, step_index=N)标记成功，失败则标记failed")
     return "\n".join(lines)

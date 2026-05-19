@@ -61,17 +61,29 @@ PLAN_TEMPLATE = [
 class SmolPipeline(AgentPipeline):
 
     class _PlanInjectModel:
-        """Model wrapper：每次 LLM 调用前自动注入 read_plan_short 结果。"""
-        def __init__(self, model, ws: Workspace):
+        """Model wrapper：每次 LLM 调用前注入 plan，调用后打 usage 日志。"""
+        def __init__(self, model, ws: Workspace, pipeline_name: str = "smol"):
             self._model = model
             self._ws = ws
+            self._pipeline = pipeline_name
+            self._call_count = 0
 
         def __call__(self, messages: list, **kwargs):
             from .tools.impl.setup_impl import read_plan_short_impl
             plan_text = read_plan_short_impl(self._ws)
             messages = list(messages)
             messages.append({"role": "system", "content": plan_text})
-            return self._model(messages, **kwargs)
+
+            t_start = time.time()
+            result = self._model(messages, **kwargs)
+            latency_ms = (time.time() - t_start) * 1000
+            self._call_count += 1
+
+            usage_log = _extract_usage(result, self._call_count, self._pipeline, self._ws.report_id, latency_ms)
+            logger.info("llm_usage %s", json.dumps(usage_log, ensure_ascii=False))
+            self._ws.save_trace({"step": "llm_call", **usage_log})
+
+            return result
 
         def __getattr__(self, name):
             return getattr(self._model, name)
@@ -199,3 +211,133 @@ class SmolPipeline(AgentPipeline):
             except json.JSONDecodeError:
                 pass
         return None
+
+
+# ── usage logging ──
+
+def _extract_usage(result, call_index: int, pipeline: str, report_id: str, latency_ms: float) -> dict:
+    """从 smolagents ChatMessage / raw_response 中提取 usage 信息。"""
+    log = {
+        "report_id": report_id,
+        "pipeline": pipeline,
+        "phase": f"agent_step_{call_index}",
+        "attempt": 1,
+        "model": "",
+        "provider": "",
+        "latency_ms": round(latency_ms, 1),
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cached_input_tokens": 0,
+        "cache_miss_tokens": 0,
+        "cache_hit_ratio": 0.0,
+        "reasoning_tokens": 0,
+        "reasoning_content_present": False,
+        "reasoning_content_chars": 0,
+        "tool_calls": 0,
+        "raw_usage": {},
+    }
+
+    # 1) model info
+    if hasattr(result, "model"):
+        log["model"] = str(result.model) or ""
+    elif hasattr(result, "raw_response") and hasattr(result.raw_response, "model"):
+        log["model"] = str(result.raw_response.model) or ""
+
+    # 2) reasoning_content
+    rc = _get_attr(result, "reasoning_content", "")
+    if rc:
+        log["reasoning_content_present"] = True
+        log["reasoning_content_chars"] = len(str(rc))
+
+    # 3) tool_calls count
+    tc = _get_attr(result, "tool_calls", None)
+    if tc:
+        log["tool_calls"] = len(tc) if isinstance(tc, list) else 1
+
+    # 4) usage — try raw_response first, then top-level attributes
+    usage = None
+    raw = _get_attr(result, "raw_response", None)
+    if raw is not None:
+        usage = _get_usage_from_response(raw)
+
+    if not usage:
+        usage = _get_usage_from_response(result)
+
+    if usage:
+        log["raw_usage"] = _safe_dict(usage)
+        log["input_tokens"] = int(_nz(usage, "prompt_tokens", "input_tokens"))
+        log["output_tokens"] = int(_nz(usage, "completion_tokens", "output_tokens"))
+        log["total_tokens"] = int(_nz(usage, "total_tokens"))
+
+        # DeepSeek 缓存字段
+        log["cached_input_tokens"] = int(_nz(usage, "prompt_cache_hit_tokens"))
+        cache_miss = _nz(usage, "prompt_cache_miss_tokens")
+        if cache_miss:
+            log["cache_miss_tokens"] = int(cache_miss)
+        elif log["input_tokens"] > log["cached_input_tokens"]:
+            log["cache_miss_tokens"] = log["input_tokens"] - log["cached_input_tokens"]
+
+        # OpenAI/Anthropic 缓存字段
+        if not log["cached_input_tokens"]:
+            details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+            log["cached_input_tokens"] = int(_nz(details, "cached_tokens"))
+            if not log["cache_miss_tokens"] and log["input_tokens"] > log["cached_input_tokens"]:
+                log["cache_miss_tokens"] = log["input_tokens"] - log["cached_input_tokens"]
+
+        if log["input_tokens"] > 0:
+            log["cache_hit_ratio"] = round(log["cached_input_tokens"] / log["input_tokens"], 3)
+
+        # reasoning_tokens
+        details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+        log["reasoning_tokens"] = int(_nz(details, "reasoning_tokens"))
+
+    return log
+
+
+def _get_usage_from_response(obj) -> dict | None:
+    """从对象中提取 usage 字典。"""
+    if hasattr(obj, "usage") and obj.usage is not None:
+        return _safe_dict(obj.usage)
+    if isinstance(obj, dict) and "usage" in obj:
+        return obj["usage"]
+    return None
+
+
+def _get_attr(obj, name, default=None):
+    for attr in (name, f"_{name}", f"__{name}__"):
+        if hasattr(obj, attr):
+            return getattr(obj, attr)
+    if isinstance(obj, dict) and name in obj:
+        return obj[name]
+    return default
+
+
+def _nz(obj, *keys):
+    """取第一个非零值。"""
+    for k in keys:
+        if isinstance(obj, dict):
+            v = obj.get(k, 0)
+        elif hasattr(obj, k):
+            v = getattr(obj, k, 0)
+        else:
+            continue
+        if v:
+            return v
+    return 0
+
+
+def _safe_dict(obj) -> dict:
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "__dict__"):
+        d = {}
+        for k, v in obj.__dict__.items():
+            if not k.startswith("_"):
+                try:
+                    json.dumps(v)
+                    d[k] = v
+                except (TypeError, ValueError):
+                    d[k] = str(v)
+        return d
+    return {}

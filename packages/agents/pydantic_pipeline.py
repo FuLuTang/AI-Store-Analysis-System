@@ -12,6 +12,8 @@ init 流程（已可实现）:
   3. 注入上下文文档
   4. 注册 DuckDB 视图
   5. 创建 Agent + 注入 deps
+
+TODO: 接入后需在每次 LLM 调用后打 usage 日志，复用 smol_pipeline._extract_usage()。
 """
 
 import time

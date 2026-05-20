@@ -173,10 +173,4 @@ class AgentResult(BaseModel):
     input_tokens: int = 0
     cache_hit_tokens: int = 0
     phases: list[PhaseResult] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    scene: SceneContext | None = None
-    cards: list[ReportCard] = Field(default_factory=list)
-    full_report: str = ""
-    pipeline: str = ""
-    elapsed_ms: float = 0.0
     raw_output: str = ""

@@ -28,20 +28,13 @@ from packages.core.metrics import (
     calc_channel_mix, calc_revenue_change, calc_o2o_vs_total,
     prepare_growth_decomposition, prepare_anomaly_summary
 )
-from packages.ai.ai_caller import call_ai, call_detailed_ai, call_simplified_ai, call_ai_new, call_detailed_ai_new, call_ai_early, _build_data_context_text
-from packages.ai.error_reviewer import review_error, review_error_new
+from packages.ai.ai_caller import call_ai, call_detailed_ai, call_simplified_ai
+from packages.ai.error_reviewer import review_error
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
 
 # 新多文件管线
-from packages.core.input_adapter import parse_uploaded_files, infer_source_type
-from packages.core.profiler import profile_dataset
-from packages.core.semantic_mapper import map_profiles, llm_map_profiles
-from packages.core.scene_classifier import classify_scene, classify_data_scope, llm_classify_scene
-from packages.core.canonical import build_canonical_dataset
-from packages.core.metric_registry import match_metrics
-from packages.core.metric_engine import run_metrics
-from packages.core.threshold_resolver import resolve_all_statuses
-from packages.core.evidence_builder import build_evidence_bundle
+from packages.core.input_adapter import parse_uploaded_files, adapt_to_dataset_bundle
+from packages.agents.registry import create_pipeline
 
 load_dotenv()
 
@@ -407,18 +400,6 @@ def sanitize_upload_filename(raw_name: Optional[str], index: int):
     if not candidate.lower().endswith(".json"):
         candidate = f"{candidate}.json"
     return candidate
-    if not raw_name:
-        return f"file_{index + 1}"
-    if "/" in raw_name or "\\" in raw_name:
-        raise HTTPException(status_code=400, detail=f"非法文件名: {raw_name}")
-    name = Path(raw_name).name.strip()
-    if not name:
-        name = f"file_{index + 1}"
-    if len(name) > 128:
-        raise HTTPException(status_code=400, detail=f"文件名过长: {name[:32]}...")
-    if not SAFE_UPLOAD_FILENAME.fullmatch(name):
-        raise HTTPException(status_code=400, detail=f"文件名包含非法字符: {name}")
-    return name
 
 
 def save_current_uploads(session: SessionState, decoded_files: List[dict]):
@@ -813,10 +794,10 @@ async def run_analysis_task(session: SessionState, files_data: List[dict], user_
             session.status = "error"
 
 
-async def run_multifile_analysis(session: SessionState, decoded_files: list):
-    """新多文件管线：支持 JSON / Excel / CSV 多文件分析"""
-    import json as _json
 
+
+async def run_pipeline_task(session: SessionState, pipeline_name: str, bundle):
+    """统一管线执行入口：triaditional / pydantic / smol 均走此路径"""
     with session.runtime_lock:
         session.status = "running"
         session.force_stop = False
@@ -824,285 +805,39 @@ async def run_multifile_analysis(session: SessionState, decoded_files: list):
         session.result = None
         session.full_result = None
     reset_events(session)
+    emit_event(session, "pipeline", {"pipeline": pipeline_name})
 
-    active_settings = get_llm_preset(session.config.get("reasoningEffort", "medium"))
+    check_aborted = lambda: ensure_not_stopped(session)
+    get_preset = lambda: get_llm_preset(session.config.get("reasoningEffort", "medium"))
 
-    try:
-        # 1) Input Adapter
-        add_status(session, "input", "active")
-        add_log(session, "input", f"多文件管线: 收到 {len(decoded_files)} 个文件")
-        for f in decoded_files:
-            source = infer_source_type(f.get("name", ""))
-            add_log(session, "input", f"  [{source}] {f.get('name', '?')} ({len(f.get('bytes', b''))} bytes)")
-        dataset_bundle = parse_uploaded_files(decoded_files)
-        add_log(session, "input", f"解析完成: {dataset_bundle['source_type']}, {len(dataset_bundle['tables'])} 张表")
-        add_status(session, "input", "success")
-        ensure_not_stopped(session)
-
-        # 2) Data Profiler
-        add_status(session, "profile", "active")
-        add_log(session, "profile", "开始数据画像...")
-        profiles = profile_dataset(dataset_bundle)
-        add_log(session, "profile", f"画像完成: {len(profiles)} 个字段")
-        add_status(session, "profile", "success")
-        ensure_not_stopped(session)
-
-        # ── 从 profile 开始分叉 ──
-        #   早路: AI-1 初诊 + AI-2 审计（纯数据结构，不等 scene/mapping/metrics）
-        #   晚路: scene → mapping → canonical → metrics → threshold → evidence
-        async def report_flow():
-            if not active_settings.get("apiKey"):
-                return None, None
-
-            dummy_scene = {"industry": "generic", "business_model": "unknown"}
-            data_context = _build_data_context_text(profiles, None, dummy_scene)
-            add_log(session, "report", "并行: 调用 AI 生成初诊报告（基于数据字段结构）...")
-            add_status(session, "report", "active")
-            try:
-                early_resp = await call_ai_early(active_settings, data_context, dummy_scene)
-                initial_report = early_resp["choices"][0]["message"]["content"]
-                add_log(session, "report", f"初诊报告已生成 ({len(initial_report)} 字符)")
-
-                add_status(session, "review", "active")
-                add_log(session, "review", "并行: 启动逻辑审计复核...")
-                review_resp = await review_error_new(active_settings, dummy_scene, initial_report, {"items": []})
-                review_text = review_resp["choices"][0]["message"]["content"] if isinstance(review_resp, dict) else str(review_resp)
-                add_log(session, "review", f"审计复核完成 ({len(review_text)} 字符)")
-                add_status(session, "review", "success")
-
-                return initial_report, review_text
-            except Exception as e:
-                add_log(session, "report", f"并行初诊报告失败: {e}")
-                return None, None
-
-        async def metrics_flow():
-            # 3) Scene Classifier (AI 优先)
-            add_status(session, "scene", "active")
-            add_log(session, "scene", "开始场景识别...")
-            scene = await llm_classify_scene(profiles, active_settings)
-            add_log(session, "scene", f"识别结果: {scene.get('industry')}/{scene.get('business_model')} (conf={scene.get('confidence')})")
-            if scene.get("llm_reason"):
-                add_log(session, "scene", f"  AI判断: {scene['llm_reason']}")
-            add_status(session, "scene", "success")
-            ensure_not_stopped(session)
-
-            # 4) Semantic Mapper (AI 优先)
-            add_status(session, "mapping", "active")
-            add_log(session, "mapping", "开始字段语义映射（场景感知）...")
-            add_log(session, "mapping", f"共 {len(profiles)} 个字段待映射, 场景: {scene.get('industry')}")
-            mappings = await llm_map_profiles(profiles, active_settings, scene)
-            mapped_count = sum(1 for m in mappings if m.get("semantic_field") not in ("unknown", "ignore"))
-            ignored_count = sum(1 for m in mappings if m.get("semantic_field") == "ignore")
-            confirm_count = sum(1 for m in mappings if m.get("need_confirm"))
-            add_log(session, "mapping", f"结果: {mapped_count}/{len(mappings)} 已识别, {ignored_count} 忽略, {confirm_count} 需确认")
-            for m in mappings:
-                sf = m.get("semantic_field", "unknown")
-                conf = m.get("confidence", 0)
-                mark = " [需确认]" if m.get("need_confirm") else ""
-                table = m.get("table", "?")
-                if sf == "ignore":
-                    add_log(session, "mapping", f"  `{m['raw_field']}` → ⛔忽略 ({table})")
-                else:
-                    add_log(session, "mapping", f"  `{m['raw_field']}` → `{sf}` (table={table}, conf={conf}){mark}")
-            if confirm_count > 0:
-                add_log(session, "mapping", f"低置信字段: {[m['raw_field'] for m in mappings if m.get('need_confirm')]}")
-            add_status(session, "mapping", "success")
-
-            # 完善 data_scope
-            scene["data_scope"] = classify_data_scope(mappings)
-            add_log(session, "scene", f"数据范围: {scene.get('data_scope')}")
-            ensure_not_stopped(session)
-
-            # 5) Canonical
-            add_status(session, "canonical", "active")
-            add_log(session, "canonical", "构建标准语义数据层...")
-            canonical = build_canonical_dataset(dataset_bundle, mappings, scene)
-            table_names = list(canonical.get("tables", {}).keys())
-            total_rows = sum(len(rows) for rows in canonical.get("tables", {}).values())
-            add_log(session, "canonical", f"标准数据集: {table_names}, 共 {total_rows} 行")
-            add_status(session, "canonical", "success")
-            ensure_not_stopped(session)
-
-            # 6) Metric Registry
-            add_status(session, "registry", "active")
-            add_log(session, "registry", "匹配可计算指标...")
-            metric_defs = match_metrics(canonical)
-            available = [m for m in metric_defs if m["available"]]
-            unavailable = [m for m in metric_defs if not m["available"]]
-            add_log(session, "registry", f"可计算: {len(available)} 项 - {[m['metric_id'] for m in available]}")
-            if unavailable:
-                add_log(session, "registry", f"不可计算: {len(unavailable)} 项 - {[m['metric_id'] for m in unavailable]}")
-            add_status(session, "registry", "success")
-            ensure_not_stopped(session)
-
-            # 7) Metric Engine
-            add_status(session, "engine", "active")
-            add_log(session, "engine", f"开始计算 {len(available)} 项指标...")
-            metric_results = run_metrics(available, canonical)
-            pass_count = sum(1 for r in metric_results if r.get("status") == "pass")
-            unc_count = sum(1 for r in metric_results if r.get("status") == "uncountable")
-            for r in metric_results:
-                val = r.get("value")
-                val_str = _json.dumps(val, ensure_ascii=False) if isinstance(val, (dict, list)) else str(val)
-                add_log(session, "engine", f"  {r.get('name', '?')} → {r.get('status')} | {val_str[:80]}")
-            add_log(session, "engine", f"完成: {pass_count} pass, {unc_count} uncountable")
-            add_status(session, "engine", "success")
-            ensure_not_stopped(session)
-
-            # 8) Threshold Resolver
-            add_status(session, "threshold", "active")
-            add_log(session, "threshold", "场景化健康判断...")
-            metric_results = resolve_all_statuses(metric_results, scene)
-            tally = {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
-            for r in metric_results:
-                s = r.get("status", "uncountable")
-                tally[s] = tally.get(s, 0) + 1
-            add_log(session, "threshold", f"🟢 pass: {tally['pass']}, 🟡 attention: {tally['attention']}, 🔴 warning: {tally['warning']}, ⚪ uncountable: {tally['uncountable']}")
-            add_status(session, "threshold", "success")
-            ensure_not_stopped(session)
-
-            # 9) Evidence Builder
-            add_status(session, "evidence", "active")
-            add_log(session, "evidence", "构建证据包...")
-            evidence = build_evidence_bundle(metric_results, canonical)
-            add_log(session, "evidence", f"证据包: {len(evidence['items'])} 条证据")
-            add_status(session, "evidence", "success")
-            ensure_not_stopped(session)
-
-            return scene, mappings, metric_results, evidence, tally
-
-        # 并行执行两条路径
-        report_task = asyncio.create_task(report_flow())
-        metrics_task = asyncio.create_task(metrics_flow())
-
-        (initial_report, review_text), (scene, mappings, metric_results, evidence, tally) = \
-            await asyncio.gather(report_task, metrics_task)
-
-        # 没有 API Key 时走摘要模式
-        if not active_settings.get("apiKey"):
-            add_log(session, "report", "未检测到 API Key，生成算法摘要...")
-
-            lines = [f"# {scene.get('industry', '未知')} 经营分析摘要"]
-            lines.append("")
-            lines.append(f"## 场景识别")
-            lines.append(f"- 行业: {scene.get('industry')}")
-            lines.append(f"- 业态: {scene.get('business_model')}")
-            lines.append(f"- 数据范围: {', '.join(scene.get('data_scope', []))}")
-            lines.append("")
-            lines.append(f"## 指标结果 ({len(metric_results)} 项)")
-            lines.append("")
-            for r in metric_results:
-                icon = STATUS_ICON_MAP.get(r.get("status"), "⚪")
-                val = r.get("value")
-                val_str = _json.dumps(val, ensure_ascii=False) if isinstance(val, (dict, list)) else str(val)
-                lines.append(f"- {icon} **{r.get('name')}**: {val_str}")
-                if r.get("reason"):
-                    lines.append(f"  - {r.get('reason')}")
-            lines.append("")
-            lines.append("## 字段映射")
-            for m in mappings:
-                sf = m.get("semantic_field", "unknown")
-                conf = m.get("confidence", 0)
-                lines.append(f"- `{m.get('raw_field')}` → `{sf}` (conf: {conf})")
-
-            report_md = "\n".join(lines)
-            session.full_result = report_md
-            tally_for_result = tally or {"pass": 0, "attention": 0, "warning": 0, "uncountable": 0}
-            session.result = _json.dumps({
-                "health_status": f"{tally_for_result['warning']}项报警/{tally_for_result['attention']}项关注",
-                "overview_text": f"{scene.get('industry')}场景分析完成，共{tally_for_result['warning'] + tally_for_result['attention']}项需关注。",
-                "cards": [
-                    {"title": r.get("name", ""), "explanation": r.get("reason", ""),
-                     "suggestion": "", "color": "red" if r.get("status") == "warning" else "yellow" if r.get("status") == "attention" else "green"}
-                    for r in metric_results if r.get("status") in ("warning", "attention")
-                ]
-            }, ensure_ascii=False)
-            add_status(session, "report", "simulated")
-            session.status = "completed"
-            save_latest_report(session)
-            return
-
-        # 融合：初诊报告 + 审计 + 指标证据
-        add_status(session, "fusion", "active")
-        add_log(session, "fusion", "数据融合：合并初级报告、错误评审、证据数据...")
-        fused_context = (
-            f"【初级报告】\n{initial_report or '(初诊未生成)'}\n\n"
-            f"【审计意见】\n{review_text or '(审计未完成)'}\n\n"
-            f"【指标证据包】\n{_json.dumps(evidence.get('items', [])[:10], ensure_ascii=False)}"
-        )
-        add_log(session, "fusion", f"融合上下文: {len(fused_context)} 字符")
-        add_status(session, "fusion", "success")
-        ensure_not_stopped(session)
-
-        # AI-3: 深度报告
-        add_status(session, "rep1", "active")
-        add_log(session, "rep1", "正在融合审计意见生成深度报告...")
-        detailed_resp = await call_detailed_ai_new(active_settings, scene, fused_context)
-        session.full_result = detailed_resp["choices"][0]["message"]["content"]
-        add_log(session, "rep1", f"深度报告生成成功 ({len(session.full_result)} 字符)")
-        add_status(session, "rep1", "success")
-        ensure_not_stopped(session)
-
-        # AI-4: 精简报告
-        add_status(session, "rep2", "active")
-        add_log(session, "rep2", "生成精简老板视图...")
-        simplified_resp = await call_simplified_ai(active_settings, session.full_result)
-        session.result = simplified_resp["choices"][0]["message"]["content"]
-        add_log(session, "rep2", f"任务全部完成！(精简报告 {len(session.result)} 字符)")
-        add_status(session, "rep2", "success")
-
-        with session.runtime_lock:
-            session.status = "completed"
-        save_latest_report(session)
-
-    except TaskAbortedError as e:
-        with session.runtime_lock:
-            session.status = "aborted"
-            session.error_message = str(e)
-        add_log(session, "system", f"⚠️ {str(e)}")
-
-    except Exception as e:
-        error_msg = "多文件分析失败，请在后台监控流查看 system 节点日志"
-        add_log(session, "system", f"发生错误: {str(e)}")
-        with session.runtime_lock:
-            session.error_message = error_msg
-            session.status = "error"
-
-
-async def _run_agent_pipeline(session: SessionState, pipe, bundle):
-    """包装 AgentPipeline.run()，适配 session 的事件/状态管理"""
-    with session.runtime_lock:
-        session.status = "running"
-        session.force_stop = False
-        session.error_message = ""
-        session.result = None
-        session.full_result = None
-    reset_events(session)
-    emit_event(session, "pipeline", {"pipeline": pipe.name})
-
+    pipe = create_pipeline(pipeline_name, get_llm_preset=get_preset, check_aborted=check_aborted)
     pipe.set_event_callbacks(
         on_status=lambda nid, st: add_status(session, nid, st),
         on_log=lambda nid, msg: add_log(session, nid, msg),
+        on_progress=lambda nid, cur, tot: add_progress(session, nid, cur, tot),
+        on_tally=lambda nid, t: add_tally(session, nid, t),
     )
-    add_status(session, "agent", "active")
-    add_log(session, "agent", f"启动 {pipe.name} 管线，{len(bundle.tables)} 张表")
-    pipe._emit_status(pipe.name + "_init" if pipe.name == "pydantic" else pipe.name + "_init", "active")
 
     try:
+        from packages.agents.traditional_pipeline import PipelineAbortedError
+
         result = await pipe.run(bundle)
-        session.full_result = result.full_report or f"# {pipe.name} 管线报告\n\npipeline: {result.pipeline}\n耗时: {result.elapsed_ms:.0f}ms"
+        full_text = result.full_report or f"# {pipeline_name} 管线报告\n\npipeline: {result.pipeline}\n耗时: {result.elapsed_ms:.0f}ms"
+        session.full_result = full_text
         session.result = json.dumps({
             "health_status": "分析完成",
-            "overview_text": f"{pipe.name} 管线执行完毕",
+            "overview_text": f"{pipeline_name} 管线执行完毕",
             "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in result.cards]
         }, ensure_ascii=False)
-        add_status(session, "agent", "success")
         with session.runtime_lock:
             session.status = "completed"
         save_latest_report(session)
+    except PipelineAbortedError:
+        add_log(session, "system", "⚠️ 任务被用户强制终止。")
+        with session.runtime_lock:
+            session.status = "aborted"
     except Exception as e:
-        add_log(session, "agent", f"管线执行失败: {str(e)}")
-        add_status(session, "agent", "error")
+        add_log(session, "system", f"管线执行失败: {str(e)}")
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
@@ -1121,81 +856,24 @@ async def analyze(
         if session.status == "running":
             raise HTTPException(status_code=400, detail="任务正在运行中")
 
-    parsed_files = []
-    decoded_files = []
-    has_non_json = False
-
-    for i, uploaded_file in enumerate(files):
+    decoded_files: list[dict] = []
+    for uploaded_file in files:
         filename = uploaded_file.filename or "unnamed"
-
-        try:
-            raw = await uploaded_file.read()
-            if len(raw) > MAX_UPLOAD_FILE_SIZE:
-                raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {filename}")
-
-            source_type = infer_source_type(filename)
-            if source_type != "json":
-                has_non_json = True
-
-            # 先尝试 JSON 解析（兼容旧流程）
-            try:
-                parsed = json.loads(raw.decode("utf-8-sig"))
-                parsed_files.append(parsed)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                if source_type == "json":
-                    raise HTTPException(status_code=400, detail=f"JSON 解析失败: {filename}")
-                # 非 JSON 文件（Excel/CSV），保留原始字节供新管线处理
-
-            decoded_files.append({"name": filename, "bytes": raw})
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"文件读取失败: {filename} - {str(e)}")
+        raw = await uploaded_file.read()
+        if len(raw) > MAX_UPLOAD_FILE_SIZE:
+            raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {filename}")
+        decoded_files.append({"name": filename, "bytes": raw})
 
     save_current_uploads(session, decoded_files)
 
+    raw_bundle = parse_uploaded_files(decoded_files)
+    bundle = adapt_to_dataset_bundle(raw_bundle)
+
     with AGENT_PIPELINE_LOCK:
-        pipeline = GLOBAL_AGENT_PIPELINE
+        pipeline_name = GLOBAL_AGENT_PIPELINE
 
-    if pipeline == "pydantic":
-        from packages.agents.pydantic_pipeline import PydanticPipeline
-        from packages.agents.models import DatasetBundle, RawTable
-
-        tables = []
-        for f in decoded_files:
-            try:
-                parsed = json.loads(f["bytes"].decode("utf-8-sig"))
-            except Exception:
-                continue
-            if isinstance(parsed, list):
-                tables.append(RawTable(name=f["name"], rows=parsed))
-            elif isinstance(parsed, dict):
-                tables.append(RawTable(name=f["name"], rows=[parsed]))
-        bundle = DatasetBundle(tables=tables)
-        background_tasks.add_task(_run_agent_pipeline, session, PydanticPipeline(), bundle)
-        return {"status": "started", "pipeline": "pydantic"}
-
-    elif pipeline == "smol":
-        from packages.agents.smol_pipeline import SmolPipeline
-        from packages.agents.models import DatasetBundle, RawTable
-
-        tables = []
-        for f in decoded_files:
-            try:
-                parsed = json.loads(f["bytes"].decode("utf-8-sig"))
-            except Exception:
-                continue
-            if isinstance(parsed, list):
-                tables.append(RawTable(name=f["name"], rows=parsed))
-            elif isinstance(parsed, dict):
-                tables.append(RawTable(name=f["name"], rows=[parsed]))
-        bundle = DatasetBundle(tables=tables)
-        background_tasks.add_task(_run_agent_pipeline, session, SmolPipeline(), bundle)
-        return {"status": "started", "pipeline": "smol"}
-
-    # 传统管线
-    background_tasks.add_task(run_multifile_analysis, session, decoded_files)
-    return {"status": "started", "pipeline": "traditional"}
+    background_tasks.add_task(run_pipeline_task, session, pipeline_name, bundle)
+    return {"status": "started", "pipeline": pipeline_name}
 
 
 @app.post("/api/stop")

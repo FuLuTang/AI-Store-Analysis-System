@@ -116,7 +116,7 @@ class Workspace:
         metas: list[TableMeta] = []
         for t in tables:
             df = pd.DataFrame(t.rows)
-            file_stem = t.name.replace(" ", "_")
+            file_stem = t.name.replace(" ", "_").replace("/", "_")
             path = self._tables_dir / f"{file_stem}.parquet"
             df.to_parquet(path, index=False)
             meta = self._df_to_meta(t.name, str(path), df, duckdb_name=file_stem)
@@ -126,7 +126,7 @@ class Workspace:
         return metas
 
     def write_parquet(self, name: str, df: pd.DataFrame) -> TableMeta:
-        file_stem = name.replace(" ", "_")
+        file_stem = name.replace(" ", "_").replace("/", "_")
         path = self._tables_dir / f"{file_stem}.parquet"
         df.to_parquet(path, index=False)
         meta = self._df_to_meta(name, str(path), df, duckdb_name=file_stem)

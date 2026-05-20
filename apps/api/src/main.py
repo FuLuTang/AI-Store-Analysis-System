@@ -70,6 +70,32 @@ LLM_PRESETS_LOCK = Lock()
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 PRESET_SECRET = os.getenv("LLM_PRESET_SECRET", "").strip()
 
+# 全局分析处理管线 — traditional / pydantic / smol
+GLOBAL_AGENT_PIPELINE = "traditional"
+AGENT_PIPELINE_FILE = STORAGE_DIR / "agent_pipeline.json"
+AGENT_PIPELINE_LOCK = Lock()
+AGENT_PIPELINE_OPTIONS = {"traditional", "pydantic", "smol"}
+
+def _load_agent_pipeline() -> str:
+    if AGENT_PIPELINE_FILE.exists():
+        try:
+            payload = json.loads(AGENT_PIPELINE_FILE.read_text(encoding="utf-8"))
+            val = payload.get("pipeline", "traditional")
+            if val in AGENT_PIPELINE_OPTIONS:
+                return val
+        except Exception:
+            pass
+    return "traditional"
+
+def _save_agent_pipeline(val: str):
+    AGENT_PIPELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AGENT_PIPELINE_FILE.write_text(
+        json.dumps({"pipeline": val}, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+GLOBAL_AGENT_PIPELINE = _load_agent_pipeline()
+
 
 def normalize_reasoning_effort(value: Optional[str]) -> str:
     if not isinstance(value, str):
@@ -545,6 +571,27 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
         "status": "ok",
         "presets": get_all_llm_presets()
     }
+
+@app.get("/api/admin/pipeline")
+def get_admin_pipeline(x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    with AGENT_PIPELINE_LOCK:
+        return {"status": "ok", "pipeline": GLOBAL_AGENT_PIPELINE, "options": sorted(AGENT_PIPELINE_OPTIONS)}
+
+
+@app.post("/api/admin/pipeline")
+async def save_admin_pipeline(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    val = (payload.get("pipeline") or "").strip().lower()
+    if val not in AGENT_PIPELINE_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"无效管线: {val}，可选 {sorted(AGENT_PIPELINE_OPTIONS)}")
+    with AGENT_PIPELINE_LOCK:
+        global GLOBAL_AGENT_PIPELINE
+        GLOBAL_AGENT_PIPELINE = val
+        _save_agent_pipeline(val)
+    return {"status": "ok", "pipeline": GLOBAL_AGENT_PIPELINE}
+
 
 @app.get("/api/status")
 def get_status(x_fzt_key: Optional[str] = Header(default=None)):
@@ -1026,6 +1073,37 @@ async def run_multifile_analysis(session: SessionState, decoded_files: list):
             session.status = "error"
 
 
+async def _run_agent_pipeline(session: SessionState, pipe, bundle):
+    """包装 AgentPipeline.run()，适配 session 的事件/状态管理"""
+    with session.runtime_lock:
+        session.status = "running"
+        session.force_stop = False
+        session.error_message = ""
+        session.result = None
+        session.full_result = None
+    reset_events(session)
+    add_status(session, "agent", "active")
+    add_log(session, "agent", f"启动 {pipe.name} 管线，{len(bundle.tables)} 张表")
+    try:
+        result = await pipe.run(bundle)
+        session.full_result = result.full_report or f"# {pipe.name} 管线报告\n\npipeline: {result.pipeline}\n耗时: {result.elapsed_ms:.0f}ms"
+        session.result = json.dumps({
+            "health_status": "分析完成",
+            "overview_text": f"{pipe.name} 管线执行完毕",
+            "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in result.cards]
+        }, ensure_ascii=False)
+        add_status(session, "agent", "success")
+        with session.runtime_lock:
+            session.status = "completed"
+        save_latest_report(session)
+    except Exception as e:
+        add_log(session, "agent", f"管线执行失败: {str(e)}")
+        add_status(session, "agent", "error")
+        with session.runtime_lock:
+            session.status = "error"
+            session.error_message = str(e)
+
+
 @app.post("/api/run")
 async def run(request: Request, background_tasks: BackgroundTasks, x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key)
@@ -1104,10 +1182,48 @@ async def analyze(
 
     save_current_uploads(session, decoded_files)
 
-    # 统一走新管线（input_adapter 已支持旧药店 JSON 解包）
-    background_tasks.add_task(run_multifile_analysis, session, decoded_files)
+    with AGENT_PIPELINE_LOCK:
+        pipeline = GLOBAL_AGENT_PIPELINE
 
-    return {"status": "started", "pipeline": "multifile"}
+    if pipeline == "pydantic":
+        from packages.agents.pydantic_pipeline import PydanticPipeline
+        from packages.agents.models import DatasetBundle, RawTable
+
+        tables = []
+        for f in decoded_files:
+            try:
+                parsed = json.loads(f["bytes"].decode("utf-8-sig"))
+            except Exception:
+                continue
+            if isinstance(parsed, list):
+                tables.append(RawTable(name=f["name"], rows=parsed))
+            elif isinstance(parsed, dict):
+                tables.append(RawTable(name=f["name"], rows=[parsed]))
+        bundle = DatasetBundle(tables=tables)
+        background_tasks.add_task(_run_agent_pipeline, session, PydanticPipeline(), bundle)
+        return {"status": "started", "pipeline": "pydantic"}
+
+    elif pipeline == "smol":
+        from packages.agents.smol_pipeline import SmolPipeline
+        from packages.agents.models import DatasetBundle, RawTable
+
+        tables = []
+        for f in decoded_files:
+            try:
+                parsed = json.loads(f["bytes"].decode("utf-8-sig"))
+            except Exception:
+                continue
+            if isinstance(parsed, list):
+                tables.append(RawTable(name=f["name"], rows=parsed))
+            elif isinstance(parsed, dict):
+                tables.append(RawTable(name=f["name"], rows=[parsed]))
+        bundle = DatasetBundle(tables=tables)
+        background_tasks.add_task(_run_agent_pipeline, session, SmolPipeline(), bundle)
+        return {"status": "started", "pipeline": "smol"}
+
+    # 传统管线
+    background_tasks.add_task(run_multifile_analysis, session, decoded_files)
+    return {"status": "started", "pipeline": "traditional"}
 
 
 @app.post("/api/stop")

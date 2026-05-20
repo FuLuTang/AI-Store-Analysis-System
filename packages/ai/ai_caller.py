@@ -246,8 +246,41 @@ def _resolve_reasoning_effort(settings: dict) -> str:
 
 # ── AI-1: 初级报告 ──
 
+def _build_data_context_text(profiles: list, mappings: list = None, scene: dict = None) -> str:
+    """从画像+映射构建数据上下文（不含指标结果，供早期AI调用）"""
+    industry = (scene or {}).get("industry", "generic")
+    lines = [f"【分析场景】行业={industry}", ""]
+
+    # 表结构概览
+    tables = {}
+    for p in profiles:
+        t = p.get("table", "?")
+        if t not in tables:
+            tables[t] = []
+        tables[t].append(p)
+
+    lines.append(f"共 {len(tables)} 张表, {len(profiles)} 个字段:")
+    for tname, cols in tables.items():
+        lines.append(f"  {tname} ({len(cols)} 列)")
+    lines.append("")
+
+    # 字段映射结果（如果有）
+    if mappings:
+        mapped = [m for m in mappings if m.get("semantic_field") not in ("unknown", "ignore")]
+        unknown = [m for m in mappings if m.get("semantic_field") == "unknown"]
+        lines.append(f"【字段映射】{len(mapped)}/{len(mappings)} 已识别")
+        for m in mapped:
+            lines.append(f"  {m.get('table', '?')}.{m['raw_field']} → {m['semantic_field']}")
+        if unknown:
+            lines.append(f"  未识别: {len(unknown)} 个")
+            for m in unknown[:5]:
+                lines.append(f"    {m.get('table', '?')}.{m['raw_field']}")
+
+    return "\n".join(lines)
+
+
 async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = None) -> dict:
-    """AI-1: 初级报告 (兼容旧管线)"""
+    """AI-1: 初级报告 (兼容旧管线，有指标传指标，无指标传raw data)"""
     context = _build_context_header()
     reasoning_effort = _resolve_reasoning_effort(settings)
 
@@ -268,6 +301,48 @@ async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = No
             {"role": "user", "content": user_content},
         ],
         "reasoning_effort": reasoning_effort, "temperature": 0.3, "max_tokens": 16384,
+    })
+
+
+async def call_ai_early(settings: dict, data_context_text: str, scene: dict) -> dict:
+    """AI-1 早期调用：在指标算出前先用数据上下文生成初诊"""
+    reasoning_effort = _resolve_reasoning_effort(settings)
+    context = _build_context_header(scene)
+
+    user_content = context + "\n\n【数据概览】\n" + data_context_text + \
+        "\n\n【注意】\n当前展示的是字段结构和映射关系，精确指标尚在计算中。" \
+        "请基于已有信息做初步诊断，如数据结构特征、映射覆盖率、明显的数据范围等。"
+
+    cfg = _role_config(scene)
+    scopes_text = "、".join(cfg["scopes"])
+    system_prompt = f"""你是一位资深{cfg["role"]}。你将收到一家{cfg["domain"]}的数据概览。
+
+数据含：
+- 解析后的表格结构和字段名
+- 标准语义字段映射（原始字段名 → 标准字段名）
+- 未识别的字段列表
+
+你的任务：
+基于数据结构做初步经营诊断，发现明显的业务特征或异常信号。
+
+分析方向：
+- {scopes_text}
+- 字段映射的质量和覆盖率（哪些字段没识别出来？可能缺失了哪些关键维度？）
+- 数据的时间范围和颗粒度（有日、月、年数据吗？）
+- 基于结构判断能做哪些分析、缺什么数据
+
+输出要求：
+- Markdown 格式，简约
+- 指出关键发现和数据缺口
+- 不要编造没有数据的数值"""
+
+    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
+        "model": settings["model"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "reasoning_effort": reasoning_effort, "temperature": 0.3, "max_tokens": 8192,
     })
 
 
@@ -339,4 +414,147 @@ async def call_simplified_ai(settings: dict, detailed_report_text: str) -> dict:
         ],
         "response_format": {"type": "json_object"},
         "reasoning_effort": reasoning_effort, "temperature": 0.3, "max_tokens": 8192,
+    })
+
+
+# ── AI-5: 行业分类 ──
+
+_INDUSTRY_CLASSIFY_SYSTEM_PROMPT = """你是一位数据分类专家。根据上传文件的字段名特征，判断这份数据所属的行业。
+
+可选行业（只能选一个）：
+- pharmacy: 药店/药品零售（关键词: 药品, 零售金额, 会员金额, barcode, 批准文号, OTC, O2O）
+- restaurant: 餐饮（关键词: 菜品, 外卖, 堂食, dish, 配送, 翻台）
+- hr: 人力资源（关键词: 员工, 离职, 入职, 绩效, 考勤, 招聘）
+- retail: 零售（关键词: 商品, 库存, SKU, 零售, 门店）
+- generic: 通用（以上都不匹配时）
+
+输出严格 JSON，不含其他字符：
+{
+  "industry": "pharmacy|restaurant|hr|retail|generic",
+  "business_model": "o2o_driven|offline_driven|delivery_heavy|internal_department|unknown",
+  "confidence": 0.0-1.0,
+  "reason": "判断依据简要说明"
+}"""
+
+
+async def call_industry_classifier(settings: dict, profiles: list) -> dict:
+    """AI-5: 行业分类"""
+    lines = ["请判断以下字段属于哪个行业：\n"]
+    for p in profiles:
+        table = p.get("table", "?")
+        col = p.get("column", "?")
+        dtype = p.get("dtype", "?")
+        samples = p.get("samples", [])[:3]
+        lines.append(f"  表: {table} | 字段: {col} | 类型: {dtype} | 样本: {samples}")
+    user_content = "\n".join(lines)
+
+    reasoning_effort = _resolve_reasoning_effort(settings)
+    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
+        "model": settings["model"],
+        "messages": [
+            {"role": "system", "content": _INDUSTRY_CLASSIFY_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "response_format": {"type": "json_object"},
+        "reasoning_effort": reasoning_effort, "temperature": 0.2, "max_tokens": 1024,
+    })
+
+
+# ── AI-6: 字段映射 ──
+
+_FIELD_MAP_SYSTEM_PROMPT = """你是一位数据工程师。你需要将原始字段名映射为标准语义字段。
+
+规则：
+1. 识别每个字段的业务含义，映射到最匹配的标准字段
+2. 如果某个字段没有业务价值（如内部编号、元数据、展示标签等），标记为 "ignore"
+3. 充分使用字段所在的表名、路径上下文来判断含义
+4. 样本值可以帮助判断字段的实际含义
+
+输出严格 JSON 数组，不含其他字符：
+[
+  {
+    "raw_field": "原始字段名",
+    "table": "来源表名",
+    "semantic_field": "标准字段名 或 ignore",
+    "confidence": 0.0-1.0,
+    "reason": "映射理由"
+  }
+]"""
+
+
+def _build_field_map_standard_fields() -> str:
+    """构建可用标准字段列表说明"""
+    items = [
+        ("revenue", "营业收入/营业额/销售额"),
+        ("gross_profit", "毛利"),
+        ("order_count", "订单数/单量"),
+        ("customer_count", "来客数/客流"),
+        ("cost", "成本/进价"),
+        ("discount_amount", "折扣/满减/补贴"),
+        ("channel", "渠道/平台"),
+        ("product_name", "商品名称/产品名"),
+        ("product_id", "商品编号/SKU/条码"),
+        ("category", "分类/品类"),
+        ("store_id", "门店编号"),
+        ("department", "部门"),
+        ("employee_id", "员工编号"),
+        ("date", "日期"),
+        ("time_slot", "时段/小时"),
+        ("inventory_qty", "库存量"),
+        ("inventory_amount", "库存金额"),
+        ("member_revenue", "会员营收"),
+        ("member_count", "会员数"),
+        ("delivery_duration", "出餐/配送时长"),
+        ("rating", "评分/评价"),
+        ("hire_date", "入职日期"),
+        ("leave_date", "离职日期"),
+        ("employee_status", "员工状态(在职/离职)"),
+        ("attendance_hours", "出勤工时"),
+        ("performance_score", "绩效分"),
+        ("candidate_count", "简历数/候选人"),
+        ("interview_count", "面试数"),
+        ("offer_count", "Offer数"),
+        ("onboard_count", "入职数"),
+        ("sales_quantity", "销售数量"),
+        ("unit_price", "单价"),
+        ("retail_price", "零售价"),
+        ("member_price", "会员价"),
+        ("avg_order_value", "客单价"),
+        ("sales_rank", "销售排名"),
+        ("manufacturer", "生产厂家"),
+        ("specification", "规格"),
+        ("approval_no", "批准文号"),
+    ]
+    lines = ["可用标准字段列表："]
+    for field, desc in items:
+        lines.append(f"  - {field}: {desc}")
+    lines.append("")
+    lines.append("特殊标记说明：")
+    lines.append("  - ignore: 该字段无业务分析价值，如内部ID、展示标签、元数据等")
+    return "\n".join(lines)
+
+
+async def call_field_mapper(settings: dict, profiles: list, industry: str) -> dict:
+    """AI-6: 字段映射"""
+    lines = ["请将以下原始字段映射到标准语义字段：\n"]
+    lines.append(f"已识别行业: {industry}\n")
+    for p in profiles:
+        table = p.get("table", "?")
+        col = p.get("column", "?")
+        dtype = p.get("dtype", "?")
+        samples = p.get("samples", [])[:3]
+        lines.append(f"  表: {table} | 字段: {col} | 类型: {dtype} | 样本: {samples}")
+    lines.append("")
+    lines.append(_build_field_map_standard_fields())
+    user_content = "\n".join(lines)
+
+    reasoning_effort = _resolve_reasoning_effort(settings)
+    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
+        "model": settings["model"],
+        "messages": [
+            {"role": "system", "content": _FIELD_MAP_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "response_format": {"type": "json_object"},
+        "reasoning_effort": reasoning_effort, "temperature": 0.2, "max_tokens": 4096,
     })

@@ -33,12 +33,14 @@ class AgentPipeline:
 
 ```
 packages/agents/
-  ├── models.py              # AgentResult, DatasetBundle, FlattenPlan, SemanticMapping, SqlPlan, ...
+  ├── models.py              # AgentResult, DatasetBundle, SceneContext, Manifest...
   ├── base.py                # AgentPipeline 抽象接口
-  ├── workspace.py           # Workspace (独立临时目录 + parquet + manifest)
-  ├── tools/                 # 9 个共享工具 (file/duckdb/python/context/validate/profile)
+  ├── workspace.py           # Workspace (持久化 storage/artifacts/{id}/, 含 duckdb/manifest/trace)
+  ├── tools/                 # 共享工具层 + tools/impl/ 纯函数实现层
+  │   └── impl/              # file_impl / duckdb_impl / context_impl / setup_impl ...
+  ├── adapters/              # smol_tools.py (smolagents @tool) / pydantic_tools.py
   ├── prompts/               # pydantic.md + smol.md 系统提示词
-  └── tests/                 # 单元测试
+  └── tests/
 ```
 
 ### 路由
@@ -66,11 +68,10 @@ packages/agents/
 
 ```
 数据输入（任意格式）
-  ↓ Agent: Python Tool — 写代码解析 & 展平为二维表
-  ↓ Agent: 写入 DuckDB — 结构化存查
-  ↓ Agent: 读上下文文档 — 匹配标准字段名
-  ↓ Agent: SQL Tool — 写 SQL 算指标
-  ↓ [确定性层: Threshold → Evidence → LLM Report Writer]
+  ↓ Workspace: write_raw_parquet → init_duckdb
+  ↓ design_plan: 写入任务清单 plan.json
+  ↓ CodeAgent: 写 Python 展平 → DuckDB SQL 计算 → 输出 AgentResult
+  ↓ AgentResult (scene + mapping + metrics + full_report + cards)
 ```
 
 ---
@@ -80,7 +81,7 @@ packages/agents/
 - **后端语言**：Python（现有 FastAPI 项目）
 - **LLM 端点**：已有 OpenAI-compatible API（deepseek），支持 function calling
 - **SQL 引擎**：DuckDB（零依赖，单进程，原生支持 pandas/parquet/JSON）
-- **任务类型**：单 Agent 序列执行，每次调用完成一步
+- **任务类型**：单 Agent 完成全流程（展平→画像→映射→计算→输出），最多 15 轮迭代
 
 ---
 
@@ -93,5 +94,5 @@ packages/agents/
 
 ## 分支
 
-当前分支：`agent-duckdb-pipeline`
+当前分支：`agent-smolagents`
 

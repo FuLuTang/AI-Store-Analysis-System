@@ -141,12 +141,34 @@ def classify_scene(profiles: list) -> dict:
     }
 
 
-# ── LLM 辅助分类 (留桩，后续接入) ──
+# ── LLM 辅助分类 ──
 
 async def llm_classify_scene(profiles: list, llm_settings: dict) -> dict:
     """
-    LLM 辅助行业/业态识别（异步，留桩）
-    当规则识别 confidence < 0.6 时调用
+    AI 行业分类：将字段信息发给 LLM，返回 industry/business_model/confidence
+    如果 LLM 调用失败或没有 API Key，回退到规则版
     """
-    # TODO: 接入 ai_caller 进行 LLM 识别
-    return classify_scene(profiles)
+    if not llm_settings or not llm_settings.get("apiKey"):
+        return classify_scene(profiles)
+
+    try:
+        from packages.ai.ai_caller import call_industry_classifier
+        resp = await call_industry_classifier(llm_settings, profiles)
+        content = resp["choices"][0]["message"]["content"]
+        import json
+        data = json.loads(content)
+        industry = data.get("industry", "generic")
+        business_model = data.get("business_model", "unknown")
+        confidence = data.get("confidence", 0.5)
+        reason = data.get("reason", "")
+
+        # 合并回标准 SceneContext 格式
+        result = classify_scene(profiles)  # 规则结果作兜底
+        result["industry"] = industry
+        result["business_model"] = business_model
+        result["confidence"] = round(confidence, 2)
+        result["llm_reason"] = reason
+        return result
+    except Exception as e:
+        # 失败时回退规则
+        return classify_scene(profiles)

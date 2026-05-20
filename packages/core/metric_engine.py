@@ -204,10 +204,143 @@ def _data_quality(rows: list, profiles: Optional[list] = None) -> dict:
     }
 
 
+def _consecutive_change(rows: list, field: str = "revenue") -> dict:
+    """连续涨跌：判断最近几期连续上升/下降"""
+    vals = [(r.get(field), r.get("date")) for r in rows if is_valid(r.get(field))]
+    if len(vals) < 2:
+        return {"direction": "stable", "consecutive_days": 0, "change_pct": 0}
+
+    changes = []
+    for i in range(1, len(vals)):
+        prev = vals[i - 1][0]
+        cur = vals[i][0]
+        if prev != 0:
+            pct = (cur - prev) / prev
+            changes.append({"direction": "up" if pct > 0 else "down", "pct": round_to(pct * 100, 1)})
+
+    if not changes:
+        return {"direction": "stable", "consecutive_days": 0, "change_pct": 0}
+
+    # 从最近一期往前数连续同向
+    count = 0
+    ref_dir = changes[-1]["direction"]
+    for c in reversed(changes):
+        if c["direction"] == ref_dir:
+            count += 1
+        else:
+            break
+
+    return {
+        "direction": ref_dir,
+        "consecutive_days": count,
+        "change_pct": changes[-1]["pct"]
+    }
+
+
+def _gross_margin_trend(rows: list) -> dict:
+    """毛利率趋势：每期毛利率 + 整体趋势方向"""
+    pairs = []
+    for r in rows:
+        rev = r.get("revenue")
+        gp = r.get("gross_profit")
+        if is_valid(rev) and is_valid(gp) and rev != 0:
+            pairs.append(gp / rev)
+
+    if len(pairs) < 2:
+        return {"direction": "stable", "avg_margin": round_to(pairs[0] * 100) if pairs else 0}
+
+    current = pairs[-1]
+    previous = pairs[-2]
+    direction = "rising" if current > previous else ("falling" if current < previous else "stable")
+    avg_margin = sum(pairs) / len(pairs)
+
+    return {
+        "direction": direction,
+        "current_margin": round_to(current * 100),
+        "previous_margin": round_to(previous * 100),
+        "avg_margin": round_to(avg_margin * 100),
+        "change_pct": round_to((current - previous) * 100)
+    }
+
+
+def _sum_field(rows: list, field: str) -> dict:
+    """字段求和"""
+    vals = [r.get(field) for r in rows if is_valid(r.get(field))]
+    if not vals:
+        return {"sum": 0, "count": 0, "mean": 0}
+    return {
+        "sum": round_to(sum(vals), 2),
+        "count": len(vals),
+        "mean": round_to(sum(vals) / len(vals), 2) if vals else 0
+    }
+
+
+def _distinct_count(rows: list, field: str) -> dict:
+    """去重计数"""
+    vals = set()
+    for r in rows:
+        v = r.get(field)
+        if v is not None:
+            vals.add(str(v))
+    return {"distinct_count": len(vals), "total_rows": len(rows)}
+
+
+def _field_stats(rows: list, field: str) -> dict:
+    """字段统计分布：min/max/avg/median"""
+    vals = sorted([r.get(field) for r in rows if is_valid(r.get(field))])
+    if not vals:
+        return {"min": 0, "max": 0, "avg": 0, "median": 0, "count": 0}
+    n = len(vals)
+    median = vals[n // 2] if n % 2 == 1 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+    return {
+        "min": round_to(min(vals), 2),
+        "max": round_to(max(vals), 2),
+        "avg": round_to(sum(vals) / n, 2),
+        "median": round_to(median, 2),
+        "count": n
+    }
+
+
+def _growth_decomposition(rows: list) -> dict:
+    """增长拆解：revenue = avg_order_value × order_count"""
+    pairs = []
+    for r in rows:
+        rev = r.get("revenue")
+        oc = r.get("order_count")
+        if is_valid(rev) and is_valid(oc) and oc != 0:
+            pairs.append({"revenue": rev, "aov": rev / oc, "order_count": oc, "date": r.get("date")})
+
+    if len(pairs) < 2:
+        return {"status": "insufficient_data", "decomposition": None}
+
+    curr = pairs[-1]
+    prev = pairs[-1 - 1] if len(pairs) >= 2 else None
+    if prev is None:
+        return {"status": "insufficient_data", "decomposition": None}
+
+    rev_change = curr["revenue"] - prev["revenue"]
+    aov_effect = (curr["aov"] - prev["aov"]) * prev["order_count"]
+    oc_effect = (curr["order_count"] - prev["order_count"]) * prev["aov"]
+    cross_effect = (curr["aov"] - prev["aov"]) * (curr["order_count"] - prev["order_count"])
+
+    return {
+        "status": "available",
+        "revenue_change": round_to(rev_change, 2),
+        "revenue_change_pct": round_to((rev_change / prev["revenue"]) * 100, 1) if prev["revenue"] != 0 else 0,
+        "aov_effect": round_to(aov_effect, 2),
+        "order_count_effect": round_to(oc_effect, 2),
+        "cross_effect": round_to(cross_effect, 2),
+        "current_aov": round_to(curr["aov"], 2),
+        "current_orders": int(curr["order_count"]),
+        "previous_aov": round_to(prev["aov"], 2),
+        "previous_orders": int(prev["order_count"]),
+    }
+
+
 # ── 计算器调度表 ──
 
 CALCULATOR_MAP = {
-    "sum": None,          # 使用内置 sum，比较简单，直接在 compute 中处理
+    "sum": None,
     "ratio": _ratio,
     "period_change": _period_change,
     "share_by_dimension": _share_by_dimension,
@@ -218,6 +351,12 @@ CALCULATOR_MAP = {
     "volatility": _volatility,
     "threshold_rate": _threshold_rate,
     "data_quality": _data_quality,
+    "consecutive_change": _consecutive_change,
+    "gross_margin_trend": _gross_margin_trend,
+    "sum_field": _sum_field,
+    "distinct_count": _distinct_count,
+    "field_stats": _field_stats,
+    "growth_decomposition": _growth_decomposition,
 }
 
 
@@ -307,6 +446,24 @@ def compute_metric(metric_def: dict, canonical_dataset: dict) -> dict:
 
         elif calculator == "data_quality":
             value = _data_quality(rows)
+
+        elif calculator == "consecutive_change":
+            value = _consecutive_change(rows, params.get("field", "revenue"))
+
+        elif calculator == "gross_margin_trend":
+            value = _gross_margin_trend(rows)
+
+        elif calculator == "sum_field":
+            value = _sum_field(rows, params.get("field", "revenue"))
+
+        elif calculator == "distinct_count":
+            value = _distinct_count(rows, params.get("field", "product_name"))
+
+        elif calculator == "field_stats":
+            value = _field_stats(rows, params.get("field", "retail_price"))
+
+        elif calculator == "growth_decomposition":
+            value = _growth_decomposition(rows)
 
         else:
             value = None

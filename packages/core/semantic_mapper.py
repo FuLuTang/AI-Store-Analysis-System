@@ -46,6 +46,18 @@ KEYWORD_MAP = {
     "interview_count": ["面试人数", "面试数", "interview_count"],
     "offer_count": ["offer数量", "offer数", "offer_count"],
     "onboard_count": ["入职人数", "入职数", "onboard_count"],
+    # ── 新增字段 ──
+    "sales_quantity": ["销售数量", "销售数", "sales_quantity", "销量", "数量"],
+    "avg_order_value": ["客单价", "avg_order_value", "average_order_value", "平均客单价",
+                        "average_spend"],
+    "retail_price": ["零售价", "零售价格", "retail_price", "单价", "price", "售价"],
+    "member_price": ["会员价", "会员价格", "member_price"],
+    "manufacturer": ["厂家", "生产厂家", "制造商", "manufacturer", "生产企业"],
+    "specification": ["规格", "specification", "规格型号", "包装规格"],
+    "approval_no": ["批准文号", "approval_no", "国药准字", "注册证号"],
+    "sales_rank": ["排名", "销售排名", "rank", "sales_rank", "排序", "序号"],
+    "city": ["城市", "city", "地区", "区域"],
+    "unit_price": ["单价", "unit_price", "销售单价"],
 }
 
 # 场景感知消歧规则：同一关键字匹配到多个标准字段时，根据 scene.industry 消歧
@@ -143,11 +155,77 @@ def _build_mapping_prompt(profiles: list, scene: Optional[dict] = None) -> str:
     return "\n".join(lines)
 async def llm_map_profiles(profiles: list, llm_settings: dict, scene: Optional[dict] = None) -> list:
     """
-    LLM 辅助字段映射 (异步, 留桩)
-    当规则匹配 confidence < 0.5 时，调用 LLM 尝试映射
+    AI 字段映射：将字段信息发给 LLM，返回 SemanticMapping[]
+    如果 LLM 调用失败或没有 API Key，回退到规则版
     """
-    # TODO: 接入 ai_caller 进行 LLM 映射
-    return map_profiles(profiles, scene)
+    if not llm_settings or not llm_settings.get("apiKey"):
+        return map_profiles(profiles, scene)
+
+    try:
+        from packages.ai.ai_caller import call_field_mapper
+        industry = (scene or {}).get("industry", "generic")
+        resp = await call_field_mapper(llm_settings, profiles, industry)
+        content = resp["choices"][0]["message"]["content"]
+        import json as _json
+        ai_results = _json.loads(content)
+
+        # 转换成标准 SemanticMapping[] 格式
+        mappings = []
+        for item in ai_results:
+            raw = item.get("raw_field", "")
+            table = item.get("table", "")
+            sf = item.get("semantic_field", "unknown")
+            conf = item.get("confidence", 0.5)
+
+            if sf == "ignore":
+                mappings.append({
+                    "raw_field": raw,
+                    "table": table,
+                    "semantic_field": "ignore",
+                    "confidence": 1.0,
+                    "need_confirm": False,
+                    "reason": item.get("reason", "AI: 无业务价值，忽略"),
+                    "dtype": "unknown",
+                })
+            else:
+                need_confirm = conf < 0.75
+                mappings.append({
+                    "raw_field": raw,
+                    "table": table,
+                    "semantic_field": sf,
+                    "confidence": round(conf, 2),
+                    "need_confirm": need_confirm,
+                    "reason": f"AI映射: {item.get('reason', '')}",
+                    "dtype": "unknown",
+                })
+
+        # AI 返回的数量应该匹配输入
+        if len(mappings) != len(profiles):
+            # 如果 AI 漏了某些字段，用规则补全
+            rule_mappings = map_profiles(profiles, scene)
+            ai_raw_map = {m["raw_field"]: m for m in mappings}
+            for rm in rule_mappings:
+                if rm["raw_field"] not in ai_raw_map:
+                    mappings.append(rm)
+
+        # 补充 dtype
+        profile_lookup = {}
+        for p in profiles:
+            col = p.get("column", "")
+            tbl = p.get("table", "")
+            key = f"{tbl}::{col}"
+            profile_lookup[col] = p
+            profile_lookup[key] = p
+        for m in mappings:
+            for p in profiles:
+                if p.get("column") == m["raw_field"] and p.get("table", "") == m.get("table", ""):
+                    m["dtype"] = p.get("dtype", "unknown")
+                    break
+
+        return mappings
+    except Exception as e:
+        # 失败时回退规则
+        return map_profiles(profiles, scene)
 # ── 映射持久化 ──
 def _mappings_dir():
     """映射存储目录"""

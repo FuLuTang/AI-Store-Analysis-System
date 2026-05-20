@@ -61,6 +61,38 @@ def _extract_pharmacy_tables(raw: dict, name: str) -> list:
     return tables
 
 
+def _json_to_tables_recursive(raw, name: str = "data") -> list:
+    """递归展平 JSON → RawTable[]
+
+    从 JSON 的任意深度提取所有数组为独立表，
+    路径作为表名（如 data/level1/items）。
+    兜底：无数组时整条 JSON 包成一行。
+    """
+    tables = []
+
+    if isinstance(raw, list) and raw:
+        tables.append({"name": name, "rows": raw})
+
+    def _walk(obj, path):
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                child_path = f"{path}/{key}"
+                if isinstance(val, list) and val:
+                    tables.append({"name": child_path, "rows": val})
+                elif isinstance(val, dict):
+                    _walk(val, child_path)
+
+    if isinstance(raw, dict):
+        _walk(raw, name)
+
+    if not tables:
+        if isinstance(raw, dict):
+            return [{"name": name, "rows": [raw]}]
+        return [{"name": name, "rows": []}]
+
+    return tables
+
+
 def _json_to_table(raw, name: str = "data") -> dict:
     """JSON → RawTable：数组转表，对象保留层级路径"""
     if isinstance(raw, list):
@@ -97,6 +129,75 @@ def _excel_to_tables(file_bytes: bytes, filename: str) -> list:
     return tables
 
 
+def _detect_key_value_table(rows: list) -> bool:
+    """通用检测：是否 key-value 结构（有 key 列 + 数值 value 列 + key 值数量合理）"""
+    if not rows:
+        return False
+
+    all_cols = set()
+    for row in rows:
+        if isinstance(row, dict):
+            all_cols.update(row.keys())
+
+    if "key" not in all_cols or "value" not in all_cols:
+        return False
+
+    key_vals = set()
+    val_is_num = True
+    for row in rows:
+        if isinstance(row, dict):
+            k = row.get("key")
+            v = row.get("value")
+            if k is not None:
+                key_vals.add(str(k))
+            if v is not None and not isinstance(v, (int, float)):
+                val_is_num = False
+
+    if not key_vals or len(key_vals) > 50:
+        return False
+    if not val_is_num:
+        return False
+    return True
+
+
+def _pivot_table(table: dict) -> tuple:
+    """将 key-value 表 pivot 为宽表，并生成维度表
+
+    返回: (pivoted_table, dim_table_or_None)
+    - pivoted: key 各值→列名, value→值 (一行的宽表)
+    - dim:     保留非key/value的列（label, unit等），供AI识别上下文
+    """
+    rows = table.get("rows", [])
+    pivoted = {}
+    dim_rows = []
+
+    for row in rows:
+        if isinstance(row, dict):
+            k = str(row.get("key", "")).strip()
+            v = row.get("value")
+            if k:
+                pivoted[k] = v
+
+            dim_row = {"dim_key": k} if k else {}
+            for col, val in row.items():
+                if col not in ("key", "value") and not isinstance(val, (dict, list)):
+                    dim_row[f"dim_{col}"] = val
+            if dim_row and len(dim_row) > 1:
+                dim_rows.append(dim_row)
+
+    if not pivoted:
+        return (table, None)
+
+    name = table.get("name", "pivoted")
+    pivoted_table = {"name": name, "rows": [pivoted]}
+
+    dim_table = None
+    if dim_rows:
+        dim_table = {"name": f"{name}_dim", "rows": dim_rows}
+
+    return (pivoted_table, dim_table)
+
+
 def _csv_to_table(file_bytes: bytes, filename: str) -> dict:
     """CSV → RawTable"""
     import csv
@@ -106,14 +207,14 @@ def _csv_to_table(file_bytes: bytes, filename: str) -> dict:
     return {"name": filename, "rows": rows}
 
 
-def parse_file(file_bytes: bytes, filename: str) -> dict:
+def parse_file(file_bytes: bytes, filename: str):
     """根据后缀分发解析"""
     lower = filename.lower()
     if lower.endswith(".json"):
         raw = json.loads(file_bytes.decode("utf-8-sig"))
         if _is_pharmacy_json(raw):
             return _extract_pharmacy_tables(raw, os.path.splitext(filename)[0])
-        return _json_to_table(raw, os.path.splitext(filename)[0])
+        return _json_to_tables_recursive(raw, os.path.splitext(filename)[0])
     elif lower.endswith(".xlsx") or lower.endswith(".xls"):
         return _excel_to_tables(file_bytes, filename)
     elif lower.endswith(".csv"):
@@ -156,9 +257,23 @@ def parse_uploaded_files(decoded_files: List[dict]) -> dict:
         else:
             all_tables.append(result)
 
+    # 后处理：检测 key-value 结构并 pivot
+    pivoted_count = 0
+    for i, table in enumerate(all_tables):
+        rows = table.get("rows", [])
+        if _detect_key_value_table(rows):
+            pivoted, dim = _pivot_table(table)
+            all_tables[i] = pivoted
+            if "original_name" not in all_tables[i]:
+                all_tables[i]["original_name"] = table.get("name", "")
+            if dim:
+                all_tables.append(dim)
+            pivoted_count += 1
+
     return {
         "source_type": source_type,
         "tables": all_tables,
+        "pivoted_count": pivoted_count,
         "received_at": datetime.now().isoformat()
     }
 

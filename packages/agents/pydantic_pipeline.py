@@ -7,6 +7,13 @@
 
 每阶段允许多轮 retry，程序判断成功/部分成功/失败。
 记录 token 用量和 DeepSeek KV Cache 命中情况。
+
+init 流程:
+  1. 创建 Workspace → 目录 + 分区 + duckdb
+  2. 写原始数据为 parquet
+  3. 注入上下文文档
+  4. 注册 DuckDB 视图
+  5. 创建 Agent + 注入 deps
 """
 
 from __future__ import annotations

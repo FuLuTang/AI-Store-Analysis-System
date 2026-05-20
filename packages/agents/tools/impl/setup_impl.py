@@ -50,3 +50,71 @@ def list_tables_impl(ws: Workspace) -> str:
         return f"DuckDB 可用表 ({len(names)}): {', '.join(names)}" if names else "DuckDB 中暂无表"
     finally:
         con.close()
+
+
+def design_plan_impl(ws: Workspace, plan_json: str) -> str:
+    """初始化任务清单：写入 output/plan.json。仅启动时由编排器调用，不暴露给 Agent。"""
+    plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+    plan_path = ws.resolve("output/plan.json")
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    return f"Plan registered: {len(plan)} steps"
+
+
+def read_plan_short_impl(ws: Workspace) -> str:
+    """读取 plan.json，返回简短版本。由 model wrapper 自动注入。
+
+    展示规则：
+      - success: 仅 title/status
+      - 第一个非 success: title/status/detail/check_summary/errors
+      - 后续 pending: 仅 title/status
+      - failed: title/status/detail/check_summary/errors
+    """
+    from .plan_check_impl import extract_check_summary
+
+    plan_path = ws.resolve("output/plan.json")
+    if not plan_path.exists():
+        return "(plan 尚未初始化)"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    first_non_success = None
+    for idx, s in enumerate(plan):
+        if s["status"] != "success":
+            first_non_success = idx
+            break
+
+    lines = ["以下为plan进度："]
+    for idx, step in enumerate(plan):
+        status = step["status"]
+        check_summary = extract_check_summary(step.get("check", ""))
+        errors = step.get("errors", [])
+
+        if status == "success":
+            lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
+
+        elif status in ("in_progress", "partial"):
+            entry = {"title": step["title"], "status": status, "detail": step["detail"],
+                     "errors": errors}
+            if check_summary:
+                entry["check_summary"] = check_summary
+            lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
+
+        elif status == "failed":
+            entry = {"title": step["title"], "status": status, "detail": step["detail"],
+                     "errors": errors}
+            if check_summary:
+                entry["check_summary"] = check_summary
+            lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
+
+        elif status == "pending":
+            if idx == first_non_success:
+                entry = {"title": step["title"], "status": status, "detail": step["detail"]}
+                if check_summary:
+                    entry["check_summary"] = check_summary
+                lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
+            else:
+                lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
+
+    lines.append("使用 read_plan 工具查看完整 plan")
+    lines.append("每完成一步后调用 check_plan(step_index=N) 自动验证产物")
+    return "\n".join(lines)

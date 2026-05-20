@@ -100,13 +100,19 @@ class PydanticPipeline(AgentPipeline):
         all_phases: list[PhaseResult] = []
         total_tokens = input_tokens_total = cache_hit_total = 0
 
+        self._emit_log("pydantic_init", f"启动 Pydantic 管线，{len(bundle.tables)} 张表")
+        self._emit_status("pydantic_init", "active")
         logger.info(f"[run] report_id={ws.report_id} tables={len(bundle.tables)} model={self.model}")
 
         raw_metas = ws.write_raw_parquet(bundle.tables)
         logger.info(f"[run] raw parquet: {len(raw_metas)} 张, workspace={ws.report_id}")
         ws.init_duckdb()
+        self._emit_log("pydantic_init", f"已写入 {len(raw_metas)} 张 parquet，DuckDB 已初始化")
+        self._emit_status("pydantic_init", "success")
 
         # Phase 1: Flatten
+        self._emit_status("pydantic_flatten", "active")
+        self._emit_log("pydantic_flatten", "开始展平阶段...")
         flat_result = await self._run_flatten_phase(ws, raw_metas)
         all_phases.append(flat_result)
         flat_metas = flat_result.output if flat_result.status != "failed" else raw_metas
@@ -115,8 +121,12 @@ class PydanticPipeline(AgentPipeline):
         input_tokens_total += flat_result.input_tokens
         cache_hit_total += flat_result.cache_hit_tokens
         ws.init_duckdb()
+        self._emit_log("pydantic_flatten", f"展平完成: {len(flat_metas)} 张表, status={flat_result.status}")
+        self._emit_status("pydantic_flatten", flat_result.status)
 
         # Phase 2: Mapping
+        self._emit_status("pydantic_mapping", "active")
+        self._emit_log("pydantic_mapping", "开始语义映射...")
         mapping_result = await self._run_mapping_phase(ws, flat_metas)
         all_phases.append(mapping_result)
         mappings = mapping_result.output if mapping_result.status != "failed" else []
@@ -124,8 +134,12 @@ class PydanticPipeline(AgentPipeline):
         total_tokens += mapping_result.input_tokens + mapping_result.output_tokens
         input_tokens_total += mapping_result.input_tokens
         cache_hit_total += mapping_result.cache_hit_tokens
+        self._emit_log("pydantic_mapping", f"映射完成: {len(mappings)} 个字段, status={mapping_result.status}")
+        self._emit_status("pydantic_mapping", mapping_result.status)
 
         # Phase 3: SQL
+        self._emit_status("pydantic_sql", "active")
+        self._emit_log("pydantic_sql", "开始指标计算...")
         sql_result = await self._run_sql_phase(ws, flat_metas, mappings)
         all_phases.append(sql_result)
         metrics = sql_result.output  # 始终保留，含 UNCOUNTABLE
@@ -133,6 +147,8 @@ class PydanticPipeline(AgentPipeline):
         total_tokens += sql_result.input_tokens + sql_result.output_tokens
         input_tokens_total += sql_result.input_tokens
         cache_hit_total += sql_result.cache_hit_tokens
+        self._emit_log("pydantic_sql", f"指标计算完成: {len(metrics)} 项, status={sql_result.status}")
+        self._emit_status("pydantic_sql", sql_result.status)
 
         elapsed = (time.time() - t0) * 1000
         logger.info(

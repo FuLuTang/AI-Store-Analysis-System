@@ -128,19 +128,32 @@ class SmolPipeline(AgentPipeline):
         ws = Workspace(label="smol")
 
         try:
+            self._emit_log("smol_init", f"启动 Smolagent 管线，{len(bundle.tables)} 张表")
+            self._emit_status("smol_init", "active")
             ws.write_raw_parquet(bundle.tables)
             self._stage_context(ws)
             ws.init_duckdb()
             ws.save_trace({"step": "init", "tables": len(bundle.tables)})
+            self._emit_log("smol_init", "环境初始化完毕: parquet + DuckDB + 上下文")
+            self._emit_status("smol_init", "success")
 
+            self._emit_status("smol_plan", "active")
+            self._emit_log("smol_plan", "制定执行计划...")
             self._write_plan(ws)
+            self._emit_log("smol_plan", "计划已写入")
+            self._emit_status("smol_plan", "success")
+
             tools = self._make_tools(ws)
             agent = self._make_agent(tools, ws)
             prompt = self._build_prompt(ws)
+            self._emit_status("smol_agent", "active")
+            self._emit_log("smol_agent", f"启动 CodeAgent ({len(tools)} 个工具)...")
 
             ws.save_trace({"step": "agent_start", "tools": len(tools)})
             raw_output = await asyncio.to_thread(agent.run, prompt)
             ws.save_trace({"step": "agent_done"})
+            self._emit_log("smol_agent", "Agent 执行完毕")
+            self._emit_status("smol_agent", "success")
 
             return self._collect_result(raw_output, ws, t0)
         finally:

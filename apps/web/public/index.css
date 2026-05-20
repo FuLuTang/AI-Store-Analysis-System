@@ -635,6 +635,27 @@ input:checked + .slider:before {
     border-color: #1e293b transparent transparent transparent;
 }
 
+/* Pipeline Badges */
+.pipeline-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: #f1f5f9;
+    color: #64748b;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+}
+.pipeline-badge.active {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: #eff6ff;
+}
+.pipeline-badge.traditional.active { border-color: #64748b; color: #334155; background: #f1f5f9; }
+.pipeline-badge.pydantic.active { border-color: #8b5cf6; color: #7c3aed; background: #faf5ff; }
+.pipeline-badge.smol.active { border-color: #059669; color: #047857; background: #ecfdf5; }
+
 @media (max-width: 768px) {
     .masonry-grid {
         grid-template-columns: 1fr;

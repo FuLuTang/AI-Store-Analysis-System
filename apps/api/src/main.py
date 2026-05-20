@@ -1078,8 +1078,16 @@ async def _run_agent_pipeline(session: SessionState, pipe, bundle):
         session.result = None
         session.full_result = None
     reset_events(session)
+    emit_event(session, "pipeline", {"pipeline": pipe.name})
+
+    pipe.set_event_callbacks(
+        on_status=lambda nid, st: add_status(session, nid, st),
+        on_log=lambda nid, msg: add_log(session, nid, msg),
+    )
     add_status(session, "agent", "active")
     add_log(session, "agent", f"启动 {pipe.name} 管线，{len(bundle.tables)} 张表")
+    pipe._emit_status(pipe.name + "_init" if pipe.name == "pydantic" else pipe.name + "_init", "active")
+
     try:
         result = await pipe.run(bundle)
         session.full_result = result.full_report or f"# {pipe.name} 管线报告\n\npipeline: {result.pipeline}\n耗时: {result.elapsed_ms:.0f}ms"

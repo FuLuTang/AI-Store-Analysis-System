@@ -1,5 +1,6 @@
 """Pipeline 注册表 — 根据名称统一创建管线实例。"""
 
+from pathlib import Path
 from typing import Callable, Optional
 
 from .base import AgentPipeline
@@ -14,9 +15,7 @@ PIPELINE_MAP = {
 }
 
 
-def create_pipeline(name: str, get_llm_preset: Optional[Callable[[], dict]] = None, check_aborted: Optional[Callable[[], None]] = None) -> AgentPipeline:
-    kwargs = {"get_llm_preset": get_llm_preset}
-    if name == "traditional":
-        kwargs["check_aborted"] = check_aborted
+def create_pipeline(name: str, llm_preset: Optional[dict] = None, check_aborted: Optional[Callable[[], None]] = None, workspace_dir: Optional[Path] = None) -> AgentPipeline:
+    kwargs = {"llm_preset": llm_preset or {}, "check_aborted": check_aborted, "workspace_dir": workspace_dir}
     cls = PIPELINE_MAP.get(name, TraditionalPipeline)
     return cls(**kwargs)

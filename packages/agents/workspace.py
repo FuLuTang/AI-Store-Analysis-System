@@ -26,10 +26,14 @@ ARTIFACTS_ROOT = Path("storage/artifacts")
 
 class Workspace:
 
-    def __init__(self, label: str = "", report_id: Optional[str] = None):
+    def __init__(self, label: str = "", report_id: Optional[str] = None, base_dir: Optional[Path] = None):
         self.label = label
-        self.report_id = report_id or f"{label}_{_short_uuid()}"
-        self._dir = Path(ARTIFACTS_ROOT) / self.report_id
+        if base_dir:
+            self._dir = Path(base_dir)
+            self.report_id = self._dir.name
+        else:
+            self.report_id = report_id or f"{label}_{_short_uuid()}"
+            self._dir = Path(ARTIFACTS_ROOT) / self.report_id
         self._input_dir = self._dir / "input"
         self._output_dir = self._dir / "output"
         self._context_dir = self._dir / "context"

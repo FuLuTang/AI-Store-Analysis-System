@@ -119,14 +119,20 @@ class SmolPipeline(AgentPipeline):
 
     name = "smol"
 
-    def __init__(self, model=None, max_rounds: int = 15, get_llm_preset=None):
+    def __init__(self, model=None, max_rounds: int = 15, llm_preset=None, check_aborted=None, workspace_dir=None):
+        super().__init__(workspace_dir=workspace_dir)
         self.model = model
         self.max_rounds = max_rounds
-        self._get_llm_preset = get_llm_preset
+        self._llm_preset = llm_preset or {}
+        self._check_aborted = check_aborted
+
+    def _ensure_not_stopped(self):
+        if self._check_aborted:
+            self._check_aborted()
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
-        ws = Workspace(label="smol")
+        ws = Workspace(base_dir=self._workspace_dir) if self._workspace_dir else Workspace(label="smol")
 
         try:
             self._emit_log("smol_init", f"启动 Smolagent 管线，{len(bundle.tables)} 张表")
@@ -143,6 +149,7 @@ class SmolPipeline(AgentPipeline):
             self._write_plan(ws)
             self._emit_log("smol_plan", "计划已写入")
             self._emit_status("smol_plan", "success")
+            self._ensure_not_stopped()
 
             tools = self._make_tools(ws)
             agent = self._make_agent(tools, ws)
@@ -155,6 +162,7 @@ class SmolPipeline(AgentPipeline):
             ws.save_trace({"step": "agent_done"})
             self._emit_log("smol_agent", "Agent 执行完毕")
             self._emit_status("smol_agent", "success")
+            self._ensure_not_stopped()
 
             return self._collect_result(raw_output, ws, t0)
         finally:
@@ -202,11 +210,10 @@ class SmolPipeline(AgentPipeline):
     def _resolve_model(self):
         if self.model is not None:
             return self.model
-        if self._get_llm_preset:
-            preset = self._get_llm_preset()
-            model_id = preset.get("model", "deepseek/deepseek-chat")
-            api_key = preset.get("apiKey", "")
-            api_base = preset.get("baseUrl", "https://api.deepseek.com/v1")
+        if self._llm_preset:
+            model_id = self._llm_preset.get("model", "deepseek/deepseek-chat")
+            api_key = self._llm_preset.get("apiKey", "")
+            api_base = self._llm_preset.get("baseUrl", "https://api.deepseek.com/v1")
             from smolagents import LiteLLMModel
             return LiteLLMModel(model_id=model_id, api_key=api_key, api_base=api_base)
         from smolagents import LiteLLMModel

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .base import AgentPipeline
@@ -34,9 +35,9 @@ class PipelineAbortedError(Exception):
 class TraditionalPipeline(AgentPipeline):
     name = "traditional"
 
-    def __init__(self, get_llm_preset: Optional[Callable[[], dict]] = None, check_aborted: Optional[Callable[[], None]] = None):
-        super().__init__()
-        self._get_llm_preset = get_llm_preset or (lambda: {"apiKey": "", "baseUrl": "", "model": "", "reasoningEffort": "medium"})
+    def __init__(self, llm_preset: Optional[dict] = None, check_aborted: Optional[Callable[[], None]] = None, workspace_dir: Optional[Path] = None):
+        super().__init__(workspace_dir=workspace_dir)
+        self._llm_preset = llm_preset or {}
         self._check_aborted = check_aborted  # can be None
 
     def _ensure_not_stopped(self):
@@ -45,7 +46,7 @@ class TraditionalPipeline(AgentPipeline):
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
-        active_settings = self._get_llm_preset()
+        active_settings = self._llm_preset
 
         try:
             # 1) Input Adapter — 直接从 DatasetBundle 构建 core 模块所需 dict
@@ -195,8 +196,15 @@ class TraditionalPipeline(AgentPipeline):
             # 并行执行
             report_task = asyncio.create_task(report_flow())
             metrics_task = asyncio.create_task(metrics_flow())
-            (initial_report, review_text, _early_error), (scene, mappings, metric_results, evidence, tally) = \
-                await asyncio.gather(report_task, metrics_task)
+            tasks = [report_task, metrics_task]
+            try:
+                (initial_report, review_text, _early_error), (scene, mappings, metric_results, evidence, tally) = \
+                    await asyncio.gather(*tasks)
+            except PipelineAbortedError:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                raise
 
             # 无 API Key → 生成算法摘要
             if not active_settings.get("apiKey"):

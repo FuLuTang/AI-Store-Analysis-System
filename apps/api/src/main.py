@@ -5,7 +5,8 @@ import time
 import shutil
 import base64
 import re
-import base64
+import uuid
+import datetime
 import hashlib
 import logging
 from typing import List, Optional, Dict
@@ -24,6 +25,7 @@ sys.path.append(str(ROOT_DIR))
 
 from packages.core.input_adapter import parse_uploaded_files, adapt_to_dataset_bundle
 from packages.agents.registry import create_pipeline
+from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
 
 load_dotenv()
 
@@ -228,25 +230,110 @@ def require_admin_authorization(x_admin_token: Optional[str]):
     return  # 内部工具，不做管理员鉴权
 
 
+# ── 账号 / Run 目录辅助 ──
+
+def _make_account_slug(user_key: str, key_hash: str) -> str:
+    prefix = user_key[:10] if len(user_key) >= 10 else user_key
+    return f"{prefix}_{key_hash[:6]}"
+
+
+def _make_run_id() -> str:
+    ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+    short = uuid.uuid4().hex[:6]
+    return f"{ts}_{short}"
+
+
+def _ensure_run_dir(session: "SessionState") -> Path:
+    if not session.run_id:
+        session.run_id = _make_run_id()
+        session.run_dir = session.account_dir / "runs" / session.run_id
+    session.run_dir.mkdir(parents=True, exist_ok=True)
+    (session.run_dir / "workspace").mkdir(parents=True, exist_ok=True)
+    return session.run_dir
+
+
+def _save_session_json(session: "SessionState"):
+    run_dir = session.run_dir
+    if not run_dir:
+        return
+    run_dir.mkdir(parents=True, exist_ok=True)
+    data = {
+        "status": session.status,
+        "errorMessage": session.error_message,
+        "result": session.result,
+        "fullResult": session.full_result,
+    }
+    try:
+        (run_dir / "session.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _save_latest_run_json(session: "SessionState"):
+    if not session.run_id:
+        return
+    try:
+        (session.account_dir / "latest_run.json").write_text(json.dumps({
+            "runId": session.run_id,
+            "createdAt": datetime.datetime.now().isoformat(),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _save_account_json(account_dir: Path, user_key: str, key_hash: str):
+    path = account_dir / "account.json"
+    now = datetime.datetime.now().isoformat()
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            existing["lastSeenAt"] = now
+            path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            return
+        except Exception:
+            pass
+    path.write_text(json.dumps({
+        "keyHash": key_hash,
+        "keyMask": mask_user_key(user_key),
+        "createdAt": now,
+        "lastSeenAt": now,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 class SessionState:
-    def __init__(self, user_key: str, key_hash: str, account_dir: Path, config: dict):
+    def __init__(self, user_key: str, key_hash: str, account_slug: str, account_dir: Path, config: dict):
         self.user_key = user_key
         self.key_hash = key_hash
+        self.account_slug = account_slug
         self.account_dir = account_dir
         self.upload_dir = account_dir / "uploads"
         self.cache_dir = account_dir / "cache"
         self.profile_path = account_dir / "profile.json"
-        self.logs_path = account_dir / "latest_logs.json"
-        self.report_path = account_dir / "latest_report.md"
-        self.status = "idle"  # idle, running, completed, error, aborted
+        self.status = "idle"  # idle, queued, running, completed, error, aborted, interrupted
         self.error_message = ""
         self.logs = []
         self.result = None      # 精简报告 (JSON string)
         self.full_result = None # 完整报告 (Markdown string)
         self.config = config
         self.force_stop = False
+        self.run_id: Optional[str] = None
+        self.run_dir: Optional[Path] = None
         self.upload_lock = Lock()
         self.runtime_lock = Lock()
+        self.event_lock = Lock()
+
+    @property
+    def logs_path(self) -> Path:
+        if self.run_dir:
+            return self.run_dir / "logs.json"
+        return self.account_dir / "latest_logs.json"
+
+    @property
+    def report_path(self) -> Path:
+        if self.run_dir:
+            return self.run_dir / "latest_report.md"
+        return self.account_dir / "latest_report.md"
 
 
 class SessionManager:
@@ -275,24 +362,79 @@ class SessionManager:
                 pass
         return cfg
 
-    def _account_dir(self, user_key: str) -> tuple[str, Path]:
+    def _account_dir(self, user_key: str) -> tuple[str, str, Path]:
         key_hash = hash_user_key(user_key)
-        return key_hash, self.base_dir / key_hash
+        slug = _make_account_slug(user_key, key_hash)
+        return key_hash, slug, self.base_dir / slug
+
+    def _migrate_legacy_account(self, user_key: str, key_hash: str, slug: str) -> Path:
+        legacy = self.base_dir / key_hash
+        dest = self.base_dir / slug
+        if legacy.exists() and not dest.exists():
+            try:
+                shutil.copytree(legacy, dest)
+            except Exception:
+                pass
+        return dest
+
+    def _try_load_session(self, account_dir: Path) -> dict | None:
+        latest = account_dir / "latest_run.json"
+        if not latest.exists():
+            return None
+        try:
+            meta = json.loads(latest.read_text(encoding="utf-8"))
+            run_id = meta.get("runId")
+            if not run_id:
+                return None
+            run_dir = account_dir / "runs" / run_id
+            session_path = run_dir / "session.json"
+            if not session_path.exists():
+                return None
+            state = json.loads(session_path.read_text(encoding="utf-8"))
+            if state.get("status") in ("running", "queued"):
+                state["status"] = "interrupted"
+                state["errorMessage"] = "服务重启导致任务中断，请重新提交分析。"
+                try:
+                    session_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+            state["_runId"] = run_id
+            state["_runDir"] = str(run_dir)
+            return state
+        except Exception:
+            return None
 
     def get_session(self, user_key: str, create_if_missing: bool = True) -> SessionState:
-        key_hash, account_dir = self._account_dir(user_key)
+        key_hash, slug, account_dir = self._account_dir(user_key)
         with self._lock:
             existing = self._sessions.get(key_hash)
             if existing:
+                _save_account_json(account_dir, user_key, key_hash)
                 return existing
+
+            if not account_dir.exists():
+                self._migrate_legacy_account(user_key, key_hash, slug)
 
             profile_path = account_dir / "profile.json"
             if not create_if_missing and not profile_path.exists():
                 raise KeyError("invalid_key")
 
             account_dir.mkdir(parents=True, exist_ok=True)
+            _save_account_json(account_dir, user_key, key_hash)
             cfg = self._load_profile(account_dir)
-            session = SessionState(user_key=user_key, key_hash=key_hash, account_dir=account_dir, config=cfg)
+            session = SessionState(user_key=user_key, key_hash=key_hash, account_slug=slug, account_dir=account_dir, config=cfg)
+
+            saved = self._try_load_session(account_dir)
+            if saved:
+                session.status = saved.get("status", "idle")
+                session.error_message = saved.get("errorMessage", "")
+                session.result = saved.get("result")
+                session.full_result = saved.get("fullResult")
+                session.run_id = saved.get("_runId")
+                rd = saved.get("_runDir")
+                if rd:
+                    session.run_dir = Path(rd)
+
             self._sessions[key_hash] = session
             return session
 
@@ -322,7 +464,10 @@ def _now_time():
 
 
 def _ensure_session_dirs(session: SessionState):
-    for d in [session.account_dir, session.upload_dir, session.cache_dir]:
+    dirs = [session.account_dir, session.upload_dir, session.cache_dir]
+    if session.run_dir:
+        dirs.append(session.run_dir)
+    for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -336,8 +481,9 @@ def persist_latest_logs(session: SessionState):
 
 def emit_event(session: SessionState, event_type: str, payload: dict):
     event = {"type": event_type, "time": _now_time(), **payload}
-    session.logs.append(event)
-    persist_latest_logs(session)
+    with session.event_lock:
+        session.logs.append(event)
+        persist_latest_logs(session)
     return event
 
 
@@ -574,21 +720,24 @@ async def stream(
 
 
 
-async def run_pipeline_task(session: SessionState, pipeline_name: str, bundle):
+async def run_pipeline_task(session: SessionState, pipeline_name: str, active_preset: dict, bundle):
     """统一管线执行入口：triaditional / pydantic / smol 均走此路径"""
     with session.runtime_lock:
+        if session.force_stop or session.status == "aborted":
+            return
         session.status = "running"
-        session.force_stop = False
-        session.error_message = ""
-        session.result = None
-        session.full_result = None
     reset_events(session)
     emit_event(session, "pipeline", {"pipeline": pipeline_name})
 
-    check_aborted = lambda: ensure_not_stopped(session)
-    get_preset = lambda: get_llm_preset(session.config.get("reasoningEffort", "medium"))
+    def check_aborted():
+        try:
+            ensure_not_stopped(session)
+        except TaskAbortedError as e:
+            from packages.agents.traditional_pipeline import PipelineAbortedError
+            raise PipelineAbortedError(str(e))
 
-    pipe = create_pipeline(pipeline_name, get_llm_preset=get_preset, check_aborted=check_aborted)
+    ws_dir = session.run_dir / "workspace" if session.run_dir else None
+    pipe = create_pipeline(pipeline_name, llm_preset=active_preset, check_aborted=check_aborted, workspace_dir=ws_dir)
     pipe.set_event_callbacks(
         on_status=lambda nid, st: add_status(session, nid, st),
         on_log=lambda nid, msg: add_log(session, nid, msg),
@@ -608,17 +757,24 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, bundle):
             "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in result.cards]
         }, ensure_ascii=False)
         with session.runtime_lock:
+            if session.force_stop or session.status == "aborted":
+                _save_session_json(session)
+                return
             session.status = "completed"
         save_latest_report(session)
+        _save_session_json(session)
     except PipelineAbortedError:
         add_log(session, "system", "⚠️ 任务被用户强制终止。")
         with session.runtime_lock:
             session.status = "aborted"
+            session.error_message = "任务被用户强行终止。"
+        _save_session_json(session)
     except Exception as e:
         add_log(session, "system", f"管线执行失败: {str(e)}")
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
+        _save_session_json(session)
 
 
 @app.post("/api/analyze")
@@ -631,8 +787,13 @@ async def analyze(
     session = resolve_session(x_fzt_key)
     session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort)
     with session.runtime_lock:
-        if session.status == "running":
+        if session.status in ("queued", "running"):
             raise HTTPException(status_code=400, detail="任务正在运行中")
+        session.status = "queued"
+        session.force_stop = False
+        session.error_message = ""
+        session.result = None
+        session.full_result = None
 
     decoded_files: list[dict] = []
     for uploaded_file in files:
@@ -642,15 +803,26 @@ async def analyze(
             raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {filename}")
         decoded_files.append({"name": filename, "bytes": raw})
 
-    save_current_uploads(session, decoded_files)
-
-    raw_bundle = parse_uploaded_files(decoded_files)
-    bundle = adapt_to_dataset_bundle(raw_bundle)
+    try:
+        save_current_uploads(session, decoded_files)
+        raw_bundle = parse_uploaded_files(decoded_files)
+        bundle = adapt_to_dataset_bundle(raw_bundle)
+    except Exception as e:
+        with session.runtime_lock:
+            session.status = "error"
+            session.error_message = str(e)
+        raise HTTPException(status_code=400, detail=f"文件解析失败: {e}")
 
     with AGENT_PIPELINE_LOCK:
         pipeline_name = GLOBAL_AGENT_PIPELINE
+    active_preset = get_llm_preset(session.config.get("reasoningEffort", "medium"))
 
-    background_tasks.add_task(run_pipeline_task, session, pipeline_name, bundle)
+    # 创建 run 目录
+    _ensure_run_dir(session)
+    _save_session_json(session)
+    _save_latest_run_json(session)
+
+    background_tasks.add_task(run_pipeline_task, session, pipeline_name, active_preset, bundle)
     return {"status": "started", "pipeline": pipeline_name}
 
 
@@ -663,6 +835,7 @@ def stop(x_fzt_key: Optional[str] = Header(default=None)):
             session.status = "aborted"
             session.error_message = "任务被用户强行终止。"
             add_log(session, "system", "⚠️ 用户强制终止了任务！")
+            _save_session_json(session)
     return {"status": "ok"}
 
 

@@ -1,6 +1,7 @@
 """AgentPipeline 抽象基类：三条管线共用一个接口。"""
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Callable, Optional
 
 from .models import DatasetBundle, AgentResult
@@ -15,11 +16,12 @@ TallyCallback = Callable[[str, dict], None]
 class AgentPipeline(ABC):
     name: str = "base"
 
-    def __init__(self):
+    def __init__(self, workspace_dir: Optional[Path] = None):
         self._on_status: Optional[StatusCallback] = None
         self._on_log: Optional[LogCallback] = None
         self._on_progress: Optional[ProgressCallback] = None
         self._on_tally: Optional[TallyCallback] = None
+        self._workspace_dir: Optional[Path] = workspace_dir
 
     def set_event_callbacks(self,
                             on_status: Optional[StatusCallback] = None,

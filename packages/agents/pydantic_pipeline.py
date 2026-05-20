@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from packages.agents.base import AgentPipeline
@@ -84,12 +85,20 @@ class PydanticPipeline(AgentPipeline):
         model: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
-        get_llm_preset: Callable[[], dict] | None = None,
+        llm_preset: dict | None = None,
+        check_aborted: Callable[[], None] | None = None,
+        workspace_dir: Path | None = None,
     ):
-        self._get_llm_preset = get_llm_preset
+        super().__init__(workspace_dir=workspace_dir)
+        self._llm_preset = llm_preset or {}
+        self._check_aborted = check_aborted
         self.model = model or os.getenv("AGENT_MODEL", "deepseek-v4-pro")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+
+    def _ensure_not_stopped(self):
+        if self._check_aborted:
+            self._check_aborted()
 
     # ================================================================
     # 入口
@@ -97,7 +106,7 @@ class PydanticPipeline(AgentPipeline):
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
-        ws = Workspace()
+        ws = Workspace(base_dir=self._workspace_dir) if self._workspace_dir else Workspace()
         all_warnings: list[str] = []
         all_phases: list[PhaseResult] = []
         total_tokens = input_tokens_total = cache_hit_total = 0
@@ -112,6 +121,8 @@ class PydanticPipeline(AgentPipeline):
         self._emit_log("pydantic_init", f"已写入 {len(raw_metas)} 张 parquet，DuckDB 已初始化")
         self._emit_status("pydantic_init", "success")
 
+        self._ensure_not_stopped()
+
         # Phase 1: Flatten
         self._emit_status("pydantic_flatten", "active")
         self._emit_log("pydantic_flatten", "开始展平阶段...")
@@ -125,6 +136,7 @@ class PydanticPipeline(AgentPipeline):
         ws.init_duckdb()
         self._emit_log("pydantic_flatten", f"展平完成: {len(flat_metas)} 张表, status={flat_result.status}")
         self._emit_status("pydantic_flatten", flat_result.status)
+        self._ensure_not_stopped()
 
         # Phase 2: Mapping
         self._emit_status("pydantic_mapping", "active")
@@ -138,6 +150,7 @@ class PydanticPipeline(AgentPipeline):
         cache_hit_total += mapping_result.cache_hit_tokens
         self._emit_log("pydantic_mapping", f"映射完成: {len(mappings)} 个字段, status={mapping_result.status}")
         self._emit_status("pydantic_mapping", mapping_result.status)
+        self._ensure_not_stopped()
 
         # Phase 3: SQL
         self._emit_status("pydantic_sql", "active")
@@ -576,11 +589,10 @@ class PydanticPipeline(AgentPipeline):
         from pydantic_ai.providers.openai import OpenAIProvider
         from pydantic_ai.settings import ModelSettings
 
-        if self._get_llm_preset:
-            preset = self._get_llm_preset()
-            model_name = preset.get("model", self.model)
-            base_url = preset.get("baseUrl", self.base_url)
-            api_key = preset.get("apiKey", self.api_key)
+        if self._llm_preset:
+            model_name = self._llm_preset.get("model", self.model)
+            base_url = self._llm_preset.get("baseUrl", self.base_url)
+            api_key = self._llm_preset.get("apiKey", self.api_key)
         else:
             model_name = self.model
             base_url = self.base_url

@@ -121,19 +121,15 @@ def build_smol_tools(ws: Workspace):
         return list_tables_impl(ws)
 
     @tool
-    def read_plan(show_checks: bool = False) -> str:
+    def read_plan() -> str:
         """Read the full task plan from output/plan.json with all step details.
-
-        Args:
-            show_checks: True to include raw check scripts (debug only).
         """
         plan_path = ws.resolve("output/plan.json")
         if not plan_path.exists():
             return json.dumps({"error": "plan.json not found"})
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        if not show_checks:
-            for step in plan:
-                step.pop("check", None)
+        for step in plan:
+            step.pop("check", None)
         return json.dumps(plan, ensure_ascii=False, indent=2)
 
     @tool

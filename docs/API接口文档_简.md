@@ -31,58 +31,16 @@
 
 | 项目 | 内容 |
 | :--- | :--- |
-| **方法** | `GET` |
-| **URL** | `/api/auth/me` |
-| **Header** | `x-fzt-key: <key>`（必填） |
-| **成功返回** | `{"userKey": "fzt_ab...0123", "config": {"reasoningEffort": "medium", "baseUrl": "...", "model": "...", "hasKey": true}}` |
-
-`hasKey` 表示是否已配置 LLM API Key；`reasoningEffort` 取值 `low` / `medium` / `high`。
-
-### 修改推理强度
-
-| 项目 | 内容 |
-| :--- | :--- |
 | **方法** | `POST` |
-| **URL** | `/api/config` |
+| **URL** | `/api/auth/verify` |
 | **Header** | `x-fzt-key: <key>`（必填） |
-| **Body (JSON)** | `{"reasoningEffort": "low"}` (`low` / `medium` / `high`) |
-| **成功返回** | `{"status": "ok", "reasoningEffort": "low", "hasKey": true}` |
+| **成功返回** | `{"status": "ok", "userKey": "fzt_ab...0123"}` |
 
-读取完整配置：`GET /api/config`，返回 `{"reasoningEffort": "medium", "availableReasoningEfforts": ["high","low","medium"], "baseUrl": "...", "model": "...", "hasKey": true}`。
+`userKey` 为掩码版 Key 前段，用于身份识别。
 
 ---
 
 ## 3. 提交数据
-
-### 方式 A：JSON (Base64 编码) — 系统集成
-
-| 项目 | 内容 |
-| :--- | :--- |
-| **方法** | `POST` |
-| **URL** | `/api/run` |
-| **Header** | `x-fzt-key: <key>`（必填） |
-| **Body (JSON)** | 见下方 |
-
-**Body 结构**:
-```json
-{
-  "files": [
-    {"name": "文件名.json", "base64": "文件内容的Base64编码"}
-  ],
-  "settings": {"reasoningEffort": "medium"}
-}
-```
-- `files`: 必填，数组。每项含 `name`（文件名）和 `base64`（内容 Base64 编码）。
-- `settings`: 可选，覆盖本次任务的 `reasoningEffort`。
-
-**成功返回**: `{"status": "started"}`
-
-| 状态码 | 含义 |
-| :--- | :--- |
-| `400` | 任务运行中（同一 Key 不可并发） |
-| `400` | 无有效文件内容 |
-
-### 方式 B：直接上传文件 — 手动测试
 
 | 项目 | 内容 |
 | :--- | :--- |
@@ -90,7 +48,7 @@
 | **URL** | `/api/analyze` |
 | **Header** | `x-fzt-key: <key>`（必填） |
 | **Content-Type** | `multipart/form-data` |
-| **Body** | `files` 字段，一个或多个文件，每文件 ≤ **5MB** |
+| **Body** | `files` 字段（一个或多个文件，每文件 ≤ **5MB**）；可选 `reasoningEffort` 字段 (`low` / `medium` / `high`，默认 `medium`) |
 | **支持格式** | `.json` / `.xlsx` / `.csv` |
 | **成功返回** | `{"status": "started", "pipeline": "multifile"}` |
 
@@ -184,7 +142,7 @@
 | **URL** | `/api/examples` |
 | **成功返回** | `{"files": [{"name": "概览-日.json", "base64": "..."}]}` |
 
-返回 Base64 编码的示例文件列表，可直接填入 `/api/run` 的 `files` 参数。
+返回 Base64 编码的示例文件列表，供调试器自动拉取测试。
 
 ---
 

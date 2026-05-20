@@ -11,7 +11,7 @@ sequenceDiagram
     participant Auth as 鉴权/限流模块
     participant Worker as 背景分析线程
     
-    Client->>API: POST /api/run
+    Client->>API: POST /api/analyze (multipart)
     API->>Auth: 校验 Key 有效性
     alt Key 错误
         API-->>Client: 401 Unauthorized
@@ -54,48 +54,18 @@ sequenceDiagram
 - **错误 (429)**: 注册过于频繁
 - **错误 (500)**: 账号初始化失败
 
-#### [GET] /api/auth/me
-- **说明**: 检查当前 Key 的有效性及关联配置。
-- **Header**: `x-fzt-key` (必填)
-- **响应 (200)**: `{"userKey": "fzt_掩码版", "config": {"reasoningEffort": "low"|"medium"|"high", "baseUrl": "...", "model": "...", "hasKey": bool}}`
-- **错误 (401)**: Invalid or expired key
-
 #### [POST] /api/auth/verify
-- **说明**: 快速校验当前 Key 是否可用。
+- **说明**: 校验当前 Key 是否有效。
 - **Header**: `x-fzt-key` (必填)
 - **响应 (200)**: `{"status": "ok", "userKey": "fzt_掩码版"}`
 - **错误 (401)**: Invalid or expired key
 
-### 3.2 配置类
-
-#### [GET] /api/config
-- **说明**: 读取当前会话配置（如 `reasoningEffort`、模型、是否已配置 API Key）。
-- **Header**: `x-fzt-key`（必填）
-- **响应 (200)**: `{"reasoningEffort": "medium", "availableReasoningEfforts": ["high","low","medium"], "baseUrl": "...", "model": "...", "hasKey": bool}`
-
-#### [POST] /api/config
-- **说明**: 更新当前会话配置。
-- **Header**: `x-fzt-key`（必填）
-- **Body (JSON)**: `{"reasoningEffort": "low"}` — 仅接受 `low` / `medium` / `high` 三种值。
-- **响应 (200)**: `{"status": "ok", "reasoningEffort": "low", "hasKey": bool}`
-
-### 3.3 核心分析类
-
-#### [POST] /api/run
-- **说明**: 前端主流程入口，提交 Base64 编码的文件列表并启动分析。
-- **Header**: `x-fzt-key`（必填）
-- **Body (JSON)**:
-  - `files` (必填, `array`): 文件列表，每项为 `{"name": "文件名.json", "base64": "Base64编码内容"}`
-  - `settings` (可选, `object`): 本次任务覆盖配置，如 `{"reasoningEffort": "medium"}`
-- **响应 (200)**: `{"status": "started"}`
-- **错误 (400)**: 任务正在运行中 (Busy)
-- **错误 (400)**: 未提供有效的文件内容
-- **错误 (401)**: Invalid or expired key
+### 3.2 核心分析类
 
 #### [POST] /api/analyze
-- **说明**: Multipart 上传入口，兼容上传式调用。
+- **说明**: Multipart 上传入口，提交文件并启动分析。
 - **Header**: `x-fzt-key`（必填）
-- **Body (Multipart)**: `files` 字段，一个或多个文件。每文件最大 **5MB**，支持 `.json` / `.xlsx` / `.csv` 格式。
+- **Body (Multipart)**: `files` 字段，一个或多个文件。每文件最大 **5MB**，支持 `.json` / `.xlsx` / `.csv` 格式。可选字段 `reasoningEffort` (`low` / `medium` / `high`，默认 `medium`)。
 - **响应 (200)**: `{"status": "started", "pipeline": "multifile"}`
 - **错误 (400)**: 任务正在运行中 / 文件过大(>5MB) / JSON 解析失败 / 文件读取失败
 
@@ -144,8 +114,6 @@ sequenceDiagram
 ### 3.5 其他接口
 
 - **[GET] /api/examples**: 获取示例数据，返回 `{"files": [{"name": "...", "base64": "..."}]}`。无需鉴权。
-
-> 兼容性说明：当前前端工作台默认通过 `POST /api/run` 启动分析，后端需持续保留该端点兼容。
 
 ---
 

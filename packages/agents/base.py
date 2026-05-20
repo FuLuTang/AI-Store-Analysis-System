@@ -11,6 +11,3 @@ class AgentPipeline(ABC):
     @abstractmethod
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         ...
-    @abstractmethod
-    async def run(self, bundle: DatasetBundle) -> AgentResult:
-        ...

@@ -18,6 +18,7 @@ from .base import AgentPipeline
 from .models import AgentResult, DatasetBundle
 from .workspace import Workspace
 from .adapters import build_smol_tools
+from .logging_utils import log_llm_usage
 
 
 class SmolPipeline(AgentPipeline):
@@ -54,6 +55,14 @@ class SmolPipeline(AgentPipeline):
         raise NotImplementedError("SmolPipeline: Agent 创建待 smolagents 安装后实现")
 
         # ── Phase 3: Return ──
+        # 每次 LLM 调用后应调用 log_llm_usage():
+        #   u_rec = log_llm_usage(
+        #       report_id=ws.report_id, pipeline=self.name, phase="agent_step",
+        #       attempt=step_idx + 1, model=self.model,
+        #       usage=response.usage,  # LiteLLM response.usage
+        #       raw_usage=response.usage.dict() if hasattr(response.usage, 'dict') else None,
+        #       latency_ms=latency_ms,
+        #   )
         return AgentResult(
             report_id=ws.report_id,
             pipeline=self.name,

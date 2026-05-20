@@ -149,7 +149,7 @@
             if (!key) return;
             setLoading(true);
             try {
-                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
                 if (r.ok) {
                     localStorage.setItem('X-FZT-Key', key);
                     const data = await r.json();

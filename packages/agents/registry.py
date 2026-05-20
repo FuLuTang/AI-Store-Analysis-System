@@ -15,7 +15,8 @@ PIPELINE_MAP = {
 
 
 def create_pipeline(name: str, get_llm_preset: Optional[Callable[[], dict]] = None, check_aborted: Optional[Callable[[], None]] = None) -> AgentPipeline:
+    kwargs = {"get_llm_preset": get_llm_preset}
+    if name == "traditional":
+        kwargs["check_aborted"] = check_aborted
     cls = PIPELINE_MAP.get(name, TraditionalPipeline)
-    if cls is TraditionalPipeline:
-        return cls(get_llm_preset=get_llm_preset, check_aborted=check_aborted)
-    return cls()
+    return cls(**kwargs)

@@ -22,7 +22,7 @@ import json
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, Callable
 
 from packages.agents.base import AgentPipeline
 from packages.agents.models import (
@@ -84,7 +84,9 @@ class PydanticPipeline(AgentPipeline):
         model: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        get_llm_preset: Callable[[], dict] | None = None,
     ):
+        self._get_llm_preset = get_llm_preset
         self.model = model or os.getenv("AGENT_MODEL", "deepseek-v4-pro")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
@@ -574,9 +576,19 @@ class PydanticPipeline(AgentPipeline):
         from pydantic_ai.providers.openai import OpenAIProvider
         from pydantic_ai.settings import ModelSettings
 
+        if self._get_llm_preset:
+            preset = self._get_llm_preset()
+            model_name = preset.get("model", self.model)
+            base_url = preset.get("baseUrl", self.base_url)
+            api_key = preset.get("apiKey", self.api_key)
+        else:
+            model_name = self.model
+            base_url = self.base_url
+            api_key = self.api_key
+
         model = OpenAIChatModel(
-            self.model,
-            provider=OpenAIProvider(base_url=self.base_url, api_key=self.api_key),
+            model_name,
+            provider=OpenAIProvider(base_url=base_url, api_key=api_key),
         )
 
         logger.debug(f"[{phase}] 创建 Agent, model={self.model} output_type={output_type}")

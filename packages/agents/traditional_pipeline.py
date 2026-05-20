@@ -13,7 +13,6 @@ from typing import Any, Callable, Optional
 from .base import AgentPipeline
 from .models import AgentResult, DatasetBundle, MetricResult, SceneContext, SemanticMapping, ReportCard, TableMeta, Manifest
 
-from packages.core.input_adapter import parse_uploaded_files, infer_source_type
 from packages.core.profiler import profile_dataset
 from packages.core.semantic_mapper import llm_map_profiles
 from packages.core.scene_classifier import llm_classify_scene, classify_data_scope
@@ -48,20 +47,17 @@ class TraditionalPipeline(AgentPipeline):
         t0 = time.time()
         active_settings = self._get_llm_preset()
 
-        # 将 DatasetBundle 转为 decoded_files 格式（兼容现有 core 模块）
-        decoded_files: list[dict] = []
-        for t in bundle.tables:
-            raw_json = json.dumps({"rows": t.rows}, ensure_ascii=False)
-            decoded_files.append({"name": t.name + ".json", "bytes": raw_json.encode("utf-8")})
-
         try:
-            # 1) Input Adapter
+            # 1) Input Adapter — 直接从 DatasetBundle 构建 core 模块所需 dict
             self._emit_status("input", "active")
-            self._emit_log("input", f"传统管线: 收到 {len(decoded_files)} 个文件")
-            for f in decoded_files:
-                source = infer_source_type(f.get("name", ""))
-                self._emit_log("input", f"  [{source}] {f.get('name', '?')} ({len(f.get('bytes', b''))} bytes)")
-            ds_bundle = parse_uploaded_files(decoded_files)
+            self._emit_log("input", f"传统管线: 收到 {len(bundle.tables)} 张表")
+            for t in bundle.tables:
+                self._emit_log("input", f"  [{bundle.source_type}] {t.name} ({len(t.rows)} 行)")
+            ds_bundle = {
+                "source_type": bundle.source_type,
+                "tables": [{"name": t.name, "rows": t.rows} for t in bundle.tables],
+                "received_at": bundle.received_at.isoformat(),
+            }
             self._emit_log("input", f"解析完成: {ds_bundle['source_type']}, {len(ds_bundle['tables'])} 张表")
             self._emit_status("input", "success")
             self._ensure_not_stopped()

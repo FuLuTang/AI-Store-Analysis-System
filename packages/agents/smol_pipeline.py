@@ -119,9 +119,10 @@ class SmolPipeline(AgentPipeline):
 
     name = "smol"
 
-    def __init__(self, model=None, max_rounds: int = 15):
+    def __init__(self, model=None, max_rounds: int = 15, get_llm_preset=None):
         self.model = model
         self.max_rounds = max_rounds
+        self._get_llm_preset = get_llm_preset
 
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
@@ -201,6 +202,13 @@ class SmolPipeline(AgentPipeline):
     def _resolve_model(self):
         if self.model is not None:
             return self.model
+        if self._get_llm_preset:
+            preset = self._get_llm_preset()
+            model_id = preset.get("model", "deepseek/deepseek-chat")
+            api_key = preset.get("apiKey", "")
+            api_base = preset.get("baseUrl", "https://api.deepseek.com/v1")
+            from smolagents import LiteLLMModel
+            return LiteLLMModel(model_id=model_id, api_key=api_key, api_base=api_base)
         from smolagents import LiteLLMModel
         model_id = os.getenv("SMOL_MODEL_ID", "deepseek/deepseek-chat")
         api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY", "")

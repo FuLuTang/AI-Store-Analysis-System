@@ -37,18 +37,24 @@
                 <input type="file" id="fileInput" hidden multiple>
             </div>
 
-            <details class="analysis-params-details" style="margin: 1rem 0 0.5rem;">
+            <details class="analysis-params-details" id="paramsDetails" style="margin: 1rem 0 0.5rem;">
                 <summary style="cursor: pointer; font-size: 0.9rem; color: var(--text-muted); user-select: none;">
                     <i class="fas fa-sliders-h"></i> 分析参数（可选）
                 </summary>
                 <div style="margin-top: 0.5rem;">
-                    <textarea id="analysisParamsInput" rows="4"
-                        placeholder='{"分析时间颗粒度": "月", "分析方向": "流量下滑", "词藻": "偏白话"}'
-                        style="width: 100%; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.85rem; font-family: monospace; resize: vertical; box-sizing: border-box; background: #fafafa;"></textarea>
-                    <button id="saveParamsBtn" class="btn btn-secondary" style="margin-top: 6px; font-size: 0.8rem; padding: 4px 14px; background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
-                        <i class="fas fa-save"></i> 保存
-                    </button>
-                    <span id="paramsSavedHint" style="margin-left: 8px; font-size: 0.8rem; color: var(--success); display: none;">✓ 已保存</span>
+                    <div id="paramsFormContainer"></div>
+                    <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;">
+                        <select id="presetSelect" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;background:#f1f5f9;color:var(--primary);cursor:pointer;">
+                            <option value="">📋 预设...</option>
+                        </select>
+                        <button id="addParamBtn" class="btn btn-secondary" style="font-size: 0.8rem; padding: 4px 14px; background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
+                            <i class="fas fa-plus"></i> 添加参数
+                        </button>
+                        <button id="saveParamsBtn" class="btn" style="font-size: 0.8rem; padding: 4px 14px;">
+                            <i class="fas fa-save"></i> 保存
+                        </button>
+                        <span id="paramsSavedHint" style="font-size: 0.8rem; color: var(--success); display: none; align-self: center;">✓ 已保存</span>
+                    </div>
                 </div>
             </details>
 
@@ -524,32 +530,249 @@
         };
 
         // ========== 分析参数 ==========
-        const paramsInput = document.getElementById('analysisParamsInput');
+        let paramsData = [];
+        let presetsMap = {};
+        const paramsContainer = document.getElementById('paramsFormContainer');
         const saveParamsBtn = document.getElementById('saveParamsBtn');
         const paramsSavedHint = document.getElementById('paramsSavedHint');
+        const addParamBtn = document.getElementById('addParamBtn');
+        const presetSelect = document.getElementById('presetSelect');
+
+        function detectControlType(item) {
+            if (item.options && Array.isArray(item.options) && item.options.length) return 'select';
+            if (typeof item.value === 'boolean') return 'toggle';
+            if (item.type === 'slider') return 'slider';
+            if (item.type === 'number') return 'number';
+            if (item.type === 'text') return 'text';
+            if (typeof item.value === 'number') {
+                if (Number.isInteger(item.value)) return 'number';
+                if (item.value >= 0 && item.value <= 1) return 'slider';
+                return 'number';
+            }
+            return 'text';
+        }
+
+        function renderParamsForm(data) {
+            if (!Array.isArray(data)) {
+                paramsContainer.innerHTML = '<div style="color:#94a3b8;font-size:0.85rem;">暂无参数</div>';
+                return;
+            }
+            paramsData = data;
+            let html = '';
+            data.forEach((item, i) => {
+                if (typeof item !== 'object' || item === null) return;
+                const key = item.key || '';
+                const value = item.value;
+                const ctrlType = detectControlType(item);
+                const options = item.options || [];
+                const minVal = item.min !== undefined ? item.min : (ctrlType === 'slider' ? 0 : undefined);
+                const maxVal = item.max !== undefined ? item.max : (ctrlType === 'slider' ? 1 : undefined);
+                const stepVal = ctrlType === 'slider' ? 0.01 : undefined;
+
+                let ctrlHtml = '';
+                if (ctrlType === 'select') {
+                    const opts = options.map(o => `<option value="${o.replace(/"/g,'&quot;')}" ${value === o ? 'selected' : ''}>${o}</option>`).join('');
+                    ctrlHtml = `<select class="param-select" data-idx="${i}" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;background:#fff;">${opts}</select>`;
+                } else if (ctrlType === 'toggle') {
+                    const on = value === true;
+                    ctrlHtml = `<label class="param-toggle" data-idx="${i}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+                        <input type="checkbox" ${on ? 'checked' : ''} style="display:none;">
+                        <span style="position:relative;display:inline-block;width:40px;height:22px;background:${on ? 'var(--success)' : '#e2e8f0'};border-radius:11px;transition:.2s;">
+                            <span style="position:absolute;top:2px;left:${on ? '20px' : '2px'};width:18px;height:18px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2);"></span>
+                        </span>
+                        <span style="font-size:0.8rem;color:${on ? 'var(--success)' : '#94a3b8'};">${on ? 'ON' : 'OFF'}</span>
+                    </label>`;
+                } else if (ctrlType === 'slider') {
+                    const pct = typeof value === 'number' ? Math.round(value / (maxVal || 1) * 100) : 0;
+                    ctrlHtml = `<div style="display:inline-flex;align-items:center;gap:6px;">
+                        <input type="range" class="param-slider" data-idx="${i}" min="${minVal}" max="${maxVal}" step="${stepVal}" value="${value}" style="width:100px;">
+                        <span class="param-slider-val" style="font-size:0.8rem;color:var(--text-muted);min-width:32px;">${pct}%</span>
+                    </div>`;
+                } else if (ctrlType === 'number') {
+                    ctrlHtml = `<div style="display:inline-flex;align-items:center;gap:2px;">
+                        <button class="param-num-btn" data-idx="${i}" data-dir="-1" style="width:24px;height:24px;border:1px solid #e2e8f0;border-radius:4px;background:#f8fafc;cursor:pointer;font-size:1rem;line-height:1;">−</button>
+                        <input type="number" class="param-number" data-idx="${i}" value="${value}" ${minVal !== undefined ? `min="${minVal}"` : ''} ${maxVal !== undefined ? `max="${maxVal}"` : ''} style="width:60px;padding:2px 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;text-align:center;">
+                        <button class="param-num-btn" data-idx="${i}" data-dir="1" style="width:24px;height:24px;border:1px solid #e2e8f0;border-radius:4px;background:#f8fafc;cursor:pointer;font-size:1rem;line-height:1;">+</button>
+                    </div>`;
+                } else {
+                    ctrlHtml = `<input type="text" class="param-text" data-idx="${i}" value="${String(value !== undefined && value !== null ? value : '').replace(/"/g,'&quot;')}" placeholder="输入值" style="width:160px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;">`;
+                }
+
+                html += `<div class="param-row" data-idx="${i}" style="display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:4px 0;">
+                    <input type="text" class="param-key" data-idx="${i}" value="${key.replace(/"/g,'&quot;')}" placeholder="参数名" style="width:120px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;background:#fafafa;">
+                    ${ctrlHtml}
+                    <button class="param-del" data-idx="${i}" style="border:none;background:none;cursor:pointer;color:#ef4444;font-size:1rem;padding:2px;" title="删除">✕</button>
+                </div>`;
+            });
+            if (!html) {
+                paramsContainer.innerHTML = '<div style="color:#94a3b8;font-size:0.85rem;">暂无参数，点击"添加参数"新建</div>';
+            } else {
+                paramsContainer.innerHTML = html;
+            }
+            bindParamEvents();
+        }
+
+        function bindParamEvents() {
+            // 删除
+            document.querySelectorAll('.param-del').forEach(btn => {
+                btn.onclick = () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    paramsData.splice(idx, 1);
+                    renderParamsForm(paramsData);
+                };
+            });
+            // key 输入
+            document.querySelectorAll('.param-key').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].key = inp.value;
+                };
+            });
+            // text 输入
+            document.querySelectorAll('.param-text').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = inp.value;
+                };
+            });
+            // select
+            document.querySelectorAll('.param-select').forEach(sel => {
+                sel.onchange = () => {
+                    const idx = parseInt(sel.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = sel.value;
+                };
+            });
+            // toggle
+            document.querySelectorAll('.param-toggle input[type=checkbox]').forEach(cb => {
+                cb.onchange = () => {
+                    const idx = parseInt(cb.closest('.param-toggle').dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = cb.checked;
+                    // 刷新 UI 颜色
+                    const label = cb.closest('.param-toggle');
+                    const bg = label.querySelector('span:first-of-type');
+                    const dot = bg.querySelector('span');
+                    const txt = label.querySelector('span:last-of-type');
+                    bg.style.background = cb.checked ? 'var(--success)' : '#e2e8f0';
+                    dot.style.left = cb.checked ? '20px' : '2px';
+                    txt.textContent = cb.checked ? 'ON' : 'OFF';
+                    txt.style.color = cb.checked ? 'var(--success)' : '#94a3b8';
+                };
+            });
+            // slider
+            document.querySelectorAll('.param-slider').forEach(sl => {
+                sl.oninput = () => {
+                    const idx = parseInt(sl.dataset.idx);
+                    const val = parseFloat(sl.value);
+                    if (paramsData[idx]) paramsData[idx].value = val;
+                    const pct = Math.round(val / parseFloat(sl.max || 1) * 100);
+                    sl.parentNode.querySelector('.param-slider-val').textContent = pct + '%';
+                };
+            });
+            // number stepper buttons
+            document.querySelectorAll('.param-num-btn').forEach(btn => {
+                btn.onclick = () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    const inp = document.querySelector(`.param-number[data-idx="${idx}"]`);
+                    if (!inp) return;
+                    const dir = parseInt(btn.dataset.dir);
+                    const step = parseFloat(inp.step) || 1;
+                    let val = parseFloat(inp.value) || 0;
+                    val = Math.round((val + dir * step) * 100) / 100;
+                    if (inp.min !== '' && val < parseFloat(inp.min)) val = parseFloat(inp.min);
+                    if (inp.max !== '' && val > parseFloat(inp.max)) val = parseFloat(inp.max);
+                    inp.value = val;
+                    if (paramsData[idx]) paramsData[idx].value = val;
+                };
+            });
+            // number input direct change
+            document.querySelectorAll('.param-number').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    const val = inp.value === '' ? '' : parseFloat(inp.value);
+                    if (paramsData[idx]) paramsData[idx].value = val;
+                };
+            });
+        }
+
+        function collectParamsData() {
+            // 收集 + 清理：移除空 key 的行
+            return paramsData.filter(item => item && item.key && item.key.trim() !== '');
+        }
 
         async function loadAnalysisParams() {
             try {
                 const res = await fetch('/api/analysis-params', { headers: authHeaders() });
                 const data = await res.json();
-                if (data.analysis_params) {
-                    paramsInput.value = data.analysis_params;
+                const raw = data.analysis_params;
+                if (Array.isArray(raw)) {
+                    paramsData = raw;
+                } else if (raw && typeof raw === 'string') {
+                    // 尝试解析为对象（旧格式）
+                    try {
+                        const obj = JSON.parse(raw);
+                        if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
+                            paramsData = Object.entries(obj).map(([k, v]) => ({key: k, value: v}));
+                        } else {
+                            paramsData = [{key: '分析参数', value: raw}];
+                        }
+                    } catch {
+                        paramsData = [{key: '分析参数', value: raw}];
+                    }
+                } else {
+                    paramsData = [];
                 }
+                renderParamsForm(paramsData);
+            } catch (e) {
+                paramsData = [];
+                renderParamsForm(paramsData);
+            }
+        }
+        loadAnalysisParams();
+
+        // 加载预设列表
+        async function loadPresets() {
+            try {
+                const res = await fetch('/api/analysis-params/presets', { headers: authHeaders() });
+                const data = await res.json();
+                presetsMap = data.presets || {};
+                const names = Object.keys(presetsMap);
+                presetSelect.innerHTML = '<option value="">📋 预设...</option>';
+                names.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    presetSelect.appendChild(opt);
+                });
             } catch (e) {
                 // ignore
             }
         }
-        loadAnalysisParams();
+        loadPresets();
+
+        presetSelect.onchange = () => {
+            const name = presetSelect.value;
+            if (!name || !presetsMap[name]) return;
+            if (paramsData.length > 0 && !confirm(`"${name}" 将替换当前所有参数，确认？`)) {
+                presetSelect.value = '';
+                return;
+            }
+            paramsData = JSON.parse(JSON.stringify(presetsMap[name]));
+            renderParamsForm(paramsData);
+            presetSelect.value = '';
+        };
 
         saveParamsBtn.onclick = async () => {
             try {
                 saveParamsBtn.disabled = true;
                 paramsSavedHint.style.display = 'none';
+                const cleaned = collectParamsData();
                 await fetch('/api/analysis-params', {
                     method: 'PUT',
                     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ analysis_params: paramsInput.value }),
+                    body: JSON.stringify({ analysis_params: cleaned }),
                 });
+                paramsData = cleaned;
+                renderParamsForm(cleaned);
                 paramsSavedHint.style.display = 'inline';
                 setTimeout(() => { paramsSavedHint.style.display = 'none'; }, 2000);
             } catch (e) {
@@ -557,6 +780,14 @@
             } finally {
                 saveParamsBtn.disabled = false;
             }
+        };
+
+        addParamBtn.onclick = () => {
+            paramsData.push({key: '', value: ''});
+            renderParamsForm(paramsData);
+            // 滚动到新行
+            const rows = paramsContainer.querySelectorAll('.param-row');
+            if (rows.length) rows[rows.length - 1].scrollIntoView({behavior: 'smooth'});
         };
     </script>
 </body>

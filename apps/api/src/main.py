@@ -763,27 +763,11 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         result = await pipe.run(bundle)
         full_text = result.full_report or f"# {pipeline_name} 管线报告\n\npipeline: {result.pipeline}\n耗时: {result.elapsed_ms:.0f}ms"
         session.full_result = full_text
-
-        if pipeline_name == "traditional" and result.summary:
-            try:
-                summary_data = json.loads(result.summary)
-                session.result = json.dumps({
-                    "health_status": summary_data.get("health_status", "分析完成"),
-                    "overview_text": summary_data.get("overview_text", f"{pipeline_name} 管线执行完毕"),
-                    "cards": summary_data.get("cards", []),
-                }, ensure_ascii=False)
-            except (json.JSONDecodeError, TypeError):
-                session.result = json.dumps({
-                    "health_status": "分析完成",
-                    "overview_text": f"{pipeline_name} 管线执行完毕 (summary解析失败)",
-                    "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in result.cards]
-                }, ensure_ascii=False)
-        else:
-            session.result = json.dumps({
-                "health_status": "分析完成",
-                "overview_text": f"{pipeline_name} 管线执行完毕",
-                "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in result.cards]
-            }, ensure_ascii=False)
+        session.result = json.dumps({
+            "health_status": "分析完成",
+            "overview_text": f"{pipeline_name} 管线执行完毕",
+            "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in result.cards]
+        }, ensure_ascii=False)
         with session.runtime_lock:
             if session.force_stop or session.status == "aborted":
                 _save_session_json(session)

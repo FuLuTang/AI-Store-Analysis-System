@@ -288,7 +288,6 @@ class TraditionalPipeline(AgentPipeline):
                 pipeline=self.name,
                 elapsed_ms=elapsed,
                 full_report=full_report,
-                summary=simplified_text,
                 scene=SceneContext(industry=scene.get("industry", "generic"), business_model=scene.get("business_model", "unknown")),
                 mapping=[SemanticMapping(**m) for m in mappings],
                 metrics=[MetricResult(metric_id=r.get("metric_id", ""), name=r.get("name", ""), value=r.get("value"), status=r.get("status", "pass")) for r in metric_results],

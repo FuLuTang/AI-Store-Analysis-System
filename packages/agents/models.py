@@ -167,7 +167,6 @@ class AgentResult(BaseModel):
     scene: SceneContext | None = None
     cards: list[ReportCard] = Field(default_factory=list)
     full_report: str = ""
-    summary: str = ""
     pipeline: str = ""
     elapsed_ms: float = 0.0
     total_tokens: int = 0

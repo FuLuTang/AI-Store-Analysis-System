@@ -42,7 +42,6 @@ app.add_middleware(
 STORAGE_DIR = ROOT_DIR / "storage"
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
 LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
-SAFE_UPLOAD_FILENAME = re.compile(r"^[A-Za-z0-9._\-\u4e00-\u9fff]+$")
 MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
 DEFAULT_REASONING_EFFORT = "medium"
@@ -307,7 +306,6 @@ class SessionState:
         self.key_hash = key_hash
         self.account_slug = account_slug
         self.account_dir = account_dir
-        self.upload_dir = account_dir / "uploads"
         self.cache_dir = account_dir / "cache"
         self.profile_path = account_dir / "profile.json"
         self.status = "idle"  # idle, queued, running, completed, error, aborted, interrupted
@@ -319,7 +317,6 @@ class SessionState:
         self.force_stop = False
         self.run_id: Optional[str] = None
         self.run_dir: Optional[Path] = None
-        self.upload_lock = Lock()
         self.runtime_lock = Lock()
         self.event_lock = Lock()
 
@@ -367,16 +364,6 @@ class SessionManager:
         slug = _make_account_slug(user_key, key_hash)
         return key_hash, slug, self.base_dir / slug
 
-    def _migrate_legacy_account(self, user_key: str, key_hash: str, slug: str) -> Path:
-        legacy = self.base_dir / key_hash
-        dest = self.base_dir / slug
-        if legacy.exists() and not dest.exists():
-            try:
-                shutil.copytree(legacy, dest)
-            except Exception:
-                pass
-        return dest
-
     def _try_load_session(self, account_dir: Path) -> dict | None:
         latest = account_dir / "latest_run.json"
         if not latest.exists():
@@ -411,9 +398,6 @@ class SessionManager:
             if existing:
                 _save_account_json(account_dir, user_key, key_hash)
                 return existing
-
-            if not account_dir.exists():
-                self._migrate_legacy_account(user_key, key_hash, slug)
 
             profile_path = account_dir / "profile.json"
             if not create_if_missing and not profile_path.exists():
@@ -464,7 +448,7 @@ def _now_time():
 
 
 def _ensure_session_dirs(session: SessionState):
-    dirs = [session.account_dir, session.upload_dir, session.cache_dir]
+    dirs = [session.account_dir, session.cache_dir]
     if session.run_dir:
         dirs.append(session.run_dir)
     for d in dirs:
@@ -517,45 +501,6 @@ def ensure_not_stopped(session: SessionState):
     if is_stopped:
         raise TaskAbortedError("任务被用户强制终止。")
 
-
-def sanitize_upload_filename(raw_name: Optional[str], index: int):
-    if not raw_name:
-        candidate = f"file_{index + 1}.json"
-    else:
-        if "/" in raw_name or "\\" in raw_name:
-            raise HTTPException(status_code=400, detail=f"非法文件名: {raw_name}")
-        candidate = Path(raw_name).name.strip() or f"file_{index + 1}.json"
-
-    if len(candidate) > 128:
-        raise HTTPException(status_code=400, detail=f"文件名过长: {candidate[:32]}...")
-    if not SAFE_UPLOAD_FILENAME.fullmatch(candidate):
-        raise HTTPException(status_code=400, detail=f"文件名包含非法字符: {candidate}")
-    return candidate
-
-
-def save_current_uploads(session: SessionState, decoded_files: List[dict]):
-    _ensure_session_dirs(session)
-    current_dir = session.upload_dir / "current"
-    tmp_dir = session.upload_dir / ".current_tmp"
-
-    with session.upload_lock:
-        if tmp_dir.exists():
-            shutil.rmtree(tmp_dir)
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-
-        for i, item in enumerate(decoded_files):
-            raw_name = item.get("name")
-            data_bytes = item.get("bytes", b"")
-            safe_name = sanitize_upload_filename(raw_name, i)
-            output_path = tmp_dir / safe_name
-            try:
-                output_path.write_bytes(data_bytes)
-            except OSError as e:
-                raise HTTPException(status_code=500, detail=f"写入上传缓存失败: {str(e)}")
-
-        if current_dir.exists():
-            shutil.rmtree(current_dir)
-        tmp_dir.rename(current_dir)
 
 
 def save_latest_report(session: SessionState):
@@ -816,7 +761,6 @@ async def analyze(
         decoded_files.append({"name": filename, "bytes": raw})
 
     try:
-        save_current_uploads(session, decoded_files)
         raw_bundle = parse_uploaded_files(decoded_files)
         bundle = adapt_to_dataset_bundle(raw_bundle)
     except Exception as e:

@@ -55,6 +55,10 @@ class Manifest(BaseModel):
     def tables_by_name(self) -> dict[str, TableMeta]:
         return {t.name: t for t in self.tables}
 
+    @property
+    def tables_by_duckdb_name(self) -> dict[str, TableMeta]:
+        return {t.duckdb_name: t for t in self.tables if t.duckdb_name}
+
     model_config = {"ignored_types": (property,)}
 
 

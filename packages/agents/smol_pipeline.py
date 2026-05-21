@@ -90,14 +90,18 @@ result = AgentResult.model_validate(data)""",
 class SmolPipeline(AgentPipeline):
 
     class _PlanInjectModel:
-        """Model wrapper：每次 LLM 调用前注入 plan，调用后打 usage 日志。"""
-        def __init__(self, model, ws: Workspace, pipeline_name: str = "smol"):
+        """Model wrapper：每次 LLM 调用前注入 plan，调用后打 usage 日志和原始回复。"""
+        def __init__(self, model, ws: Workspace, pipeline_name: str = "smol", emit_log=None, check_aborted=None):
             self._model = model
             self._ws = ws
             self._pipeline = pipeline_name
             self._call_count = 0
+            self._emit_log = emit_log or (lambda nid, msg: None)
+            self._check_aborted = check_aborted
 
         def __call__(self, messages: list, **kwargs):
+            if self._check_aborted:
+                self._check_aborted()
             from .tools.impl.setup_impl import read_plan_short_impl
             plan_text = read_plan_short_impl(self._ws)
             messages = list(messages)
@@ -111,6 +115,24 @@ class SmolPipeline(AgentPipeline):
             usage_log = _extract_usage(result, self._call_count, self._pipeline, self._ws.report_id, latency_ms)
             logger.info("llm_usage %s", json.dumps(usage_log, ensure_ascii=False))
             self._ws.save_trace({"step": "llm_call", **usage_log})
+
+            thinking = _get_attr(result, "reasoning_content", "")
+            content = _get_attr(result, "content", "")
+            if not content and hasattr(result, "choices") and result.choices:
+                msg = result.choices[0].message
+                thinking = _get_attr(msg, "reasoning_content", "") or thinking
+                content = _get_attr(msg, "content", "") or content
+            if not content and isinstance(result, dict):
+                thinking = result.get("reasoning_content", "")
+                content = result.get("content", "")
+            if not content and isinstance(result, str):
+                content = result
+
+            step_label = f"Step {self._call_count}"
+            if thinking:
+                self._emit_log("smol_agent", f"[{step_label}] 🧠 思考: {thinking[:500]}")
+            if content:
+                self._emit_log("smol_agent", f"[{step_label}] ← 回复: {content[:500]}")
 
             return result
 
@@ -192,18 +214,36 @@ class SmolPipeline(AgentPipeline):
 
     def _make_tools(self, ws: Workspace) -> list:
         from .adapters.smol_tools import build_smol_tools
-        return build_smol_tools(ws)
+        tools = build_smol_tools(ws)
+        for t in tools:
+            _orig = t.forward
+            _name = t.name
+            def _log_forward(_orig=_orig, _name=_name, *args, **kwargs):
+                args_info = json.dumps(kwargs, ensure_ascii=False)[:200] if kwargs else ""
+                self._emit_log("smol_agent", f"🔧 {_name}: {args_info}")
+                try:
+                    res = _orig(*args, **kwargs)
+                    if _name == "check_plan":
+                        self._emit_log("smol_agent", f"  → check_plan: {str(res)[:300]}")
+                    else:
+                        self._emit_log("smol_agent", f"  → {str(res)[:150]}")
+                    return res
+                except Exception as e:
+                    self._emit_log("smol_agent", f"  → 失败: {str(e)[:200]}")
+                    raise
+            t.forward = _log_forward
+        return tools
 
     # ── agent ──
 
     def _make_agent(self, tools: list, ws: Workspace):
         from smolagents import CodeAgent
         model = self._resolve_model()
-        model = self._PlanInjectModel(model, ws)
+        model = self._PlanInjectModel(model, ws, emit_log=self._emit_log, check_aborted=self._check_aborted)
         return CodeAgent(
             tools=tools,
             model=model,
-            max_iterations=self.max_rounds,
+            max_steps=self.max_rounds,
             additional_authorized_imports=AUTHORIZED_IMPORTS,
         )
 
@@ -214,12 +254,16 @@ class SmolPipeline(AgentPipeline):
             model_id = self._llm_preset.get("model", "deepseek/deepseek-chat")
             api_key = self._llm_preset.get("apiKey", "")
             api_base = self._llm_preset.get("baseUrl", "https://api.deepseek.com/v1")
+            if "/" not in model_id:
+                model_id = f"openai/{model_id}"
             from smolagents import LiteLLMModel
             return LiteLLMModel(model_id=model_id, api_key=api_key, api_base=api_base)
         from smolagents import LiteLLMModel
         model_id = os.getenv("SMOL_MODEL_ID", "deepseek/deepseek-chat")
         api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         api_base = os.getenv("SMOL_API_BASE", "https://api.deepseek.com/v1")
+        if "/" not in model_id:
+            model_id = f"openai/{model_id}"
         return LiteLLMModel(model_id=model_id, api_key=api_key, api_base=api_base)
 
     def _build_prompt(self, ws: Workspace) -> str:
@@ -242,6 +286,11 @@ class SmolPipeline(AgentPipeline):
 
         if not data:
             data = self._extract_json(raw_output)
+
+        if isinstance(data, dict):
+            full_report = data.get("full_report", "")
+            cards_raw = data.get("cards", [])
+            self._write_summary_files(ws, full_report, cards_raw)
 
         try:
             return AgentResult(
@@ -274,6 +323,37 @@ class SmolPipeline(AgentPipeline):
             except json.JSONDecodeError:
                 pass
         return None
+
+    def _write_summary_files(self, ws: Workspace, full_report: str, cards: list[dict]):
+        if not self._workspace_dir:
+            return
+        self._workspace_dir.mkdir(parents=True, exist_ok=True)
+        if full_report:
+            (self._workspace_dir / "summary.md").write_text(full_report, encoding="utf-8")
+
+        health = "分析完成"
+        for c in (cards or []):
+            color = c.get("color", "") if isinstance(c, dict) else getattr(c, "color", "")
+            if color == "red":
+                health = "存在异常"
+                break
+            elif color == "yellow":
+                health = "部分指标异常"
+
+        cards_list = []
+        for c in (cards or []):
+            if isinstance(c, dict):
+                cards_list.append({"title": c.get("title", ""), "explanation": c.get("explanation", ""), "suggestion": c.get("suggestion", ""), "color": c.get("color", "green")})
+            else:
+                cards_list.append({"title": getattr(c, "title", ""), "explanation": getattr(c, "explanation", ""), "suggestion": getattr(c, "suggestion", ""), "color": getattr(c, "color", "green")})
+        (self._workspace_dir / "summary_short.json").write_text(
+            json.dumps({
+                "health_status": health,
+                "overview_text": f"Smolagent 管线执行完毕，{len(cards_list)} 项待关注",
+                "cards": cards_list,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
 # ── usage logging ──

@@ -25,12 +25,17 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
 from packages.agents.base import AgentPipeline
 from packages.agents.models import (
     AgentResult,
     DatasetBundle,
     FlattenPlan,
+    MetricResult,
+    MetricStatus,
     PhaseResult,
+    ReportCard,
     SemanticMapping,
     SqlPlan,
     TableMeta,
@@ -77,6 +82,29 @@ def _usage_to_phase(usage_dict: dict) -> dict:
     }
 
 
+def _strip_json_fence(text: str) -> str:
+    """去除 LLM 返回的 Markdown JSON code fence（```json ... ```），返回纯 JSON 字符串。"""
+    s = text.strip()
+    if s.startswith("```"):
+        first_nl = s.find("\n")
+        if first_nl != -1:
+            s = s[first_nl + 1:]
+        if s.endswith("```"):
+            s = s[:-3]
+        elif s.endswith("``` "):
+            s = s[:-4]
+    return s.strip()
+
+
+def _unwrap_agent_json(data):
+    """如果 LLM 输出被包裹在单 key dict 中（如 {"FlattenPlan": {...}}），解包返回内层值。"""
+    if isinstance(data, dict) and len(data) == 1:
+        k, v = next(iter(data.items()))
+        if isinstance(v, (dict, list)):
+            return v
+    return data
+
+
 class PydanticPipeline(AgentPipeline):
     name = "pydantic"
 
@@ -99,6 +127,44 @@ class PydanticPipeline(AgentPipeline):
     def _ensure_not_stopped(self):
         if self._check_aborted:
             self._check_aborted()
+
+    def _log_messages(self, phase: str, attempt: int, messages):
+        """将 agent 一次 run 的所有消息逐条 emit 到 SSE 日志。"""
+        for i, msg in enumerate(messages):
+            for part in getattr(msg, "parts", []):
+                kind = getattr(part, "part_kind", "unknown")
+                try:
+                    if kind == "system-prompt":
+                        continue
+                    elif kind == "user-prompt":
+                        content = getattr(part, "content", "") or ""
+                        self._emit_log(f"pydantic_{phase}", f"[#{attempt}.{i}] → 提问: {content[:200]}")
+                    elif kind == "text":
+                        content = getattr(part, "content", "") or ""
+                        self._emit_log(f"pydantic_{phase}", f"[#{attempt}.{i}] ← 模型回答: {content[:300]}")
+                    elif kind == "thinking":
+                        content = getattr(part, "content", "") or ""
+                        self._emit_log(f"pydantic_{phase}", f"[#{attempt}.{i}] 🧠 推理: {content[:300]}")
+                    elif kind == "tool-call":
+                        tool_name = getattr(part, "tool_name", "?")
+                        raw_args = getattr(part, "args", "")
+                        if isinstance(raw_args, dict):
+                            args_str = json.dumps(raw_args, ensure_ascii=False)
+                        else:
+                            args_str = str(raw_args)
+                        self._emit_log(f"pydantic_{phase}", f"[#{attempt}.{i}] 🔧 工具调用: {tool_name}({args_str[:200]})")
+                    elif kind == "tool-return":
+                        content = getattr(part, "content", "")
+                        if isinstance(content, (dict, list)):
+                            content_str = json.dumps(content, ensure_ascii=False)
+                        else:
+                            content_str = str(content)
+                        self._emit_log(f"pydantic_{phase}", f"[#{attempt}.{i}] 📦 工具返回: {content_str[:200]}")
+                    elif kind == "retry-prompt":
+                        content = getattr(part, "content", "") or ""
+                        self._emit_log(f"pydantic_{phase}", f"[#{attempt}.{i}] 🔄 重试提示: {content[:200]}")
+                except Exception:
+                    pass  # 单条日志失败不影响流程
 
     # ================================================================
     # 入口
@@ -134,7 +200,9 @@ class PydanticPipeline(AgentPipeline):
         input_tokens_total += flat_result.input_tokens
         cache_hit_total += flat_result.cache_hit_tokens
         ws.init_duckdb()
-        self._emit_log("pydantic_flatten", f"展平完成: {len(flat_metas)} 张表, status={flat_result.status}")
+        self._emit_log("pydantic_flatten", f"展平完成: {len(flat_metas)} 张表, status={flat_result.status}, attempts={flat_result.attempts}")
+        if flat_result.errors:
+            self._emit_log("pydantic_flatten", f"展平错误: {'; '.join(flat_result.errors[:5])}")
         self._emit_status("pydantic_flatten", flat_result.status)
         self._ensure_not_stopped()
 
@@ -148,7 +216,9 @@ class PydanticPipeline(AgentPipeline):
         total_tokens += mapping_result.input_tokens + mapping_result.output_tokens
         input_tokens_total += mapping_result.input_tokens
         cache_hit_total += mapping_result.cache_hit_tokens
-        self._emit_log("pydantic_mapping", f"映射完成: {len(mappings)} 个字段, status={mapping_result.status}")
+        self._emit_log("pydantic_mapping", f"映射完成: {len(mappings)} 个字段, status={mapping_result.status}, attempts={mapping_result.attempts}")
+        if mapping_result.errors:
+            self._emit_log("pydantic_mapping", f"映射错误: {'; '.join(mapping_result.errors[:5])}")
         self._emit_status("pydantic_mapping", mapping_result.status)
         self._ensure_not_stopped()
 
@@ -162,15 +232,23 @@ class PydanticPipeline(AgentPipeline):
         total_tokens += sql_result.input_tokens + sql_result.output_tokens
         input_tokens_total += sql_result.input_tokens
         cache_hit_total += sql_result.cache_hit_tokens
-        self._emit_log("pydantic_sql", f"指标计算完成: {len(metrics)} 项, status={sql_result.status}")
+        self._emit_log("pydantic_sql", f"指标计算完成: {len(metrics)} 项, status={sql_result.status}, attempts={sql_result.attempts}")
+        if sql_result.errors:
+            self._emit_log("pydantic_sql", f"指标计算错误: {'; '.join(sql_result.errors[:5])}")
         self._emit_status("pydantic_sql", sql_result.status)
+        self._ensure_not_stopped()
 
         elapsed = (time.time() - t0) * 1000
+        token_summary = f"耗时 {elapsed:.0f}ms, tokens: {total_tokens} (input={input_tokens_total}, cache_hit={cache_hit_total})"
+        self._emit_log("pydantic_init", f"管线完成: {token_summary}")
         logger.info(
             f"[run] 完成 elapsed={elapsed:.0f}ms total_tokens={total_tokens} "
             f"input_tokens={input_tokens_total} cache_hit={cache_hit_total} "
             f"ratio={cache_hit_total / max(input_tokens_total, 1) * 100:.1f}%"
         )
+
+        full_report, cards = self._build_report(bundle, flat_metas, mappings, metrics, all_phases, elapsed, total_tokens)
+        self._write_summary_files(full_report, cards)
 
         return AgentResult(
             report_id=ws.report_id,
@@ -184,6 +262,102 @@ class PydanticPipeline(AgentPipeline):
             input_tokens=input_tokens_total,
             cache_hit_tokens=cache_hit_total,
             phases=all_phases,
+            full_report=full_report,
+            cards=cards,
+        )
+
+    # ================================================================
+    # Report Builder
+    # ================================================================
+
+    def _build_report(
+        self,
+        bundle: DatasetBundle,
+        flat_metas: list[TableMeta],
+        mappings: list[SemanticMapping],
+        metrics: list[MetricResult],
+        all_phases: list[PhaseResult],
+        elapsed_ms: float,
+        total_tokens: int,
+    ) -> tuple[str, list[ReportCard]]:
+        lines: list[str] = []
+        lines.append(f"# {bundle.source_type.upper()} 数据分析报告")
+        lines.append("")
+        lines.append(f"pipeline: {self.name}")
+        lines.append(f"耗时: {elapsed_ms:.0f}ms")
+        lines.append(f"Token 总数: {total_tokens}")
+        lines.append("")
+        lines.append(f"---")
+        lines.append("")
+
+        lines.append("## 数据表")
+        for m in flat_metas:
+            lines.append(f"- **{m.name}**: {m.row_count} 行, {len(m.columns)} 列")
+        lines.append("")
+
+        lines.append("## 字段映射")
+        for mp in mappings:
+            lines.append(f"- `{mp.table}.{mp.raw_field}` → `{mp.semantic_field}` (conf={mp.confidence})")
+        lines.append("")
+
+        lines.append("## 指标结果")
+        status_icon = {
+            MetricStatus.PASS: "✅",
+            MetricStatus.ATTENTION: "⚠️",
+            MetricStatus.WARNING: "🔶",
+            MetricStatus.UNCOUNTABLE: "⛔",
+        }
+        for m in metrics:
+            icon = status_icon.get(m.status, "⚪")
+            val_str = json.dumps(m.value, ensure_ascii=False) if m.value is not None else "-"
+            if len(val_str) > 300:
+                val_str = val_str[:300] + "..."
+            lines.append(f"- {icon} **{m.name}** (`{m.metric_id}`): {val_str}")
+            if m.reason:
+                lines.append(f"  - {m.reason}")
+        lines.append("")
+
+        lines.append("## 管线阶段")
+        for p in all_phases:
+            phase_tokens = p.input_tokens + p.output_tokens
+            lines.append(f"- **{p.phase}**: status=`{p.status}`, attempts={p.attempts}, tokens={phase_tokens}")
+            if p.errors:
+                for e in p.errors[:3]:
+                    lines.append(f"  - {e}")
+
+        cards: list[ReportCard] = []
+        for m in metrics:
+            if m.status == MetricStatus.WARNING:
+                cards.append(ReportCard(title=m.name, explanation=m.reason or "需关注", color="red"))
+            elif m.status == MetricStatus.ATTENTION:
+                cards.append(ReportCard(title=m.name, explanation=m.reason or "需关注", color="yellow"))
+            elif m.status == MetricStatus.UNCOUNTABLE:
+                cards.append(ReportCard(title=m.name, explanation=f"无法计算: {m.reason}", color="pink"))
+
+        return "\n".join(lines), cards
+
+    def _write_summary_files(self, full_report: str, cards: list[ReportCard]):
+        ws_dir = self._workspace_dir
+        if not ws_dir:
+            return
+        ws_dir.mkdir(parents=True, exist_ok=True)
+        (ws_dir / "summary.md").write_text(full_report, encoding="utf-8")
+
+        health = "分析完成"
+        for c in cards:
+            if c.color == "red":
+                health = "存在异常"
+                break
+            elif c.color == "yellow":
+                health = "部分指标异常"
+
+        (ws_dir / "summary_short.json").write_text(
+            json.dumps({
+                "health_status": health,
+                "overview_text": f"Pydantic 管线执行完毕，{len(cards)} 项待关注",
+                "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in cards],
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
 
     # ================================================================
@@ -200,7 +374,10 @@ class PydanticPipeline(AgentPipeline):
         logger.info(f"[flatten] 开始, 原始表 {len(raw_metas)} 张")
 
         for attempt in range(1, MAX_RETRIES + 1):
-            agent = self._build_phase_agent(ws, FlattenPlan, "flatten")
+            if attempt > 1:
+                self._emit_log("pydantic_flatten", f"第 {attempt} 次重试，前一次错误: {'; '.join(errors[:3])}")
+            self._ensure_not_stopped()
+            agent = self._build_phase_agent(ws, "flatten")
             agent = self._register_phase_tools(agent, ws, "flatten")
 
             if attempt == 1:
@@ -213,8 +390,12 @@ class PydanticPipeline(AgentPipeline):
             try:
                 t_call = time.time()
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
+                self._log_messages("flatten", attempt, result.all_messages())
                 latency_ms = (time.time() - t_call) * 1000
-                plan: FlattenPlan = result.output
+                raw_text = result.output
+                data = json.loads(_strip_json_fence(raw_text))
+                data = _unwrap_agent_json(data)
+                plan = FlattenPlan.model_validate(data)
                 msg_history = result.all_messages()
                 reasoning = _extract_reasoning(result)
 
@@ -226,6 +407,9 @@ class PydanticPipeline(AgentPipeline):
                 )
                 for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
                     usage_sum[k] += u_rec.get(k, 0)
+            except (json.JSONDecodeError, ValidationError) as e:
+                errors.append(f"Agent 输出解析失败: {e}")
+                continue
             except Exception as e:
                 logger.error(f"[flatten#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
@@ -233,6 +417,7 @@ class PydanticPipeline(AgentPipeline):
 
             flat_metas, exec_errors = self._execute_flatten(ws, plan, raw_metas)
             if not exec_errors:
+                self._emit_log("pydantic_flatten", f"展平成功: {len(flat_metas)} 张, strategy_count={len(plan.tables)}")
                 logger.info(f"[flatten#{attempt}] 成功, 产出 {len(flat_metas)} 张 flat table")
                 return PhaseResult(
                     phase="flatten", status="success",
@@ -242,6 +427,7 @@ class PydanticPipeline(AgentPipeline):
             errors = exec_errors
             logger.warning(f"[flatten#{attempt}] 失败: {'; '.join(errors)}")
 
+        self._emit_log("pydantic_flatten", f"展平全部 {MAX_RETRIES} 次失败: {'; '.join(errors[:5])}")
         logger.error(f"[flatten] 全部 {MAX_RETRIES} 次失败")
         return PhaseResult(
             phase="flatten", status="failed", attempts=MAX_RETRIES,
@@ -263,7 +449,8 @@ class PydanticPipeline(AgentPipeline):
             "- strategy: pass / explode_array / unfold_object / pivot\n"
             "- target_name: 展平后的表名\n"
             "- columns: 要保留的字段列表\n\n"
-            "只输出 FlattenPlan，程序会执行展平。"
+            "只输出 FlattenPlan，程序会执行展平。\n\n"
+            "只输出纯 JSON，不要 Markdown 代码块，不要额外说明。"
         )
 
     def _execute_flatten(
@@ -318,7 +505,10 @@ class PydanticPipeline(AgentPipeline):
         logger.info(f"[mapping] 开始, flat table {len(flat_metas)} 张")
 
         for attempt in range(1, MAX_RETRIES + 1):
-            agent = self._build_phase_agent(ws, list[SemanticMapping], "mapping")
+            if attempt > 1:
+                self._emit_log("pydantic_mapping", f"第 {attempt} 次重试，前一次错误: {'; '.join(errors[:3])}")
+            self._ensure_not_stopped()
+            agent = self._build_phase_agent(ws, "mapping")
             agent = self._register_phase_tools(agent, ws, "mapping")
 
             if attempt == 1:
@@ -331,8 +521,14 @@ class PydanticPipeline(AgentPipeline):
             try:
                 t_call = time.time()
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
+                self._log_messages("mapping", attempt, result.all_messages())
                 latency_ms = (time.time() - t_call) * 1000
-                mappings = result.output
+                raw_text = result.output
+                data = json.loads(_strip_json_fence(raw_text))
+                data = _unwrap_agent_json(data)
+                if isinstance(data, dict):
+                    data = [data]
+                mappings = [SemanticMapping.model_validate(d) for d in data]
                 msg_history = result.all_messages()
                 reasoning = _extract_reasoning(result)
 
@@ -344,6 +540,9 @@ class PydanticPipeline(AgentPipeline):
                 )
                 for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
                     usage_sum[k] += u_rec.get(k, 0)
+            except (json.JSONDecodeError, ValidationError) as e:
+                errors.append(f"Agent 输出解析失败: {e}")
+                continue
             except Exception as e:
                 logger.error(f"[mapping#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
@@ -351,6 +550,7 @@ class PydanticPipeline(AgentPipeline):
 
             map_errors = self._validate_mappings(mappings, flat_metas)
             if not map_errors:
+                self._emit_log("pydantic_mapping", f"映射成功: {len(mappings)} 条, attempt={attempt}")
                 logger.info(f"[mapping#{attempt}] 成功, {len(mappings)} 条映射")
                 return PhaseResult(
                     phase="mapping", status="success",
@@ -358,8 +558,10 @@ class PydanticPipeline(AgentPipeline):
                     **_usage_to_phase(usage_sum),
                 )
             errors = map_errors
+            self._emit_log("pydantic_mapping", f"映射校验失败: {'; '.join(map_errors[:3])}")
             logger.warning(f"[mapping#{attempt}] 失败: {'; '.join(errors)}")
 
+        self._emit_log("pydantic_mapping", f"映射全部 {MAX_RETRIES} 次失败: {'; '.join(errors[:5])}")
         logger.error(f"[mapping] 全部 {MAX_RETRIES} 次失败")
         return PhaseResult(
             phase="mapping", status="failed", attempts=MAX_RETRIES,
@@ -386,7 +588,8 @@ class PydanticPipeline(AgentPipeline):
             "- confidence: 0~1 置信度\n"
             "- reason: 映射理由\n"
             "- need_confirm: confidence < 0.75 时设为 true\n\n"
-            "只输出 SemanticMapping 列表，程序会记录映射。"
+            "只输出 SemanticMapping 列表，程序会记录映射。\n\n"
+            "只输出纯 JSON，不要 Markdown 代码块，不要额外说明。"
         )
 
     def _validate_mappings(
@@ -429,7 +632,10 @@ class PydanticPipeline(AgentPipeline):
         logger.info(f"[sql] 开始, {len(flat_metas)} 张表, {len(mappings)} 条映射")
 
         for attempt in range(1, MAX_RETRIES + 1):
-            agent = self._build_phase_agent(ws, SqlPlan, "sql")
+            if attempt > 1:
+                self._emit_log("pydantic_sql", f"第 {attempt} 次重试，前一次错误: {'; '.join(errors[:3])}")
+            self._ensure_not_stopped()
+            agent = self._build_phase_agent(ws, "sql")
             agent = self._register_phase_tools(agent, ws, "sql")
 
             if attempt == 1:
@@ -442,8 +648,12 @@ class PydanticPipeline(AgentPipeline):
             try:
                 t_call = time.time()
                 result = await agent.run(prompt, deps=ws, message_history=msg_history)
+                self._log_messages("sql", attempt, result.all_messages())
                 latency_ms = (time.time() - t_call) * 1000
-                plan: SqlPlan = result.output
+                raw_text = result.output
+                data = json.loads(_strip_json_fence(raw_text))
+                data = _unwrap_agent_json(data)
+                plan = SqlPlan.model_validate(data)
                 msg_history = result.all_messages()
                 reasoning = _extract_reasoning(result)
 
@@ -455,6 +665,9 @@ class PydanticPipeline(AgentPipeline):
                 )
                 for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
                     usage_sum[k] += u_rec.get(k, 0)
+            except (json.JSONDecodeError, ValidationError) as e:
+                errors.append(f"Agent 输出解析失败: {e}")
+                continue
             except Exception as e:
                 logger.error(f"[sql#{attempt}] Agent 调用失败: {e}")
                 errors.append(f"Agent 调用失败: {e}")
@@ -463,13 +676,15 @@ class PydanticPipeline(AgentPipeline):
             val_errors = self._validate_sql_plan(plan, flat_metas)
             if val_errors:
                 errors = val_errors
+                self._emit_log("pydantic_sql", f"SQL 校验失败: {'; '.join(val_errors[:3])}")
                 logger.warning(f"[sql#{attempt}] 校验失败: {'; '.join(val_errors)}")
                 continue
 
-            metrics, exec_errors = self._execute_sql(ws, plan)
+            metrics, exec_errors = self._execute_sql(ws, plan, flat_metas)
             last_metrics = metrics
 
             if not exec_errors:
+                self._emit_log("pydantic_sql", f"SQL 执行成功: {len(metrics)} 项指标, attempt={attempt}")
                 logger.info(f"[sql#{attempt}] 成功, {len(metrics)} 条指标")
                 return PhaseResult(
                     phase="sql", status="success",
@@ -478,8 +693,10 @@ class PydanticPipeline(AgentPipeline):
                 )
 
             errors = exec_errors
-            logger.warning(f"[sql#{attempt}] 执行失败: {'; '.join(exec_errors)}")
+            pass_count = len(metrics) - len(exec_errors)
+            self._emit_log("pydantic_sql", f"SQL 执行部分成功: {pass_count}/{len(metrics)} 项, 错误: {'; '.join(exec_errors[:3])}")
 
+        self._emit_log("pydantic_sql", f"SQL 全部 {MAX_RETRIES} 次后部分完成: {len(last_metrics)} 项指标")
         logger.error(f"[sql] 全部 {MAX_RETRIES} 次失败, 保留 {len(last_metrics)} 条指标")
         return PhaseResult(
             phase="sql", status="partial", attempts=MAX_RETRIES,
@@ -495,7 +712,7 @@ class PydanticPipeline(AgentPipeline):
             for m in mappings
         )
         table_text = "\n".join(
-            f"  - {m.name}: {m.row_count} 行, [{', '.join(c.name for c in m.columns[:15])}]"
+            f"  - {m.name} [SQL表名: {m.duckdb_name}]: {m.row_count} 行, [{', '.join(c.name for c in m.columns[:15])}]"
             for m in metas
         )
         return (
@@ -510,12 +727,13 @@ class PydanticPipeline(AgentPipeline):
             "- required_fields: 需要的标准字段列表\n\n"
             "SQL 规则:\n"
             "- 只允许 SELECT/WITH 查询\n"
-            "- 表名请用双引号包裹\n"
+            "- 表名请用双引号包裹，且必须用 SQL表名（不是原始表名）\n"
             "- ratio 类: SUM(numerator) / NULLIF(SUM(denominator), 0)\n"
             "- period_change 类: 用 LAG() 窗口函数\n"
             "- share_by_dimension 类: GROUP BY + SUM\n"
             "- concentration 类: SUM(column) / SUM(SUM(column)) OVER()\n\n"
-            "只输出 SqlPlan，程序会校验并执行 SQL。"
+            "只输出 SqlPlan，程序会校验并执行 SQL。\n\n"
+            "只输出纯 JSON，不要 Markdown 代码块，不要额外说明。"
         )
 
     def _validate_sql_plan(
@@ -540,11 +758,11 @@ class PydanticPipeline(AgentPipeline):
         return errors
 
     def _execute_sql(
-        self, ws: Workspace, plan: SqlPlan
+        self, ws: Workspace, plan: SqlPlan, metas: list[TableMeta]
     ) -> tuple[list, list[str]]:
         import duckdb
-        from packages.agents.models import MetricResult, MetricStatus
 
+        name_to_duckdb = {m.name: m.duckdb_name for m in metas if m.name != m.duckdb_name}
         errors: list[str] = []
         metrics: list[MetricResult] = []
         db_path = ws.duckdb_path
@@ -553,7 +771,10 @@ class PydanticPipeline(AgentPipeline):
         try:
             for ms in plan.metrics:
                 try:
-                    result = conn.execute(ms.sql).fetchdf()
+                    sql = ms.sql
+                    for orig, safe in name_to_duckdb.items():
+                        sql = sql.replace(f'"{orig}"', f'"{safe}"')
+                    result = conn.execute(sql).fetchdf()
                     value = result.to_dict(orient="records") if not result.empty else None
                     metrics.append(MetricResult(
                         metric_id=ms.metric_id,
@@ -583,7 +804,7 @@ class PydanticPipeline(AgentPipeline):
     # Agent 构建
     # ================================================================
 
-    def _build_phase_agent(self, ws: Workspace, output_type, phase: str):
+    def _build_phase_agent(self, ws: Workspace, phase: str):
         from pydantic_ai import Agent
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openai import OpenAIProvider
@@ -603,15 +824,12 @@ class PydanticPipeline(AgentPipeline):
             provider=OpenAIProvider(base_url=base_url, api_key=api_key),
         )
 
-        logger.debug(f"[{phase}] 创建 Agent, model={self.model} output_type={output_type}")
+        logger.debug(f"[{phase}] 创建 Agent, model={self.model}")
 
         return Agent(
             model,
             deps_type=Workspace,
-            output_type=output_type,
             model_settings=ModelSettings(temperature=0.0),
-            tool_retries=3,
-            output_retries=3,
         )
 
     def _register_phase_tools(self, agent, ws: Workspace, phase: str):
@@ -621,12 +839,18 @@ class PydanticPipeline(AgentPipeline):
         async def profile_table_tool(ctx: RunContext[Workspace], table_name: str) -> TableMeta:
             """查看指定表的结构、列名、类型、样本值和行数。"""
             w = ctx.deps
-            meta = w.manifest.tables_by_name.get(table_name)
+            meta = (
+                w.manifest.tables_by_name.get(table_name) or
+                w.manifest.tables_by_duckdb_name.get(table_name)
+            )
             if not meta:
                 w.load_manifest()
-                meta = w.manifest.tables_by_name.get(table_name)
+                meta = (
+                    w.manifest.tables_by_name.get(table_name) or
+                    w.manifest.tables_by_duckdb_name.get(table_name)
+                )
             if not meta:
-                raise ValueError(f"表 {table_name!r} 不在 workspace 中")
+                raise ValueError(f"表 {table_name!r} 不在 workspace 中（请用 SQL 表名如 '{table_name.replace('/', '_')}' 尝试）")
             logger.debug(f"[{phase}] profile_table_tool: {table_name}")
             return meta
 
@@ -648,6 +872,22 @@ class PydanticPipeline(AgentPipeline):
             logger.debug(f"[{phase}] read_context_tool: {topic} → {len(content)} chars")
             return content
 
+        @agent.tool
+        async def list_tables_tool(ctx: RunContext[Workspace]) -> list[dict]:
+            """列出 workspace 中所有可用表的名称、SQL表名、行数和列名。"""
+            w = ctx.deps
+            w.load_manifest()
+            result = []
+            for t in w.manifest.tables:
+                result.append({
+                    "name": t.name,
+                    "duckdb_name": t.duckdb_name,
+                    "row_count": t.row_count,
+                    "columns": [c.name for c in t.columns],
+                })
+            logger.debug(f"[{phase}] list_tables_tool: {len(result)} 张表")
+            return result
+
         # ---- Flatten 阶段工具 ----
 
         if phase == "flatten":
@@ -662,13 +902,14 @@ class PydanticPipeline(AgentPipeline):
             async def run_python_tool(ctx: RunContext[Workspace], script_filename: str) -> str:
                 """在 workspace 沙箱内执行指定 Python 脚本，返回 stdout。"""
                 import subprocess
+                import sys
                 w = ctx.deps
                 script_path = w.dir / script_filename
                 if not script_path.is_file():
                     return f"脚本不存在: {script_filename}"
                 try:
                     r = subprocess.run(
-                        ["python", str(script_path)],
+                        [sys.executable, str(script_path)],
                         capture_output=True, text=True, timeout=30,
                     )
                     logger.debug(f"[{phase}] run_python: {script_filename} → {len(r.stdout)} chars")

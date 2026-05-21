@@ -280,7 +280,11 @@ class TraditionalPipeline(AgentPipeline):
             self._emit_log("rep2", f"任务全部完成！(精简报告 {len(simplified_text)} 字符)")
             self._emit_status("rep2", "success")
 
-            self._write_summary_files(scene, cards, full_report, simplified_text)
+            cards_list = [
+                {"title": r.get("name", ""), "explanation": r.get("reason", ""), "suggestion": "", "evidence": "", "color": "red" if r.get("status") == "warning" else "yellow" if r.get("status") == "attention" else "green"}
+                for r in metric_results if r.get("status") in ("warning", "attention")
+            ]
+            self._write_summary_files(scene, cards_list, full_report, simplified_text)
 
             elapsed = (time.time() - t0) * 1000
             return AgentResult(
@@ -292,7 +296,7 @@ class TraditionalPipeline(AgentPipeline):
                 mapping=[SemanticMapping(**m) for m in mappings],
                 metrics=[MetricResult(metric_id=r.get("metric_id", ""), name=r.get("name", ""), value=r.get("value"), status=r.get("status", "pass")) for r in metric_results],
                 cards=[
-                    ReportCard(**{"title": r.get("name", ""), "explanation": r.get("reason", ""), "suggestion": "", "color": "red" if r.get("status") == "warning" else "yellow" if r.get("status") == "attention" else "green"})
+                    ReportCard(**{"title": r.get("name", ""), "explanation": r.get("reason", ""), "suggestion": "", "evidence": "", "color": "red" if r.get("status") == "warning" else "yellow" if r.get("status") == "attention" else "green"})
                     for r in metric_results if r.get("status") in ("warning", "attention")
                 ],
             )

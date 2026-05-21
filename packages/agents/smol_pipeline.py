@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -25,64 +26,112 @@ from .workspace import Workspace
 from .adapters import build_smol_tools
 
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    logger.addHandler(_handler)
 
 AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib", "os", "glob", "re"]
 
 PLAN_TEMPLATE = [
-    {"title": "查看输入文件",
-     "detail": "列出 input/ 下所有文件了解格式结构。推荐: Python open()/os.listdir()。检查: 确认文件数 > 0 且可读。",
+    {"title": "展平数据、数据入库",
+     "detail": (
+         "原始数据在 input/*.json，管线已预处理了一份 parquet 注册进 DuckDB，但可能没展平。"
+         "先调 list_tables() 和 duckdb_query('SELECT * FROM \"表名\" LIMIT 5') 看看预注册的表能不能直接用。"
+         "如果字段里有嵌套的 dict/list，就用 read_file 看原始 JSON，自己写 Python 展平成二维表，"
+         "再用 write_file 写成新的 parquet，然后 duckdb_register_parquet 注册。"
+         "如果数据本身就是扁平的，跳过展平直接用就行。"
+         "确认每张表都能查、行数 > 0，这步结束数据链路就通了。"
+     ),
      "status": "pending",
-     "check": "",
+     "check": (
+         "# 检查每张表行数 > 0\n"
+         "import duckdb\n"
+         "con = duckdb.connect('analysis.duckdb')\n"
+         "tables = con.execute(\"SELECT table_name FROM information_schema.tables WHERE table_schema='main'\").fetchall()\n"
+         "assert tables, 'DuckDB 中没有注册任何表'\n"
+         "for (t,) in tables:\n"
+         "    cnt = con.execute(f'SELECT COUNT(*) FROM \"{t}\"').fetchone()[0]\n"
+         "    assert cnt > 0, f'{t} 行数为 0'\n"
+     ),
      "errors": []},
-    {"title": "展平并输出 parquet",
-     "detail": "写 Python 递归展平嵌套数据为二维表，用 pandas.to_parquet 输出到 output/flat/*.parquet。检查: parquet 可被 pandas 读回且行数 > 0。",
+    {"title": "算指标，写入 output/指标.json",
+     "detail": (
+         "先调 read_context('指标计算文档.md') 了解标准字段定义和指标公式。"
+         "把原始字段映射到标准字段（如 零售金额→revenue，来客数→customer_count）。"
+         "然后用 duckdb_query 写 SQL 尽可能算出各种指标——营收变化、毛利率、客单价、渠道占比等。"
+         "可以一批一批算，每算几个就用 write_file 追加到 output/指标.json 里存着。"
+         "每条 metric 要有 metric_id/name/value/unit/status/reason/evidence，"
+         "status 只能是 pass/attention/warning/uncountable 四种。"
+     ),
      "status": "pending",
-     "check": """# 检查 output/flat/*.parquet 是否存在且行数 > 0
-import glob, pandas as pd
-files = glob.glob("output/flat/*.parquet")
-assert files, "没有找到展平后的 parquet 文件"
-for f in files:
-    df = pd.read_parquet(f)
-    assert len(df) > 0, f'{f} 行数为 0'""",
+     "check": (
+         "# 检查 output/指标.json 存在\n"
+         "import os\n"
+         "assert os.path.exists('output/指标.json'), '指标.json 还没写'\n"
+     ),
      "errors": []},
-    {"title": "入库，用 duckdb_register_parquet 注册表",
-     "detail": "推荐用 duckdb_register_parquet(name, path) 注册所有 parquet，再用 duckdb_query('SELECT COUNT(*) FROM ...') 逐表验证行数匹配。",
+    {"title": "分析深层原因，写诊断报告 → summary.md",
+     "detail": (
+         "根据算出来的指标，分析背后的原因——哪些指标异常？为什么？有什么趋势？"
+         "结合行业常识和数据证据，写一篇完整的 Markdown 经营诊断报告，用 write_file 保存到 summary.md。"
+         "报告格式分两大部分："
+         "# 第一部分：现状诊断报告 — "
+         "1) 核心经营判断（涨跌稳定波动，可能原因，带emoji如📈📉）；"
+         "2) 核心指标逐项解读（优先关注 attention/warning 项）；"
+         "3) 关联分析（多指标交叉解读，如营收涨但毛利跌说明什么）；"
+         "4) 风险预警。"
+         "# 第二部分：优化行动方案 — "
+         "1) 紧急事项（高风险指标对应的动作）；"
+         "2) 中期改善（结构性问题的优化方向）；"
+         "3) 基于行业经验的其他建议。"
+         "要求：用 # 现状诊断报告 ... --- ... # 优化行动方案 分隔；"
+         "全文约1000字；bullet 不超45字；最多4个核心问题；"
+         "优先使用证据中的数据，禁止编造数值；禁止结尾客套话。"
+     ),
      "status": "pending",
-     "check": "",
+     "check": (
+         "# 检查 summary.md 存在\n"
+         "import os\n"
+         "assert os.path.exists('summary.md'), 'summary.md 还没写'\n"
+     ),
      "errors": []},
-    {"title": "画像，推荐用 profile_table 或 duckdb_query 探索字段",
-     "detail": "用 profile_table(path) 获取列名/类型/样本/空值率。也可 duckdb_query('DESCRIBE ...')。检查: 确认核心字段（金额/数量/日期类）已识别。",
+    {"title": "输出精简视图 + 最终产物",
+     "detail": (
+         "做两件事："
+         "1) 写 summary_short.json — 给管理层看的精简视图，严格 JSON 格式："
+         '{\"health_status\": \"1-2词整体状态\", \"overview_text\": \"一句大白话总结当前经营状况\", '
+         '\"cards\": [{\"title\": \"问题标题\", \"explanation\": \"大白话说怎么回事\", '
+         '\"suggestion\": \"咋办\", \"evidence\": \"数据证据（优先 Markdown 迷你表格）\", '
+         '\"color\": \"red/yellow/green/blue/pink\"}]}。'
+         "cards 最多 7 个；color: red=报警 yellow=关注 green=正常 blue=信息 pink=数据口径不一致。"
+         "2) 写 output/result.json — 完整的 AgentResult JSON，顶级字段: "
+         "scene（对象: industry/business_model/data_scope/analysis_goal）、"
+         "mapping（列表: raw_field/table/semantic_field/confidence/reason）、"
+         "metrics（列表: metric_id/name/value/unit/status/reason/evidence）、"
+         "warnings（字符串列表）、cards（同上）、full_report（summary.md 的完整内容）。"
+         "先调 validate_result(json_str) 校验格式，通过后再 write_file 写入。"
+     ),
      "status": "pending",
-     "check": "",
-     "errors": []},
-    {"title": "读文档，read_context('指标计算文档.md')",
-     "detail": "推荐用 read_context('指标计算文档.md') 获取标准字段定义和指标公式。可用工具: read_context。检查: 确认理解了 revenue/order_count/channel 等核心字段含义。",
-     "status": "pending",
-     "check": "",
-     "errors": []},
-    {"title": "映射，原始字段→标准字段",
-     "detail": "根据文档中的标准字段定义，推荐将原始字段映射到 semantic_field。检查: 每个核心指标所需的 required_fields 都有对应映射，无遗漏。",
-     "status": "pending",
-     "check": "",
-     "errors": []},
-    {"title": "计算指标",
-     "detail": "推荐用 duckdb_query 写 SQL 计算: revenue_change/avg_order_value/gross_margin_rate/channel_share/top_contribution 等。检查: 每个指标 value 不为 None，status 合理。",
-     "status": "pending",
-     "check": "",
-     "errors": []},
-    {"title": "输出 AgentResult",
-     "detail": "整理 scene/mapping/metrics/warnings，调用 validate_result(json) 通过后写入 output/result.json。检查: result.json 符合 AgentResult schema。",
-     "status": "pending",
-     "check": """# 验证 output/result.json 符合 AgentResult 格式
-import json
-from packages.agents.models import AgentResult
-data = json.load(open("output/result.json", encoding="utf-8"))
-result = AgentResult.model_validate(data)""",
+     "check": (
+         "# 检查三个产物都存在\n"
+         "import os\n"
+         "assert os.path.exists('summary.md'), 'summary.md 不存在'\n"
+         "assert os.path.exists('summary_short.json'), 'summary_short.json 不存在'\n"
+         "assert os.path.exists('output/result.json'), 'result.json 不存在'\n"
+     ),
      "errors": []},
     {"title": "清理大文件",
-     "detail": "推荐调用 cleanup_workspace('large') 删除 parquet + duckdb。检查: 确认 output/result.json 已保存。",
+     "detail": (
+         "确认产物都保存好了，调 cleanup_workspace('large') 删掉 parquet 和 duckdb 省空间。"
+     ),
      "status": "pending",
-     "check": "",
+     "check": (
+         "# 确认产物已保存\n"
+         "import os\n"
+         "assert os.path.exists('output/result.json'), 'result.json 不存在'\n"
+     ),
      "errors": []},
 ]
 
@@ -90,7 +139,7 @@ result = AgentResult.model_validate(data)""",
 class SmolPipeline(AgentPipeline):
 
     class _PlanInjectModel:
-        """Model wrapper：每次 LLM 调用前注入 plan，调用后打 usage 日志和原始回复。"""
+        """Model wrapper: 每次 LLM 调用前注入 plan + 检查 abort，调用后打 usage 日志和原始回复。"""
         def __init__(self, model, ws: Workspace, pipeline_name: str = "smol", emit_log=None, check_aborted=None):
             self._model = model
             self._ws = ws
@@ -100,21 +149,37 @@ class SmolPipeline(AgentPipeline):
             self._check_aborted = check_aborted
 
         def __call__(self, messages: list, **kwargs):
+            return self.generate(messages, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._model, name)
+
+        def generate(self, messages: list, **kwargs):
             if self._check_aborted:
                 self._check_aborted()
+
             from .tools.impl.setup_impl import read_plan_short_impl
+            from smolagents.models import ChatMessage, MessageRole
             plan_text = read_plan_short_impl(self._ws)
             messages = list(messages)
-            messages.append({"role": "user", "content": f"<current_plan>\n{plan_text}\n</current_plan>"})
+            messages.append(ChatMessage(role=MessageRole.USER, content=[{"type": "text", "text": f"<current_plan>\n{plan_text}\n</current_plan>"}]))
+
+            step_label = f"Step {self._call_count}"
+            logger.info("[%s] → 请求: %s", step_label, str(messages))
 
             t_start = time.time()
-            result = self._model(messages, **kwargs)
+            result = self._model.generate(messages, **kwargs)
             latency_ms = (time.time() - t_start) * 1000
             self._call_count += 1
 
             usage_log = _extract_usage(result, self._call_count, self._pipeline, self._ws.report_id, latency_ms)
             logger.info("llm_usage %s", json.dumps(usage_log, ensure_ascii=False))
             self._ws.save_trace({"step": "llm_call", **usage_log})
+
+            inp = usage_log.get("input_tokens", 0)
+            cache_hit = usage_log.get("cached_input_tokens", 0)
+            ratio_str = f"{usage_log.get('cache_hit_ratio', 0) * 100:.0f}%" if inp else "N/A"
+            self._emit_log("smol_agent", f"[{step_label}] tokens: {inp}+{usage_log.get('output_tokens',0)}={usage_log.get('total_tokens',0)}, cache命中 {ratio_str}, tool_calls={usage_log.get('tool_calls',0)}, 耗时{latency_ms/1000:.1f}s")
 
             thinking = _get_attr(result, "reasoning_content", "")
             content = _get_attr(result, "content", "")
@@ -128,20 +193,17 @@ class SmolPipeline(AgentPipeline):
             if not content and isinstance(result, str):
                 content = result
 
-            step_label = f"Step {self._call_count}"
             if thinking:
                 self._emit_log("smol_agent", f"[{step_label}] 🧠 思考: {thinking[:500]}")
             if content:
+                logger.info("[%s] ← 回复: %s", step_label, content)
                 self._emit_log("smol_agent", f"[{step_label}] ← 回复: {content[:500]}")
 
             return result
 
-        def __getattr__(self, name):
-            return getattr(self._model, name)
-
     name = "smol"
 
-    def __init__(self, model=None, max_rounds: int = 15, llm_preset=None, check_aborted=None, workspace_dir=None):
+    def __init__(self, model=None, max_rounds: int = 30, llm_preset=None, check_aborted=None, workspace_dir=None):
         super().__init__(workspace_dir=workspace_dir)
         self.model = model
         self.max_rounds = max_rounds
@@ -159,11 +221,16 @@ class SmolPipeline(AgentPipeline):
         try:
             self._emit_log("smol_init", f"启动 Smolagent 管线，{len(bundle.tables)} 张表")
             self._emit_status("smol_init", "active")
+            # 原始 JSON 写到 input/ 让 Agent 能看到原始结构
+            for t in bundle.tables:
+                file_stem = t.name.replace(" ", "_").replace("/", "_")
+                ws.write_input_json(f"{file_stem}.json", {"name": t.name, "rows": t.rows})
+            # 预处理一份 parquet + DuckDB（Agent 可以直接用，也可以自己展平后重新注册）
             ws.write_raw_parquet(bundle.tables)
             self._stage_context(ws)
             ws.init_duckdb()
             ws.save_trace({"step": "init", "tables": len(bundle.tables)})
-            self._emit_log("smol_init", "环境初始化完毕: parquet + DuckDB + 上下文")
+            self._emit_log("smol_init", "环境初始化完毕: input JSON + parquet + DuckDB + 上下文")
             self._emit_status("smol_init", "success")
 
             self._emit_status("smol_plan", "active")
@@ -214,25 +281,7 @@ class SmolPipeline(AgentPipeline):
 
     def _make_tools(self, ws: Workspace) -> list:
         from .adapters.smol_tools import build_smol_tools
-        tools = build_smol_tools(ws)
-        for t in tools:
-            _orig = t.forward
-            _name = t.name
-            def _log_forward(_orig=_orig, _name=_name, *args, **kwargs):
-                args_info = json.dumps(kwargs, ensure_ascii=False)[:200] if kwargs else ""
-                self._emit_log("smol_agent", f"🔧 {_name}: {args_info}")
-                try:
-                    res = _orig(*args, **kwargs)
-                    if _name == "check_plan":
-                        self._emit_log("smol_agent", f"  → check_plan: {str(res)[:300]}")
-                    else:
-                        self._emit_log("smol_agent", f"  → {str(res)[:150]}")
-                    return res
-                except Exception as e:
-                    self._emit_log("smol_agent", f"  → 失败: {str(e)[:200]}")
-                    raise
-            t.forward = _log_forward
-        return tools
+        return build_smol_tools(ws, emit_log=self._emit_log)
 
     # ── agent ──
 
@@ -274,7 +323,7 @@ class SmolPipeline(AgentPipeline):
             f"- workspace: {ws.dir}\n"
             f"- input 文件: {ws.list_inputs()}\n"
             f"- 上下文文档: context/ 目录\n"
-            f"\n按 plan 逐项推进，完成后用 Python 写入 output/result.json。"
+            f"\n按 plan 逐项推进，最终产物: summary.md + summary_short.json + output/result.json。"
         )
         return base + task
 
@@ -287,10 +336,8 @@ class SmolPipeline(AgentPipeline):
         if not data:
             data = self._extract_json(raw_output)
 
-        if isinstance(data, dict):
-            full_report = data.get("full_report", "")
-            cards_raw = data.get("cards", [])
-            self._write_summary_files(ws, full_report, cards_raw)
+
+
 
         try:
             return AgentResult(
@@ -343,13 +390,13 @@ class SmolPipeline(AgentPipeline):
         cards_list = []
         for c in (cards or []):
             if isinstance(c, dict):
-                cards_list.append({"title": c.get("title", ""), "explanation": c.get("explanation", ""), "suggestion": c.get("suggestion", ""), "color": c.get("color", "green")})
+                cards_list.append({"title": c.get("title", ""), "explanation": c.get("explanation", ""), "suggestion": c.get("suggestion", ""), "evidence": c.get("evidence", ""), "color": c.get("color", "green")})
             else:
-                cards_list.append({"title": getattr(c, "title", ""), "explanation": getattr(c, "explanation", ""), "suggestion": getattr(c, "suggestion", ""), "color": getattr(c, "color", "green")})
+                cards_list.append({"title": getattr(c, "title", ""), "explanation": getattr(c, "explanation", ""), "suggestion": getattr(c, "suggestion", ""), "evidence": getattr(c, "evidence", ""), "color": getattr(c, "color", "green")})
         (self._workspace_dir / "summary_short.json").write_text(
             json.dumps({
                 "health_status": health,
-                "overview_text": f"Smolagent 管线执行完毕，{len(cards_list)} 项待关注",
+                "overview_text": f"共 {len(cards_list)} 项待关注",
                 "cards": cards_list,
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -386,6 +433,8 @@ def _extract_usage(result, call_index: int, pipeline: str, report_id: str, laten
         log["model"] = str(result.model) or ""
     elif hasattr(result, "raw_response") and hasattr(result.raw_response, "model"):
         log["model"] = str(result.raw_response.model) or ""
+    elif hasattr(result, "raw") and hasattr(result.raw, "model"):
+        log["model"] = str(result.raw.model) or ""
 
     # 2) reasoning_content
     rc = _get_attr(result, "reasoning_content", "")
@@ -400,7 +449,7 @@ def _extract_usage(result, call_index: int, pipeline: str, report_id: str, laten
 
     # 4) usage — try raw_response first, then top-level attributes
     usage = None
-    raw = _get_attr(result, "raw_response", None)
+    raw = _get_attr(result, "raw_response", None) or _get_attr(result, "raw", None)
     if raw is not None:
         usage = _get_usage_from_response(raw)
 
@@ -442,8 +491,16 @@ def _get_usage_from_response(obj) -> dict | None:
     """从对象中提取 usage 字典。"""
     if hasattr(obj, "usage") and obj.usage is not None:
         return _safe_dict(obj.usage)
+    if hasattr(obj, "token_usage") and obj.token_usage is not None:
+        return _safe_dict(obj.token_usage)
     if isinstance(obj, dict) and "usage" in obj:
         return obj["usage"]
+    if hasattr(obj, "raw") and obj.raw is not None:
+        raw = obj.raw
+        if hasattr(raw, "usage") and raw.usage is not None:
+            return _safe_dict(raw.usage)
+        if isinstance(raw, dict) and "usage" in raw:
+            return raw["usage"]
     return None
 
 

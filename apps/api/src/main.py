@@ -11,7 +11,7 @@ import hashlib
 import logging
 from typing import List, Optional, Dict
 from threading import Lock
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, UploadFile, File, Form, Header, Query
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -319,6 +319,7 @@ class SessionState:
         self.run_dir: Optional[Path] = None
         self.runtime_lock = Lock()
         self.event_lock = Lock()
+        self._pipeline_task: Optional[asyncio.Task] = None
 
     @property
     def logs_path(self) -> Path:
@@ -418,6 +419,12 @@ class SessionManager:
                 rd = saved.get("_runDir")
                 if rd:
                     session.run_dir = Path(rd)
+                    logs_file = session.run_dir / "logs.json"
+                    if logs_file.exists():
+                        try:
+                            session.logs = json.loads(logs_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
 
             self._sessions[key_hash] = session
             return session
@@ -651,7 +658,7 @@ def get_status(x_fzt_key: Optional[str] = Header(default=None)):
 @app.get("/api/logs")
 def get_logs(x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key)
-    return session.logs
+    return {"logs": session.logs}
 
 
 async def sse_generator(session: SessionState):
@@ -710,8 +717,8 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         session.full_result = full_text
         session.result = json.dumps({
             "health_status": "分析完成",
-            "overview_text": f"{pipeline_name} 管线执行完毕",
-            "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in result.cards]
+            "overview_text": f"共 {len(result.cards)} 项待关注",
+            "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "evidence": c.evidence, "color": c.color} for c in result.cards]
         }, ensure_ascii=False)
         with session.runtime_lock:
             if session.force_stop or session.status == "aborted":
@@ -720,7 +727,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             session.status = "completed"
         save_latest_report(session)
         _save_session_json(session)
-    except PipelineAbortedError:
+    except (PipelineAbortedError, asyncio.CancelledError):
         add_log(session, "system", "⚠️ 任务被用户强制终止。")
         with session.runtime_lock:
             session.status = "aborted"
@@ -736,7 +743,6 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
 
 @app.post("/api/analyze")
 async def analyze(
-    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     x_fzt_key: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None)
@@ -778,7 +784,9 @@ async def analyze(
     _save_session_json(session)
     _save_latest_run_json(session)
 
-    background_tasks.add_task(run_pipeline_task, session, pipeline_name, active_preset, bundle)
+    session._pipeline_task = asyncio.create_task(
+        run_pipeline_task(session, pipeline_name, active_preset, bundle)
+    )
     return {"status": "started", "pipeline": pipeline_name}
 
 
@@ -792,6 +800,9 @@ def stop(x_fzt_key: Optional[str] = Header(default=None)):
             session.error_message = "任务被用户强行终止。"
             add_log(session, "system", "⚠️ 用户强制终止了任务！")
             _save_session_json(session)
+            task = getattr(session, "_pipeline_task", None)
+            if task and not task.done():
+                task.cancel()
     return {"status": "ok"}
 
 

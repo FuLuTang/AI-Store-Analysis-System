@@ -10,7 +10,7 @@ from ..tools.impl.validate_impl import validate_result_impl
 from ..tools.impl.setup_impl import setup_workspace_impl, cleanup_workspace_impl, list_tables_impl
 
 
-def build_smol_tools(ws: Workspace):
+def build_smol_tools(ws: Workspace, emit_log=None):
     try:
         from smolagents import tool
     except ImportError:
@@ -160,7 +160,13 @@ def build_smol_tools(ws: Workspace):
                 if plan[i]["status"] == "pending":
                     plan[i]["status"] = "in_progress"
                     plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+                    if emit_log:
+                        emit_log("smol_plan", f"Step {i} 开始: {plan[i]['title']}")
                     break
+
+        if emit_log:
+            status_icon = "✓" if ok else "✗"
+            emit_log("smol_plan", f"Step {step_index} {status_icon}: {step['title']}")
 
         result = {
             "step_index": step_index,

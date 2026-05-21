@@ -327,12 +327,17 @@ class PydanticPipeline(AgentPipeline):
 
         cards: list[ReportCard] = []
         for m in metrics:
+            evidence_str = ""
+            if m.value is not None:
+                evidence_str = json.dumps(m.value, ensure_ascii=False) if not isinstance(m.value, str) else m.value
+                if len(evidence_str) > 200:
+                    evidence_str = evidence_str[:200] + "..."
             if m.status == MetricStatus.WARNING:
-                cards.append(ReportCard(title=m.name, explanation=m.reason or "需关注", color="red"))
+                cards.append(ReportCard(title=m.name, explanation=m.reason or "需关注", suggestion="", evidence=evidence_str, color="red"))
             elif m.status == MetricStatus.ATTENTION:
-                cards.append(ReportCard(title=m.name, explanation=m.reason or "需关注", color="yellow"))
+                cards.append(ReportCard(title=m.name, explanation=m.reason or "需关注", suggestion="", evidence=evidence_str, color="yellow"))
             elif m.status == MetricStatus.UNCOUNTABLE:
-                cards.append(ReportCard(title=m.name, explanation=f"无法计算: {m.reason}", color="pink"))
+                cards.append(ReportCard(title=m.name, explanation=f"无法计算: {m.reason}", suggestion="", evidence="", color="pink"))
 
         return "\n".join(lines), cards
 
@@ -354,7 +359,7 @@ class PydanticPipeline(AgentPipeline):
         (ws_dir / "summary_short.json").write_text(
             json.dumps({
                 "health_status": health,
-                "overview_text": f"Pydantic 管线执行完毕，{len(cards)} 项待关注",
+                "overview_text": f"共 {len(cards)} 项待关注",
                 "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in cards],
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -407,6 +412,10 @@ class PydanticPipeline(AgentPipeline):
                 )
                 for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
                     usage_sum[k] += u_rec.get(k, 0)
+                inp = u_rec.get("input_tokens", 0)
+                cache_hit = u_rec.get("cached_input_tokens", 0)
+                ratio_str = f"{cache_hit / max(inp, 1) * 100:.0f}%" if inp else "N/A"
+                self._emit_log("pydantic_flatten", f"LLM#{attempt}: 耗时{latency_ms/1000:.1f}s, tokens: {inp}+{u_rec.get('output_tokens',0)}={inp+u_rec.get('output_tokens',0)}, cache命中 {ratio_str}")
             except (json.JSONDecodeError, ValidationError) as e:
                 errors.append(f"Agent 输出解析失败: {e}")
                 continue
@@ -540,6 +549,10 @@ class PydanticPipeline(AgentPipeline):
                 )
                 for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
                     usage_sum[k] += u_rec.get(k, 0)
+                inp = u_rec.get("input_tokens", 0)
+                cache_hit = u_rec.get("cached_input_tokens", 0)
+                ratio_str = f"{cache_hit / max(inp, 1) * 100:.0f}%" if inp else "N/A"
+                self._emit_log("pydantic_mapping", f"LLM#{attempt}: 耗时{latency_ms/1000:.1f}s, tokens: {inp}+{u_rec.get('output_tokens',0)}={inp+u_rec.get('output_tokens',0)}, cache命中 {ratio_str}")
             except (json.JSONDecodeError, ValidationError) as e:
                 errors.append(f"Agent 输出解析失败: {e}")
                 continue
@@ -665,6 +678,10 @@ class PydanticPipeline(AgentPipeline):
                 )
                 for k in ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls"):
                     usage_sum[k] += u_rec.get(k, 0)
+                inp = u_rec.get("input_tokens", 0)
+                cache_hit = u_rec.get("cached_input_tokens", 0)
+                ratio_str = f"{cache_hit / max(inp, 1) * 100:.0f}%" if inp else "N/A"
+                self._emit_log("pydantic_sql", f"LLM#{attempt}: 耗时{latency_ms/1000:.1f}s, tokens: {inp}+{u_rec.get('output_tokens',0)}={inp+u_rec.get('output_tokens',0)}, cache命中 {ratio_str}")
             except (json.JSONDecodeError, ValidationError) as e:
                 errors.append(f"Agent 输出解析失败: {e}")
                 continue

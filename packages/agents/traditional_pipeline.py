@@ -238,6 +238,8 @@ class TraditionalPipeline(AgentPipeline):
                 ]
                 self._emit_status("report", "simulated")
 
+                self._write_summary_files(scene, cards, full_report)
+
                 return AgentResult(
                     report_id=bundle.received_at.isoformat(),
                     pipeline=self.name,
@@ -278,12 +280,15 @@ class TraditionalPipeline(AgentPipeline):
             self._emit_log("rep2", f"任务全部完成！(精简报告 {len(simplified_text)} 字符)")
             self._emit_status("rep2", "success")
 
+            self._write_summary_files(scene, cards, full_report, simplified_text)
+
             elapsed = (time.time() - t0) * 1000
             return AgentResult(
                 report_id=bundle.received_at.isoformat(),
                 pipeline=self.name,
                 elapsed_ms=elapsed,
                 full_report=full_report,
+                summary=simplified_text,
                 scene=SceneContext(industry=scene.get("industry", "generic"), business_model=scene.get("business_model", "unknown")),
                 mapping=[SemanticMapping(**m) for m in mappings],
                 metrics=[MetricResult(metric_id=r.get("metric_id", ""), name=r.get("name", ""), value=r.get("value"), status=r.get("status", "pass")) for r in metric_results],
@@ -297,3 +302,38 @@ class TraditionalPipeline(AgentPipeline):
             raise
         except Exception:
             raise
+
+    # ── helpers ──
+
+    def _write_summary_files(self, scene: dict, cards: list[dict], full_report: str, simplified_text: str = ""):
+        ws_dir = self._workspace_dir
+        if not ws_dir:
+            return
+        ws_dir.mkdir(parents=True, exist_ok=True)
+
+        (ws_dir / "summary.md").write_text(full_report, encoding="utf-8")
+
+        if simplified_text:
+            short_path = ws_dir / "summary_short.json"
+            try:
+                json.loads(simplified_text)
+                short_path.write_text(simplified_text, encoding="utf-8")
+            except json.JSONDecodeError:
+                short_path.write_text(json.dumps({
+                    "health_status": "分析完成",
+                    "overview_text": "AI 精简报告生成异常，退化为指标摘要",
+                    "cards": cards or [],
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+        else:
+            health = "分析完成"
+            if cards:
+                colors = [c.get("color") for c in cards]
+                if "red" in colors:
+                    health = "存在异常"
+                elif "yellow" in colors:
+                    health = "部分指标异常"
+            (ws_dir / "summary_short.json").write_text(json.dumps({
+                "health_status": health,
+                "overview_text": f"行业: {scene.get('industry', '未知')} / {scene.get('business_model', '未知')}，共 {len(cards)} 项待关注",
+                "cards": cards or [],
+            }, ensure_ascii=False, indent=2), encoding="utf-8")

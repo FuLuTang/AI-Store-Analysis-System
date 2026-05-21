@@ -35,8 +35,8 @@ class PipelineAbortedError(Exception):
 class TraditionalPipeline(AgentPipeline):
     name = "traditional"
 
-    def __init__(self, llm_preset: Optional[dict] = None, check_aborted: Optional[Callable[[], None]] = None, workspace_dir: Optional[Path] = None):
-        super().__init__(workspace_dir=workspace_dir)
+    def __init__(self, llm_preset: Optional[dict] = None, check_aborted: Optional[Callable[[], None]] = None, workspace_dir: Optional[Path] = None, analysis_params: str = ""):
+        super().__init__(workspace_dir=workspace_dir, analysis_params=analysis_params)
         self._llm_preset = llm_preset or {}
         self._check_aborted = check_aborted  # can be None
 
@@ -80,13 +80,13 @@ class TraditionalPipeline(AgentPipeline):
                 self._emit_log("report", "并行: 调用 AI 生成初诊报告（基于数据字段结构）...")
                 self._emit_status("report", "active")
                 try:
-                    early_resp = await call_ai_early(active_settings, data_context, dummy_scene)
+                    early_resp = await call_ai_early(active_settings, data_context, dummy_scene, self._analysis_params)
                     initial_report = early_resp["choices"][0]["message"]["content"]
                     self._emit_log("report", f"初诊报告已生成 ({len(initial_report)} 字符)")
 
                     self._emit_status("review", "active")
                     self._emit_log("review", "并行: 启动逻辑审计复核...")
-                    review_resp = await review_error_new(active_settings, dummy_scene, initial_report, {"items": []})
+                    review_resp = await review_error_new(active_settings, dummy_scene, initial_report, {"items": []}, self._analysis_params)
                     review_text = review_resp["choices"][0]["message"]["content"] if isinstance(review_resp, dict) else str(review_resp)
                     self._emit_log("review", f"审计复核完成 ({len(review_text)} 字符)")
                     self._emit_status("review", "success")
@@ -100,7 +100,7 @@ class TraditionalPipeline(AgentPipeline):
                 # 3) Scene Classifier (AI 优先)
                 self._emit_status("scene", "active")
                 self._emit_log("scene", "开始场景识别...")
-                scene = await llm_classify_scene(profiles, active_settings)
+                scene = await llm_classify_scene(profiles, active_settings, self._analysis_params)
                 self._emit_log("scene", f"识别结果: {scene.get('industry')}/{scene.get('business_model')} (conf={scene.get('confidence')})")
                 if scene.get("llm_reason"):
                     self._emit_log("scene", f"  AI判断: {scene['llm_reason']}")
@@ -111,7 +111,7 @@ class TraditionalPipeline(AgentPipeline):
                 self._emit_status("mapping", "active")
                 self._emit_log("mapping", "开始字段语义映射（场景感知）...")
                 self._emit_log("mapping", f"共 {len(profiles)} 个字段待映射, 场景: {scene.get('industry')}")
-                mappings = await llm_map_profiles(profiles, active_settings, scene)
+                mappings = await llm_map_profiles(profiles, active_settings, scene, self._analysis_params)
                 mapped_count = sum(1 for m in mappings if m.get("semantic_field") not in ("unknown", "ignore"))
                 ignored_count = sum(1 for m in mappings if m.get("semantic_field") == "ignore")
                 confirm_count = sum(1 for m in mappings if m.get("need_confirm"))
@@ -266,7 +266,7 @@ class TraditionalPipeline(AgentPipeline):
             # AI-3: 深度报告
             self._emit_status("rep1", "active")
             self._emit_log("rep1", "正在融合审计意见生成深度报告...")
-            detailed_resp = await call_detailed_ai_new(active_settings, scene, fused_context)
+            detailed_resp = await call_detailed_ai_new(active_settings, scene, fused_context, self._analysis_params)
             full_report = detailed_resp["choices"][0]["message"]["content"]
             self._emit_log("rep1", f"深度报告生成成功 ({len(full_report)} 字符)")
             self._emit_status("rep1", "success")
@@ -275,7 +275,7 @@ class TraditionalPipeline(AgentPipeline):
             # AI-4: 精简报告
             self._emit_status("rep2", "active")
             self._emit_log("rep2", "生成精简老板视图...")
-            simplified_resp = await call_simplified_ai(active_settings, full_report)
+            simplified_resp = await call_simplified_ai(active_settings, full_report, self._analysis_params)
             simplified_text = simplified_resp["choices"][0]["message"]["content"]
             self._emit_log("rep2", f"任务全部完成！(精简报告 {len(simplified_text)} 字符)")
             self._emit_status("rep2", "success")

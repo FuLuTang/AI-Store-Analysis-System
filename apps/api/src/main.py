@@ -694,7 +694,15 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             raise PipelineAbortedError(str(e))
 
     ws_dir = session.run_dir / "workspace" if session.run_dir else None
-    pipe = create_pipeline(pipeline_name, llm_preset=active_preset, check_aborted=check_aborted, workspace_dir=ws_dir)
+    analysis_params = ""
+    params_path = session.account_dir / "analysis_params.json"
+    if params_path.exists():
+        try:
+            data = json.loads(params_path.read_text(encoding="utf-8"))
+            analysis_params = data.get("analysis_params", "")
+        except Exception:
+            pass
+    pipe = create_pipeline(pipeline_name, llm_preset=active_preset, check_aborted=check_aborted, workspace_dir=ws_dir, analysis_params=analysis_params)
     pipe.set_event_callbacks(
         on_status=lambda nid, st: add_status(session, nid, st),
         on_log=lambda nid, msg: add_log(session, nid, msg),
@@ -811,6 +819,30 @@ def get_examples():
     if not files_content:
         return {"error": "未找到案例文件，请检查目录结构"}
     return {"files": files_content}
+
+
+@app.get("/api/analysis-params")
+def get_analysis_params(x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key)
+    params_path = session.account_dir / "analysis_params.json"
+    if params_path.exists():
+        try:
+            data = json.loads(params_path.read_text(encoding="utf-8"))
+            return data
+        except Exception:
+            pass
+    return {"analysis_params": ""}
+
+
+@app.put("/api/analysis-params")
+async def update_analysis_params(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key)
+    body = await request.json()
+    raw = body.get("analysis_params", "")
+    params_path = session.account_dir / "analysis_params.json"
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    params_path.write_text(json.dumps({"analysis_params": raw}, ensure_ascii=False), encoding="utf-8")
+    return {"status": "ok"}
 
 
 # 挂载静态文件 (使用绝对路径更稳健)

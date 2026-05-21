@@ -16,12 +16,13 @@ TallyCallback = Callable[[str, dict], None]
 class AgentPipeline(ABC):
     name: str = "base"
 
-    def __init__(self, workspace_dir: Optional[Path] = None):
+    def __init__(self, workspace_dir: Optional[Path] = None, analysis_params: str = ""):
         self._on_status: Optional[StatusCallback] = None
         self._on_log: Optional[LogCallback] = None
         self._on_progress: Optional[ProgressCallback] = None
         self._on_tally: Optional[TallyCallback] = None
         self._workspace_dir: Optional[Path] = workspace_dir
+        self._analysis_params = analysis_params
 
     def set_event_callbacks(self,
                             on_status: Optional[StatusCallback] = None,

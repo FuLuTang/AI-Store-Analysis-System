@@ -37,6 +37,21 @@
                 <input type="file" id="fileInput" hidden multiple>
             </div>
 
+            <details class="analysis-params-details" style="margin: 1rem 0 0.5rem;">
+                <summary style="cursor: pointer; font-size: 0.9rem; color: var(--text-muted); user-select: none;">
+                    <i class="fas fa-sliders-h"></i> 分析参数（可选）
+                </summary>
+                <div style="margin-top: 0.5rem;">
+                    <textarea id="analysisParamsInput" rows="4"
+                        placeholder='{"分析时间颗粒度": "月", "分析方向": "流量下滑", "词藻": "偏白话"}'
+                        style="width: 100%; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.85rem; font-family: monospace; resize: vertical; box-sizing: border-box; background: #fafafa;"></textarea>
+                    <button id="saveParamsBtn" class="btn btn-secondary" style="margin-top: 6px; font-size: 0.8rem; padding: 4px 14px; background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
+                        <i class="fas fa-save"></i> 保存
+                    </button>
+                    <span id="paramsSavedHint" style="margin-left: 8px; font-size: 0.8rem; color: var(--success); display: none;">✓ 已保存</span>
+                </div>
+            </details>
+
             <div style="text-align: center; display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
                 <button id="exampleBtn" class="btn btn-secondary" style="background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
                     <i class="fas fa-vial"></i> 使用案例 JSON 文件
@@ -505,6 +520,42 @@
                 alert('加载案例失败: ' + err.message);
             } finally {
                 exampleBtn.disabled = false;
+            }
+        };
+
+        // ========== 分析参数 ==========
+        const paramsInput = document.getElementById('analysisParamsInput');
+        const saveParamsBtn = document.getElementById('saveParamsBtn');
+        const paramsSavedHint = document.getElementById('paramsSavedHint');
+
+        async function loadAnalysisParams() {
+            try {
+                const res = await fetch('/api/analysis-params', { headers: authHeaders() });
+                const data = await res.json();
+                if (data.analysis_params) {
+                    paramsInput.value = data.analysis_params;
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+        loadAnalysisParams();
+
+        saveParamsBtn.onclick = async () => {
+            try {
+                saveParamsBtn.disabled = true;
+                paramsSavedHint.style.display = 'none';
+                await fetch('/api/analysis-params', {
+                    method: 'PUT',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ analysis_params: paramsInput.value }),
+                });
+                paramsSavedHint.style.display = 'inline';
+                setTimeout(() => { paramsSavedHint.style.display = 'none'; }, 2000);
+            } catch (e) {
+                alert('保存失败: ' + e.message);
+            } finally {
+                saveParamsBtn.disabled = false;
             }
         };
     </script>

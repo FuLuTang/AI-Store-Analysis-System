@@ -34,6 +34,24 @@ load_dotenv()
 app = FastAPI(title="福州门店 AI 分析系统")
 logger = logging.getLogger(__name__)
 
+# 文件日志（持久化，不依赖 journalctl）—— 延时到 STORAGE_DIR 可用后
+_LOG_FILE_HANDLER = None
+_LOG_DIR_INIT = False
+
+def _ensure_file_log():
+    global _LOG_FILE_HANDLER, _LOG_DIR_INIT
+    if _LOG_DIR_INIT:
+        return
+    _LOG_DIR_INIT = True
+    try:
+        log_dir = STORAGE_DIR / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        _fh = logging.FileHandler(str(log_dir / "app.log"), encoding="utf-8")
+        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logger.addHandler(_fh)
+    except Exception:
+        pass
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,6 +60,7 @@ app.add_middleware(
 )
 
 STORAGE_DIR = ROOT_DIR / "storage"
+_ensure_file_log()
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
 LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
 MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024

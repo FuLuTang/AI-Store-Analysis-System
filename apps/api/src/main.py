@@ -688,6 +688,8 @@ async def sse_generator(session: SessionState):
     yield f"data: {json.dumps({'type': 'reset', 'time': _now_time()})}\n\n"
 
     while True:
+        if last_idx > len(session.logs):
+            last_idx = 0
         if last_idx < len(session.logs):
             for i in range(last_idx, len(session.logs)):
                 yield f"data: {json.dumps(session.logs[i], ensure_ascii=False)}\n\n"

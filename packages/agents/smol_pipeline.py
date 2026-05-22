@@ -203,8 +203,8 @@ class SmolPipeline(AgentPipeline):
 
     name = "smol"
 
-    def __init__(self, model=None, max_rounds: int = 30, llm_preset=None, check_aborted=None, workspace_dir=None):
-        super().__init__(workspace_dir=workspace_dir)
+    def __init__(self, model=None, max_rounds: int = 30, llm_preset=None, check_aborted=None, workspace_dir=None, analysis_params: str = ""):
+        super().__init__(workspace_dir=workspace_dir, analysis_params=analysis_params)
         self.model = model
         self.max_rounds = max_rounds
         self._llm_preset = llm_preset or {}
@@ -325,6 +325,8 @@ class SmolPipeline(AgentPipeline):
             f"- 上下文文档: context/ 目录\n"
             f"\n按 plan 逐项推进，最终产物: summary.md + summary_short.json + output/result.json。"
         )
+        if self._analysis_params:
+            task += f"\n【用户分析参数】\n{self._analysis_params}\n"
         return base + task
 
     # ── collect ──

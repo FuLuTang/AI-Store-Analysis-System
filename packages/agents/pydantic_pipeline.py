@@ -116,8 +116,9 @@ class PydanticPipeline(AgentPipeline):
         llm_preset: dict | None = None,
         check_aborted: Callable[[], None] | None = None,
         workspace_dir: Path | None = None,
+        analysis_params: str = "",
     ):
-        super().__init__(workspace_dir=workspace_dir)
+        super().__init__(workspace_dir=workspace_dir, analysis_params=analysis_params)
         self._llm_preset = llm_preset or {}
         self._check_aborted = check_aborted
         self.model = model or os.getenv("AGENT_MODEL", "deepseek-v4-pro")
@@ -450,7 +451,7 @@ class PydanticPipeline(AgentPipeline):
         for m in metas:
             cols = ", ".join(c.name for c in m.columns[:20])
             lines.append(f"  - {m.name}: {m.row_count} 行, [{cols}]")
-        return (
+        prompt = (
             "你需要分析以下原始表的结构，制定展平策略。\n\n"
             f"{chr(10).join(lines)}\n\n"
             "输出 FlattenPlan JSON，包含 tables 列表，每项含:\n"
@@ -461,6 +462,9 @@ class PydanticPipeline(AgentPipeline):
             "只输出 FlattenPlan，程序会执行展平。\n\n"
             "只输出纯 JSON，不要 Markdown 代码块，不要额外说明。"
         )
+        if self._analysis_params:
+            prompt = f"【用户分析参数】\n{self._analysis_params}\n\n" + prompt
+        return prompt
 
     def _execute_flatten(
         self, ws: Workspace, plan: FlattenPlan, raw_metas: list[TableMeta]
@@ -590,7 +594,7 @@ class PydanticPipeline(AgentPipeline):
                 samples = f", 样本行: {m.sample_rows[:1]}"
             cols = ", ".join(c.name for c in m.columns[:20])
             lines.append(f"  - {m.name}: [{cols}]{samples}")
-        return (
+        prompt = (
             "你需要根据表结构和样本数据，将原始字段映射为标准语义字段。\n\n"
             "先用 read_context_tool('fields') 读取标准字段定义。\n\n"
             "表信息:\n" + "\n".join(lines) + "\n\n"
@@ -604,6 +608,9 @@ class PydanticPipeline(AgentPipeline):
             "只输出 SemanticMapping 列表，程序会记录映射。\n\n"
             "只输出纯 JSON，不要 Markdown 代码块，不要额外说明。"
         )
+        if self._analysis_params:
+            prompt = f"【用户分析参数】\n{self._analysis_params}\n\n" + prompt
+        return prompt
 
     def _validate_mappings(
         self, mappings: list[SemanticMapping], metas: list[TableMeta]
@@ -732,7 +739,7 @@ class PydanticPipeline(AgentPipeline):
             f"  - {m.name} [SQL表名: {m.duckdb_name}]: {m.row_count} 行, [{', '.join(c.name for c in m.columns[:15])}]"
             for m in metas
         )
-        return (
+        prompt = (
             "你需要根据字段映射结果和表结构，生成 SQL 查询计划来计算指标。\n\n"
             "先用 read_context_tool('metrics') 读取指标定义和公式。\n\n"
             "表结构:\n" + table_text + "\n\n"
@@ -752,6 +759,9 @@ class PydanticPipeline(AgentPipeline):
             "只输出 SqlPlan，程序会校验并执行 SQL。\n\n"
             "只输出纯 JSON，不要 Markdown 代码块，不要额外说明。"
         )
+        if self._analysis_params:
+            prompt = f"【用户分析参数】\n{self._analysis_params}\n\n" + prompt
+        return prompt
 
     def _validate_sql_plan(
         self, plan: SqlPlan, metas: list[TableMeta]

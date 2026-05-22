@@ -304,12 +304,15 @@ async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = No
     })
 
 
-async def call_ai_early(settings: dict, data_context_text: str, scene: dict) -> dict:
+async def call_ai_early(settings: dict, data_context_text: str, scene: dict, analysis_params: str = "") -> dict:
     """AI-1 早期调用：在指标算出前先用数据上下文生成初诊"""
     reasoning_effort = _resolve_reasoning_effort(settings)
     context = _build_context_header(scene)
 
-    user_content = context + "\n\n【数据概览】\n" + data_context_text + \
+    user_content = context
+    if analysis_params:
+        user_content += f"\n\n【用户分析参数】\n{analysis_params}"
+    user_content += "\n\n【数据概览】\n" + data_context_text + \
         "\n\n【注意】\n当前展示的是字段结构和映射关系，精确指标尚在计算中。" \
         "请基于已有信息做初步诊断，如数据结构特征、映射覆盖率、明显的数据范围等。"
 
@@ -386,9 +389,12 @@ async def call_detailed_ai(settings: dict, fused_report_text: str) -> dict:
     })
 
 
-async def call_detailed_ai_new(settings: dict, scene: dict, fused_report_text: str) -> dict:
+async def call_detailed_ai_new(settings: dict, scene: dict, fused_report_text: str, analysis_params: str = "") -> dict:
     """AI-3: 深度报告 (新管线)"""
-    user_content = _build_context_header(scene) + "\n" + fused_report_text
+    user_content = _build_context_header(scene)
+    if analysis_params:
+        user_content += f"\n\n【用户分析参数】\n{analysis_params}"
+    user_content += "\n" + fused_report_text
     reasoning_effort = _resolve_reasoning_effort(settings)
     return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
         "model": settings["model"],
@@ -402,9 +408,12 @@ async def call_detailed_ai_new(settings: dict, scene: dict, fused_report_text: s
 
 # ── AI-4: 精简报告 ──
 
-async def call_simplified_ai(settings: dict, detailed_report_text: str) -> dict:
+async def call_simplified_ai(settings: dict, detailed_report_text: str, analysis_params: str = "") -> dict:
     """AI-4: 老板视图"""
-    user_content = _build_context_header() + "\n\n【详细报告内容】\n" + detailed_report_text
+    user_content = _build_context_header()
+    if analysis_params:
+        user_content += f"\n\n【用户分析参数】\n{analysis_params}"
+    user_content += "\n\n【详细报告内容】\n" + detailed_report_text
     reasoning_effort = _resolve_reasoning_effort(settings)
     return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
         "model": settings["model"],
@@ -437,9 +446,11 @@ _INDUSTRY_CLASSIFY_SYSTEM_PROMPT = """你是一位数据分类专家。根据上
 }"""
 
 
-async def call_industry_classifier(settings: dict, profiles: list) -> dict:
+async def call_industry_classifier(settings: dict, profiles: list, analysis_params: str = "") -> dict:
     """AI-5: 行业分类"""
     lines = ["请判断以下字段属于哪个行业：\n"]
+    if analysis_params:
+        lines.insert(1, f"\n【用户分析参数】\n{analysis_params}\n")
     for p in profiles:
         table = p.get("table", "?")
         col = p.get("column", "?")
@@ -534,10 +545,12 @@ def _build_field_map_standard_fields() -> str:
     return "\n".join(lines)
 
 
-async def call_field_mapper(settings: dict, profiles: list, industry: str) -> dict:
+async def call_field_mapper(settings: dict, profiles: list, industry: str, analysis_params: str = "") -> dict:
     """AI-6: 字段映射"""
     lines = ["请将以下原始字段映射到标准语义字段：\n"]
     lines.append(f"已识别行业: {industry}\n")
+    if analysis_params:
+        lines.append(f"【用户分析参数】\n{analysis_params}\n")
     for p in profiles:
         table = p.get("table", "?")
         col = p.get("column", "?")

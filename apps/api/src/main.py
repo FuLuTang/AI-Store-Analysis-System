@@ -25,6 +25,7 @@ sys.path.append(str(ROOT_DIR))
 
 from packages.core.input_adapter import parse_uploaded_files, adapt_to_dataset_bundle
 from packages.agents.registry import create_pipeline
+from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
 
 load_dotenv()
@@ -701,7 +702,16 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             raise PipelineAbortedError(str(e))
 
     ws_dir = session.run_dir / "workspace" if session.run_dir else None
-    pipe = create_pipeline(pipeline_name, llm_preset=active_preset, check_aborted=check_aborted, workspace_dir=ws_dir)
+    analysis_params = ""
+    params_path = session.account_dir / "analysis_params.json"
+    if params_path.exists():
+        try:
+            data = json.loads(params_path.read_text(encoding="utf-8"))
+            raw = data.get("analysis_params", "")
+            analysis_params = wash_analysis_params(raw)
+        except Exception:
+            pass
+    pipe = create_pipeline(pipeline_name, llm_preset=active_preset, check_aborted=check_aborted, workspace_dir=ws_dir, analysis_params=analysis_params)
     pipe.set_event_callbacks(
         on_status=lambda nid, st: add_status(session, nid, st),
         on_log=lambda nid, msg: add_log(session, nid, msg),
@@ -822,6 +832,48 @@ def get_examples():
     if not files_content:
         return {"error": "未找到案例文件，请检查目录结构"}
     return {"files": files_content}
+
+
+@app.get("/api/analysis-params")
+def get_analysis_params(x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key)
+    params_path = session.account_dir / "analysis_params.json"
+    if params_path.exists():
+        try:
+            data = json.loads(params_path.read_text(encoding="utf-8"))
+            return data
+        except Exception:
+            pass
+    return {"analysis_params": ""}
+
+
+@app.put("/api/analysis-params")
+async def update_analysis_params(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key)
+    body = await request.json()
+    raw = body.get("analysis_params", "")
+    validated = validate_analysis_params(raw)
+    params_path = session.account_dir / "analysis_params.json"
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    params_path.write_text(json.dumps({"analysis_params": validated}, ensure_ascii=False), encoding="utf-8")
+    return {"status": "ok"}
+
+
+PRESETS_DIR = ROOT_DIR / "data" / "params-presets"
+
+
+@app.get("/api/analysis-params/presets")
+def get_params_presets():
+    presets = {}
+    if PRESETS_DIR.exists():
+        for f_path in sorted(PRESETS_DIR.glob("*.json")):
+            try:
+                name = f_path.stem
+                content = json.loads(f_path.read_text(encoding="utf-8"))
+                presets[name] = content
+            except Exception as e:
+                logger.warning("预设加载失败: %s (%s)", f_path, e)
+    return {"presets": presets}
 
 
 # 挂载静态文件 (使用绝对路径更稳健)

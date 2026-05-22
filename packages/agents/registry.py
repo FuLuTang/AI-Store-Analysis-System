@@ -15,7 +15,7 @@ PIPELINE_MAP = {
 }
 
 
-def create_pipeline(name: str, llm_preset: Optional[dict] = None, check_aborted: Optional[Callable[[], None]] = None, workspace_dir: Optional[Path] = None) -> AgentPipeline:
-    kwargs = {"llm_preset": llm_preset or {}, "check_aborted": check_aborted, "workspace_dir": workspace_dir}
+def create_pipeline(name: str, llm_preset: Optional[dict] = None, check_aborted: Optional[Callable[[], None]] = None, workspace_dir: Optional[Path] = None, analysis_params: str = "") -> AgentPipeline:
+    kwargs = {"llm_preset": llm_preset or {}, "check_aborted": check_aborted, "workspace_dir": workspace_dir, "analysis_params": analysis_params}
     cls = PIPELINE_MAP.get(name, TraditionalPipeline)
     return cls(**kwargs)

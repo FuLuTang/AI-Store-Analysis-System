@@ -153,7 +153,7 @@ def _build_mapping_prompt(profiles: list, scene: Optional[dict] = None) -> str:
         lines.append(f"  - {sf}: ({', '.join(KEYWORD_MAP[sf][:3])}...)")
     lines.append("\n请为每个字段返回 JSON 格式: [{raw_field, semantic_field, confidence, reason}]")
     return "\n".join(lines)
-async def llm_map_profiles(profiles: list, llm_settings: dict, scene: Optional[dict] = None) -> list:
+async def llm_map_profiles(profiles: list, llm_settings: dict, scene: Optional[dict] = None, analysis_params: str = "") -> list:
     """
     AI 字段映射：将字段信息发给 LLM，返回 SemanticMapping[]
     如果 LLM 调用失败或没有 API Key，回退到规则版
@@ -164,7 +164,7 @@ async def llm_map_profiles(profiles: list, llm_settings: dict, scene: Optional[d
     try:
         from packages.ai.ai_caller import call_field_mapper
         industry = (scene or {}).get("industry", "generic")
-        resp = await call_field_mapper(llm_settings, profiles, industry)
+        resp = await call_field_mapper(llm_settings, profiles, industry, analysis_params)
         content = resp["choices"][0]["message"]["content"]
         import json as _json
         ai_results = _json.loads(content)

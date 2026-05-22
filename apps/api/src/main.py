@@ -752,6 +752,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             "overview_text": f"共 {len(result.cards)} 项待关注",
             "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "evidence": c.evidence, "color": c.color} for c in result.cards]
         }, ensure_ascii=False)
+        add_log(session, "system", "✅ 分析完成")
         with session.runtime_lock:
             if session.force_stop or session.status == "aborted":
                 _save_session_json(session)

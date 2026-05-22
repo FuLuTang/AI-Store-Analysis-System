@@ -115,10 +115,13 @@ class CustomPipeline(AgentPipeline):
         cards = []
         full_report = ""
 
+        # summary_short.json 在 workspace 根目录，不在 output/ 下
         try:
-            short = ws.read_output_json("summary_short.json")
-            if short and isinstance(short, dict):
-                cards = short.get("cards", [])
+            short_path = ws.resolve("summary_short.json")
+            if short_path.exists():
+                short = json.loads(short_path.read_text(encoding="utf-8"))
+                if isinstance(short, dict):
+                    cards = short.get("cards", [])
         except Exception:
             pass
 
@@ -128,8 +131,6 @@ class CustomPipeline(AgentPipeline):
                 result_data = json.loads(result_path.read_text(encoding="utf-8"))
                 if isinstance(result_data, dict):
                     full_report = result_data.get("full_report", "")
-                    if not full_report:
-                        full_report = result_data.get("full_report", "")
         except Exception:
             pass
 

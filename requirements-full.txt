@@ -1,0 +1,3 @@
+-r requirements.txt
+pydantic-ai>=0.1.0
+smolagents>=1.0.0

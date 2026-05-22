@@ -11,7 +11,10 @@ def wash_analysis_params(raw) -> str:
             try:
                 obj = json.loads(s)
                 if isinstance(obj, dict):
-                    return "\n".join(f"{k}: {v}" for k, v in obj.items())
+                    return "\n".join(
+                        f"{k}: {'true' if v is True else 'false' if v is False else v}"
+                        for k, v in obj.items()
+                    )
             except json.JSONDecodeError:
                 pass
         # 纯文本 → 原样返回
@@ -23,6 +26,8 @@ def wash_analysis_params(raw) -> str:
             if isinstance(item, dict) and "key" in item:
                 k = item["key"]
                 v = item.get("value", "")
+                if isinstance(v, bool):
+                    v = "true" if v else "false"
                 lines.append(f"{k}: {v}")
             else:
                 lines.append(str(item))

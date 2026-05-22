@@ -74,7 +74,7 @@ async def review_error(settings: dict, report: str, cleaned_data_texts: list = N
         return f"错误审核失败。原因：{str(e)}"
 
 
-async def review_error_new(settings: dict, scene: dict, report: str, evidence: dict) -> dict | str:
+async def review_error_new(settings: dict, scene: dict, report: str, evidence: dict, analysis_params: str = "") -> dict | str:
     """错误评审 (新管线 — 格式化输入)"""
     if not settings or not settings.get("apiKey"):
         return "审核通过：未配置 API Key，已跳过。"
@@ -89,6 +89,11 @@ async def review_error_new(settings: dict, scene: dict, report: str, evidence: d
     now = datetime.now()
     parts = [
         f"【分析环境】\n- 行业：{(scene or {}).get('industry', 'unknown')}\n- 日期：{now.strftime('%Y年%m月%d日 %H:%M')}",
+    ]
+    if analysis_params:
+        parts.append("")
+        parts.append(f"【用户分析参数】\n{analysis_params}")
+    parts += [
         "",
         f"【初级分析报告】\n{report}",
         "",

@@ -143,7 +143,7 @@ def classify_scene(profiles: list) -> dict:
 
 # ── LLM 辅助分类 ──
 
-async def llm_classify_scene(profiles: list, llm_settings: dict) -> dict:
+async def llm_classify_scene(profiles: list, llm_settings: dict, analysis_params: str = "") -> dict:
     """
     AI 行业分类：将字段信息发给 LLM，返回 industry/business_model/confidence
     如果 LLM 调用失败或没有 API Key，回退到规则版
@@ -153,7 +153,7 @@ async def llm_classify_scene(profiles: list, llm_settings: dict) -> dict:
 
     try:
         from packages.ai.ai_caller import call_industry_classifier
-        resp = await call_industry_classifier(llm_settings, profiles)
+        resp = await call_industry_classifier(llm_settings, profiles, analysis_params)
         content = resp["choices"][0]["message"]["content"]
         import json
         data = json.loads(content)

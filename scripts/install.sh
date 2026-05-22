@@ -53,7 +53,7 @@ do_deploy() {
 
     echo "==> 2. 正在准备系统环境与依赖..."
     # 仅在第一次安装或依赖变化时可能需要 apt
-    apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends >/dev/null 2>&1
+    apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends
 
     # 处理虚拟环境 (确保 activate 脚本存在)
     if [ ! -f "venv/bin/activate" ]; then
@@ -62,8 +62,8 @@ do_deploy() {
         python3 -m venv venv
     fi
     . venv/bin/activate
-    pip install --upgrade pip >/dev/null
-    pip install -r requirements.txt >/dev/null
+    pip install --upgrade pip
+    pip install -r requirements.txt
 
     echo "==> 3. 正在更新系统服务配置..."
     cat > "$SERVICE_FILE" <<EOF

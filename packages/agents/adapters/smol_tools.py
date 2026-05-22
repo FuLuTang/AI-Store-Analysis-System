@@ -8,6 +8,7 @@ from ..tools.impl.context_impl import read_context_impl
 from ..tools.impl.profile_impl import profile_table_impl
 from ..tools.impl.validate_impl import validate_result_impl
 from ..tools.impl.setup_impl import setup_workspace_impl, cleanup_workspace_impl, list_tables_impl
+from ..tools.impl.doc_impl import read_document_impl, extract_document_tables_impl
 
 
 def build_smol_tools(ws: Workspace, emit_log=None):
@@ -36,14 +37,13 @@ def build_smol_tools(ws: Workspace, emit_log=None):
         return write_file_impl(ws, path, content)
 
     @tool
-    def list_files(subdir: str = "") -> str:
+    def list_files(subdir: str = "") -> list[str]:
         """List files in a workspace subdirectory.
 
         Args:
             subdir: Subdirectory to list, e.g. 'input', 'tables', 'output'. Empty = root.
         """
-        files = list_files_impl(ws, subdir)
-        return "\n".join(files)
+        return list_files_impl(ws, subdir)
 
     @tool
     def run_python(script_path: str) -> str:
@@ -134,7 +134,10 @@ def build_smol_tools(ws: Workspace, emit_log=None):
 
     @tool
     def check_plan(step_index: int) -> str:
-        """自动检查当前步骤的产物。执行 step.check Python 脚本判定通过与否。
+        """【必须调用】完成 plan 当前步骤后必须调此工具来验证产物并推进到下一步。
+        不调的话 plan 状态不会更新，你永远看不到下一步的指令。
+
+        每完成 plan 中的一个步骤后，先调本工具验证，通过后系统会自动进入下一步。
 
         Args:
             step_index: plan 中步骤的 0-based 索引。
@@ -180,6 +183,37 @@ def build_smol_tools(ws: Workspace, emit_log=None):
             )
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    @tool
+    def read_document(path: str) -> str:
+        """Read the full text content from a document. Auto-detects format from file extension.
+
+        Supports xlsx, csv, pdf, docx, txt, md, json.
+        For xlsx: returns sheet names, column headers, row count, and sample rows per sheet.
+        For pdf/docx: returns extracted text and a summary of tables found.
+        For txt/md/json: returns raw text content.
+
+        Args:
+            path: Relative path in workspace, e.g. 'input/report.pdf'.
+        """
+        return read_document_impl(ws, path)
+
+    @tool
+    def extract_document_tables(path: str, sheet: str = "") -> str:
+        """Extract structured table data from a document as JSON rows.
+
+        Supports xlsx, csv, pdf, docx.
+        For xlsx: extracts the given sheet (or first sheet if not specified).
+        For csv: extracts all rows.
+        For pdf: extracts tables from all pages.
+        For docx: extracts tables from the document.
+        Each row is a dict with column names as keys.
+
+        Args:
+            path: Relative path in workspace, e.g. 'input/sales.xlsx'.
+            sheet: (Optional) Sheet name to extract. Case-insensitive partial match. Leave empty for auto/first.
+        """
+        return extract_document_tables_impl(ws, path, sheet)
+
     return [
         read_file, write_file, list_files,
         run_python,
@@ -189,4 +223,5 @@ def build_smol_tools(ws: Workspace, emit_log=None):
         validate_result,
         setup_workspace, list_tables,
         read_plan, check_plan,
+        read_document, extract_document_tables,
     ]

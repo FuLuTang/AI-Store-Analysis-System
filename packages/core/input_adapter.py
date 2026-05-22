@@ -215,12 +215,12 @@ def parse_file(file_bytes: bytes, filename: str):
         if _is_pharmacy_json(raw):
             return _extract_pharmacy_tables(raw, os.path.splitext(filename)[0])
         return _json_to_tables_recursive(raw, os.path.splitext(filename)[0])
-    elif lower.endswith(".xlsx") or lower.endswith(".xls"):
-        return _excel_to_tables(file_bytes, filename)
-    elif lower.endswith(".csv"):
-        return _csv_to_table(file_bytes, filename)
+    elif lower.endswith((".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc", ".pptx")):
+        # 交由 Agent 用文档解析工具处理，这里不预解析
+        return []
     else:
-        raise ValueError(f"不支持的文件类型: {filename}")
+        # 理论上 API 层已拦截，此处保底
+        return []
 
 
 from datetime import datetime

@@ -15,4 +15,5 @@ def write_file_impl(ws: Workspace, path: str, content: str) -> str:
 
 def list_files_impl(ws: Workspace, subdir: str = "") -> list[str]:
     target = ws.resolve(subdir) if subdir else ws.dir
-    return sorted([str(p.relative_to(ws.dir)) for p in target.rglob("*") if p.is_file()])
+    files = sorted([str(p.relative_to(target)) for p in target.rglob("*") if p.is_file()])
+    return files

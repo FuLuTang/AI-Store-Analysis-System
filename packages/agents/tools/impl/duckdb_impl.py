@@ -22,10 +22,13 @@ def duckdb_query_impl(ws: Workspace, sql: str) -> str:
 
 
 def duckdb_register_parquet_impl(ws: Workspace, table_name: str, parquet_path: str) -> str:
+    import os
     con = _get_connection(ws)
     try:
         safe_table = _quote_ident(table_name)
-        con.execute(f"CREATE OR REPLACE VIEW {safe_table} AS SELECT * FROM read_parquet('{parquet_path}')")
+        # 转为绝对路径，避免 DuckDB 在不同 CWD 下解析不到文件
+        abs_path = os.path.abspath(parquet_path)
+        con.execute(f"CREATE OR REPLACE VIEW {safe_table} AS SELECT * FROM read_parquet('{abs_path}')")
         row_count = con.execute(f"SELECT COUNT(*) FROM {safe_table}").fetchone()[0]
         return f"表 {table_name} 已注册, {row_count} 行"
     finally:

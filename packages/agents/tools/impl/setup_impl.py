@@ -65,56 +65,46 @@ def read_plan_short_impl(ws: Workspace) -> str:
     """读取 plan.json，返回简短版本。由 model wrapper 自动注入。
 
     展示规则：
-      - success: 仅 title/status
-      - 第一个非 success: title/status/detail/check_summary/errors
-      - 后续 pending: 仅 title/status
-      - failed: title/status/detail/check_summary/errors
+      只展示当前 in_progress（或 failed）步骤的完整信息，
+      已完成和 pending 步骤不展示任何细节，只计个数。
+      目的是强制 LLM 必须调 check_plan 才能解锁下一步的指令。
     """
-    from .plan_check_impl import extract_check_summary
 
     plan_path = ws.resolve("output/plan.json")
     if not plan_path.exists():
         return "(plan 尚未初始化)"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
-    first_non_success = None
-    for idx, s in enumerate(plan):
-        if s["status"] != "success":
-            first_non_success = idx
-            break
+    total = len(plan)
+    done = 0
+    pending = 0
 
-    lines = ["以下为plan进度："]
+    lines: list[str] = []
+
     for idx, step in enumerate(plan):
         status = step["status"]
-        check_summary = extract_check_summary(step.get("check", ""))
-        errors = step.get("errors", [])
-
         if status == "success":
-            lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
-
-        elif status in ("in_progress", "partial"):
-            entry = {"title": step["title"], "status": status, "detail": step["detail"],
-                     "errors": errors}
-            if check_summary:
-                entry["check_summary"] = check_summary
-            lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
-
-        elif status == "failed":
-            entry = {"title": step["title"], "status": status, "detail": step["detail"],
-                     "errors": errors}
-            if check_summary:
-                entry["check_summary"] = check_summary
-            lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
-
+            done += 1
+            continue  # 已完成的不展示
+        elif status in ("in_progress", "partial", "failed"):
+            lines.append(f"--- 当前步骤：{step['title']} ---")
+            lines.append(f"detail: {step['detail']}")
+            check = step.get("check", "")
+            if check:
+                lines.append(f"check: {check.strip().split(chr(10))[0]}")
+            errors = step.get("errors", [])
+            if errors:
+                lines.append(f"errors: {'; '.join(errors)}")
+            lines.append("")
+            lines.append(f"完成后调 check_plan({idx}) 验证并查看下一步。")
         elif status == "pending":
-            if idx == first_non_success:
-                entry = {"title": step["title"], "status": status, "detail": step["detail"]}
-                if check_summary:
-                    entry["check_summary"] = check_summary
-                lines.append(json.dumps(entry, ensure_ascii=False, indent=2))
-            else:
-                lines.append(json.dumps({"title": step["title"], "status": status}, ensure_ascii=False))
+            pending += 1
+            continue  # 不展示
 
-    lines.append("使用 read_plan 工具查看完整 plan")
-    lines.append("每完成一步后调用 check_plan(step_index=N) 自动验证产物")
+    if pending:
+        lines.append(f"剩余 {pending} 步待完成（已通过 check_plan 后会解锁）。")
+
+    if not lines:
+        lines.append("所有步骤已完成。")
+
     return "\n".join(lines)

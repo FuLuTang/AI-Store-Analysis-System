@@ -18,9 +18,15 @@ class RawTable(BaseModel):
     rows: list[dict[str, Any]]
 
 
+class RawFile(BaseModel):
+    name: str
+    data: bytes
+
+
 class DatasetBundle(BaseModel):
     source_type: Literal["json", "excel", "csv", "api", "database"] = "json"
     tables: list[RawTable]
+    raw_files: list[RawFile] = Field(default_factory=list)
     received_at: datetime = Field(default_factory=datetime.now)
     tenant_id: str | None = None
 

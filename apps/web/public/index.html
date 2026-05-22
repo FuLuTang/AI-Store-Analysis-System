@@ -32,9 +32,9 @@
         <div class="card">
             <div id="dropZone" class="drop-zone">
                 <i class="fas fa-file-upload"></i>
-                <p id="fileName">拖放一个或多个 JSON 文件到此处</p>
+                <p id="fileName">拖放文件到此处（支持 Excel / CSV / JSON / PDF / Word / 文本）</p>
                 <div id="fileList" class="file-list"></div>
-                <input type="file" id="fileInput" hidden multiple>
+                <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.md">
             </div>
 
             <details class="analysis-params-details" id="paramsDetails" style="margin: 1rem 0 0.5rem;">
@@ -425,6 +425,7 @@
             handleFiles(e.dataTransfer.files);
         };
 
+        const ALLOWED_EXTENSIONS = ['.json', '.xlsx', '.xls', '.csv', '.pdf', '.docx', '.doc', '.txt', '.md'];
         function handleFiles(files) {
             if (files.length === 0) return;
 
@@ -432,6 +433,11 @@
             fileListDisplay.innerHTML = '';
 
             Array.from(files).forEach(file => {
+                const ext = '.' + file.name.split('.').pop().toLowerCase();
+                if (!ALLOWED_EXTENSIONS.includes(ext)) {
+                    alert(`不支持的文件: ${file.name}\n支持的格式: ${ALLOWED_EXTENSIONS.join(', ')}`);
+                    return;
+                }
                 filesData.push(file);
 
                 const item = document.createElement('div');
@@ -478,7 +484,7 @@
                         pollingInterval = setInterval(checkStatus, 2000);
                     }
                 } else {
-                    throw new Error(data.error || '启动失败');
+                    throw new Error(data.detail || data.error || '启动失败');
                 }
             } catch (err) {
                 alert('分析出错: ' + err.message);

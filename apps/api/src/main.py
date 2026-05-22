@@ -24,6 +24,7 @@ ROOT_DIR = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(ROOT_DIR))
 
 from packages.core.input_adapter import parse_uploaded_files, adapt_to_dataset_bundle
+from packages.agents.models import RawFile
 from packages.agents.registry import create_pipeline
 from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
@@ -768,9 +769,13 @@ async def analyze(
         session.result = None
         session.full_result = None
 
+    SUPPORTED_EXTENSIONS = {".json", ".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc", ".txt", ".md"}
     decoded_files: list[dict] = []
     for uploaded_file in files:
         filename = uploaded_file.filename or "unnamed"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"不支持的文件格式: {ext or '未知'}，支持: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
         raw = await uploaded_file.read()
         if len(raw) > MAX_UPLOAD_FILE_SIZE:
             raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {filename}")
@@ -779,6 +784,8 @@ async def analyze(
     try:
         raw_bundle = parse_uploaded_files(decoded_files)
         bundle = adapt_to_dataset_bundle(raw_bundle)
+        for df in decoded_files:
+            bundle.raw_files.append(RawFile(name=df["name"], data=df["bytes"]))
     except Exception as e:
         with session.runtime_lock:
             session.status = "error"

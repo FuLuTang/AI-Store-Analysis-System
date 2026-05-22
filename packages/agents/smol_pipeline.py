@@ -32,9 +32,36 @@ if not logger.handlers:
     _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logger.addHandler(_handler)
 
-AUTHORIZED_IMPORTS = ["json", "pandas", "duckdb", "pathlib", "os", "glob", "re"]
+AUTHORIZED_IMPORTS = [
+    "json", "pandas", "duckdb", "pathlib", "os", "glob", "re",
+    "openpyxl", "pdfplumber", "docx",
+]
 
 PLAN_TEMPLATE = [
+    {"title": "扫描并解析上传文件",
+     "detail": (
+         "用 list_files('input') 看 input/ 目录下有哪些文件。"
+         "对每个文件，调 read_document 看内容概要，判断是不是数据文件。"
+         "如果是数据文件（xlsx/csv），调 extract_document_tables 提取表格数据，"
+         "用 write_file + Python 脚本转存为 parquet 到 tables/，再 duckdb_register_parquet 注册。"
+         "如果是 pdf/docx，调 read_document 读内容，看是否包含业务数据，"
+         "需要的话调 extract_document_tables 提取表格。"
+         "如果 input/ 里已经有 parquet 文件，直接跳过解析步骤，用它们就行。"
+         "确认每张表都注册到了 DuckDB、行数 > 0，数据链路通了再往下走。"
+         "完成后调 check_plan(0) 验证。"
+     ),
+     "status": "pending",
+     "check": (
+         "# 检查至少有一张表已注册\n"
+         "import duckdb\n"
+         "con = duckdb.connect('analysis.duckdb')\n"
+         "tables = con.execute(\"SELECT table_name FROM information_schema.tables WHERE table_schema='main'\").fetchall()\n"
+         "assert tables, 'DuckDB 中没有注册任何表'\n"
+         "for (t,) in tables:\n"
+         "    cnt = con.execute(f'SELECT COUNT(*) FROM \"{t}\"').fetchone()[0]\n"
+         "    assert cnt > 0, f'{t} 行数为 0'\n"
+     ),
+     "errors": []},
     {"title": "展平数据、数据入库",
      "detail": (
          "原始数据在 input/*.json，管线已预处理了一份 parquet 注册进 DuckDB，但可能没展平。"
@@ -43,6 +70,7 @@ PLAN_TEMPLATE = [
          "再用 write_file 写成新的 parquet，然后 duckdb_register_parquet 注册。"
          "如果数据本身就是扁平的，跳过展平直接用就行。"
          "确认每张表都能查、行数 > 0，这步结束数据链路就通了。"
+         "完成后调 check_plan(1) 验证。"
      ),
      "status": "pending",
      "check": (
@@ -64,6 +92,7 @@ PLAN_TEMPLATE = [
          "可以一批一批算，每算几个就用 write_file 追加到 output/指标.json 里存着。"
          "每条 metric 要有 metric_id/name/value/unit/status/reason/evidence，"
          "status 只能是 pass/attention/warning/uncountable 四种。"
+         "完成后调 check_plan(2) 验证。"
      ),
      "status": "pending",
      "check": (
@@ -89,6 +118,7 @@ PLAN_TEMPLATE = [
          "要求：用 # 现状诊断报告 ... --- ... # 优化行动方案 分隔；"
          "全文约1000字；bullet 不超45字；最多4个核心问题；"
          "优先使用证据中的数据，禁止编造数值；禁止结尾客套话。"
+         "完成后调 check_plan(3) 验证。"
      ),
      "status": "pending",
      "check": (
@@ -112,6 +142,7 @@ PLAN_TEMPLATE = [
          "metrics（列表: metric_id/name/value/unit/status/reason/evidence）、"
          "warnings（字符串列表）、cards（同上）、full_report（summary.md 的完整内容）。"
          "先调 validate_result(json_str) 校验格式，通过后再 write_file 写入。"
+         "完成后调 check_plan(4) 验证。"
      ),
      "status": "pending",
      "check": (
@@ -125,6 +156,7 @@ PLAN_TEMPLATE = [
     {"title": "清理大文件",
      "detail": (
          "确认产物都保存好了，调 cleanup_workspace('large') 删掉 parquet 和 duckdb 省空间。"
+         "完成后调 check_plan(5) 验证。"
      ),
      "status": "pending",
      "check": (
@@ -193,11 +225,14 @@ class SmolPipeline(AgentPipeline):
             if not content and isinstance(result, str):
                 content = result
 
+            # 解析当前 plan 进度
+            plan_step = _current_plan_step(self._ws)
             if thinking:
                 self._emit_log("smol_agent", f"[{step_label}] 🧠 思考: {thinking[:500]}")
             if content:
                 logger.info("[%s] ← 回复: %s", step_label, content)
-                self._emit_log("smol_agent", f"[{step_label}] ← 回复: {content[:500]}")
+                label = f"{plan_step}[{step_label}]" if plan_step else f"[{step_label}]"
+                self._emit_log("smol_agent", f"{label} ← 回复: {content[:500]}")
 
             return result
 
@@ -219,8 +254,11 @@ class SmolPipeline(AgentPipeline):
         ws = Workspace(base_dir=self._workspace_dir) if self._workspace_dir else Workspace(label="smol")
 
         try:
-            self._emit_log("smol_init", f"启动 Smolagent 管线，{len(bundle.tables)} 张表")
+            self._emit_log("smol_init", f"启动 Smolagent 管线，{len(bundle.tables)} 张表, {len(bundle.raw_files)} 个原始文件")
             self._emit_status("smol_init", "active")
+            # 保存原始上传文件到 input/，供 Agent 用文档解析工具处理
+            for rf in bundle.raw_files:
+                ws.write_input(rf.name, rf.data)
             # 原始 JSON 写到 input/ 让 Agent 能看到原始结构
             for t in bundle.tables:
                 file_stem = t.name.replace(" ", "_").replace("/", "_")
@@ -403,6 +441,25 @@ class SmolPipeline(AgentPipeline):
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+
+# ── plan 进度解析 ──
+
+
+def _current_plan_step(ws) -> str:
+    """读取 plan.json，返回当前 in_progress 步骤的索引/标题，如 '[步骤3/6: 展平数据]'。"""
+    try:
+        plan_path = ws.resolve("output/plan.json")
+        if not plan_path.exists():
+            return ""
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        total = len(plan)
+        for i, step in enumerate(plan):
+            if step.get("status") == "in_progress":
+                return f"[步骤{i + 1}/{total}: {step['title']}]"
+        return ""
+    except Exception:
+        return ""
 
 
 # ── usage logging ──

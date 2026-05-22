@@ -56,31 +56,23 @@ class AgentLoop:
         max_rounds = 50
         try:
             for self._round in range(max_rounds):
-                # ── SSE 美观日志 ──
-                tag = _plan_step_tag(self.ws)
-                self._emit_log("custom_agent", f"{'─' * 8} Round {self._round} {'─' * 8}")
-
                 sr = self._call_api()
 
                 # ── 保存 assistant message ──
                 self.messages.append(self._normalize_assistant_message(sr))
 
-                # ── 缓存 & token 日志 ──
+                # ── 缓存 & token 日志（仅文件日志，不推 SSE）──
                 if sr.usage:
                     u = sr.usage
                     inp = getattr(u, "prompt_tokens", 0)
                     out = getattr(u, "completion_tokens", 0)
-                    total = getattr(u, "total_tokens", 0)
                     hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
                     miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
-                    ratio = f"{hit / max(inp, 1) * 100:.0f}%"
-                    self._emit_log("custom_agent",
-                        f"📊 tokens: {inp}+{out}={total} | 缓存命中 {ratio} (hit={hit} miss={miss})")
                     logger.info("llm_usage %s",
                         json.dumps({
                             "report_id": self.ws.report_id, "pipeline": "custom",
                             "phase": f"round_{self._round}", "model": self.model,
-                            "input_tokens": inp, "output_tokens": out, "total_tokens": total,
+                            "input_tokens": inp, "output_tokens": out,
                             "cached_input_tokens": hit, "cache_miss_tokens": miss,
                             "cache_hit_ratio": round(hit / max(inp, 1), 3),
                             "reasoning_chars": len(sr.reasoning_content),
@@ -97,17 +89,15 @@ class AgentLoop:
 
                 # ── 有 tool_calls → 执行工具 ──
                 if sr.tool_calls:
-                    tool_names = [tc["name"] for tc in sr.tool_calls]
-                    self._emit_log("custom_agent", f"🔧 工具调用: {', '.join(tool_names)}")
                     for tc in sr.tool_calls:
+                        target = _tool_target(tc["name"], tc["arguments"])
+                        self._emit_log("custom_agent", f"🔧 {target}")
                         result = self._execute_tool(tc)
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
                             "content": result,
                         })
-                        self._emit_log("custom_agent",
-                            f"  └ {tc['name']}({tc['arguments'][:200]}) → {result[:200]}")
 
                     # plan 全部完成后，注入收尾请求，不继续普通循环
                     if _is_plan_done(self.ws):
@@ -244,7 +234,7 @@ class AgentLoop:
 
         # 推送汇总
         tag = _plan_step_tag(self.ws)
-        self._emit_log("custom_agent", f"{tag}← 回复: {content[:500]}")
+        self._emit_log("custom_agent", f"\n{tag}🤖: {content[:500]}")
 
         return _StreamResult(
             content=content,
@@ -363,6 +353,47 @@ def _is_retryable(e: Exception) -> bool:
     elif hasattr(e, "response"):
         status = getattr(e.response, "status_code", 0)
     return status in (429, 500, 502, 503) or "负载" in msg or "rate limit" in msg
+
+
+def _tool_target(name: str, args_json: str) -> str:
+    """从工具调用参数中提取有意义的"目标"，用于日志展示。"""
+    try:
+        args = json.loads(args_json)
+    except json.JSONDecodeError:
+        return args_json[:60]
+
+    # 按工具名返回可读的描述
+    labels = {
+        "read_document": lambda a: f"读取 {a.get('path', '?')}",
+        "extract_document_tables": lambda a: f"提取 {a.get('path', '?')} 的表格数据",
+        "read_file": lambda a: f"读取 {a.get('path', '?')}",
+        "write_file": lambda a: f"写入 {a.get('path', '?')}",
+        "list_files": lambda a: f"列出 {a.get('subdir', '根目录')}/ 目录",
+        "run_python": lambda a: f"执行 {a.get('script_path', '?')}",
+        "duckdb_register_parquet": lambda a: f"注册表 {a.get('table_name', '?')}",
+        "list_tables": lambda a: "列出所有表",
+        "read_context": lambda a: f"读取上下文: {a.get('topic', '?')}",
+        "read_plan": lambda a: "读取任务计划",
+        "check_plan": lambda a: f"检查步骤 {a.get('step_index', '?')} 是否完成",
+        "validate_result": lambda a: "校验结果格式",
+    }
+    fn = labels.get(name)
+    if fn:
+        return fn(args)
+
+    # 兜底：取 path / sql 等关键字段
+    for key in ("path", "script_path", "parquet_path", "table_name", "doc_name", "subdir"):
+        if key in args:
+            return str(args[key])[:80]
+    if "sql" in args:
+        return args["sql"][:80].replace("\n", " ")
+    if "content" in args:
+        c = args["content"]
+        return c[:60] + ("…" if len(c) > 60 else "")
+    for v in args.values():
+        if isinstance(v, str):
+            return v[:80]
+    return args_json[:80]
 
 
 class _StreamResult:

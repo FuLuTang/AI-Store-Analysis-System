@@ -787,6 +787,8 @@ async def analyze(
         session.error_message = ""
         session.result = None
         session.full_result = None
+        session.run_id = None
+        session.run_dir = None
 
     SUPPORTED_EXTENSIONS = {".json", ".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc", ".txt", ".md"}
     decoded_files: list[dict] = []

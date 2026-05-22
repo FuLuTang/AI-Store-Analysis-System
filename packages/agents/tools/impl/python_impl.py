@@ -1,5 +1,6 @@
 """底层纯函数：在 workspace 沙箱中执行 Python 脚本"""
 import subprocess
+import sys
 from ...workspace import Workspace
 
 
@@ -12,7 +13,7 @@ def run_python_impl(ws: Workspace, script_path: str, timeout: int = 300) -> str:
     if script.suffix != ".py":
         raise ValueError(f"只能执行 .py 文件，收到: {script_path}")
     result = subprocess.run(
-        ["python3", str(script)],
+        [sys.executable, str(script)],
         capture_output=True, text=True, timeout=timeout,
         cwd=str(ws.dir),
     )

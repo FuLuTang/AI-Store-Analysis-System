@@ -37,8 +37,12 @@ def wash_analysis_params(raw) -> str:
     return str(raw)
 
 
-def validate_analysis_params(raw: str) -> str:
-    """校验前端传入的原始 JSON，失败时 fallback 为字符串保存。"""
+def validate_analysis_params(raw):
+    """校验前端传入的原始 JSON（可能已解析为 list/dict），失败时 fallback 保存。
+    返回原始对象（list/dict）而非 JSON 字符串，避免被下游 json.dumps 双重编码。
+    """
+    if isinstance(raw, (list, dict)):
+        return raw
     if not raw or not raw.strip():
         return ""
     s = raw.strip()

@@ -57,7 +57,7 @@ PRESET_SECRET = os.getenv("LLM_PRESET_SECRET", "").strip()
 GLOBAL_AGENT_PIPELINE = "traditional"
 AGENT_PIPELINE_FILE = STORAGE_DIR / "agent_pipeline.json"
 AGENT_PIPELINE_LOCK = Lock()
-AGENT_PIPELINE_OPTIONS = {"traditional", "pydantic", "smol"}
+AGENT_PIPELINE_OPTIONS = {"traditional", "pydantic", "smol", "custom"}
 
 def _load_agent_pipeline() -> str:
     if AGENT_PIPELINE_FILE.exists():
@@ -481,8 +481,13 @@ def emit_event(session: SessionState, event_type: str, payload: dict):
 
 
 def reset_events(session: SessionState):
+    # 不清空文件（保留历史日志供页面刷新后加载），仅清空内存列表
     session.logs = []
-    emit_event(session, "reset", {})
+    # 文件里追加一个 reset 标记
+    with session.event_lock:
+        event = {"type": "reset", "time": _now_time()}
+        session.logs.append(event)
+        # 不 overwrite 文件，只保留原有日志
 
 
 def add_status(session: SessionState, node_id: str, status: str):
@@ -659,12 +664,26 @@ def get_status(x_fzt_key: Optional[str] = Header(default=None)):
 
 @app.get("/api/logs")
 def get_logs(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
-    return {"logs": session.logs}
+    resolve_session(x_fzt_key)  # 确保 session 缓存存在
+    return {"logs": _load_logs_from_file(resolve_session(x_fzt_key))}
+
+
+def _load_logs_from_file(session) -> list:
+    """强制从文件加载日志，不依赖 session.logs 的内存状态。"""
+    try:
+        if session.run_dir:
+            p = session.run_dir / "logs.json"
+            if p.exists():
+                return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
 
 
 async def sse_generator(session: SessionState):
     """SSE 日志推送，适配前端 EventSource('/api/stream')"""
+    session.logs = _load_logs_from_file(session)
+
     last_idx = 0
     yield f"data: {json.dumps({'type': 'reset', 'time': _now_time()})}\n\n"
 

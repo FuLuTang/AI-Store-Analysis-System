@@ -35,6 +35,7 @@
                     <option value="traditional">传统</option>
                     <option value="pydantic">Pydantic Agent</option>
                     <option value="smol">Smolagent</option>
+                    <option value="custom">Custom Agent</option>
                 </select>
             </div>
             <div class="modal-actions" style="margin-bottom: 1.5rem;">
@@ -56,7 +57,7 @@
 
     <script>
         const EFFORTS = ['low', 'medium', 'high'];
-        const PIPELINE_KEYS = { traditional: '传统', pydantic: 'Pydantic Agent', smol: 'Smolagent' };
+        const PIPELINE_KEYS = { traditional: '传统', pydantic: 'Pydantic Agent', smol: 'Smolagent', custom: 'Custom Agent' };
         const presetContainer = document.getElementById('presetContainer');
         const saveBtn = document.getElementById('saveBtn');
         const savePipelineBtn = document.getElementById('savePipelineBtn');

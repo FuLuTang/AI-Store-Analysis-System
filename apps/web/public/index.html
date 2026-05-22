@@ -273,7 +273,8 @@
                     }
                 } else if (data.status === 'completed') {
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-                    disconnectSSE();
+                    // 刷新后重连 SSE 以回放历史日志
+                    if (!sseSource) connectSSE();
                     startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
@@ -453,6 +454,16 @@
         // === 开始分析 ===
         startBtn.onclick = async () => {
             if (filesData.length === 0) return;
+
+            // 自动保存当前分析参数
+            const cleanedParams = collectParamsData();
+            try {
+                await fetch('/api/analysis-params', {
+                    method: 'PUT',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ analysis_params: cleanedParams }),
+                });
+            } catch (e) { /* 静默失败 */ }
 
             const reasoningEffort = document.getElementById('reasoningEffortSelect').value || 'medium';
 

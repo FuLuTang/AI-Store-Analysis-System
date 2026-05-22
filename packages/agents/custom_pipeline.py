@@ -58,7 +58,7 @@ class CustomPipeline(AgentPipeline):
             preset = self._llm_preset
             api_key = preset.get("apiKey", "")
             base_url = preset.get("baseUrl", "https://api.deepseek.com")
-            client = OpenAI(api_key=api_key, base_url=base_url)
+            client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
             # ── 运行 Agent Loop ──
             loop = AgentLoop(

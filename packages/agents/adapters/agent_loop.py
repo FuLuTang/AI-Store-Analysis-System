@@ -151,12 +151,24 @@ class AgentLoop:
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
 
         t0 = time.time()
-        try:
-            stream = self.client.chat.completions.create(**kwargs, timeout=120)
-        except Exception as e:
-            logger.error("[round_%d] API 调用失败: %s", self._round, str(e))
-            self._emit_log("custom_agent", f"❌ API 调用失败: {str(e)[:300]}")
-            raise
+        last_exc = None
+        for attempt in range(3):  # 首次 + 最多 2 次重试
+            try:
+                stream = self.client.chat.completions.create(**kwargs, timeout=120)
+                last_exc = None
+                break
+            except Exception as e:
+                last_exc = e
+                logger.error("[round_%d] API 调用失败 (attempt %d/3): %s", self._round, attempt + 1, str(e))
+                if attempt < 2 and _is_retryable(e):
+                    self._emit_log("custom_agent", f"⏳ API 调用失败，15 秒后重试 ({attempt + 1}/2)...")
+                    time.sleep(15)
+                else:
+                    self._emit_log("custom_agent", f"❌ API 调用失败: {str(e)[:300]}")
+                    raise
+
+        if last_exc:
+            raise last_exc
 
         # 实时收集
         reasoning_parts: list[str] = []
@@ -339,6 +351,18 @@ def _plan_step_tag(ws) -> str:
         return ""
     except Exception:
         return ""
+
+
+def _is_retryable(e: Exception) -> bool:
+    """429 / 5xx 可重试，其他直接报错。"""
+    msg = str(e).lower()
+    status = getattr(e, "status_code", 0) or getattr(e, "code", 0)
+    # openai.RateLimitError / openai.APIStatusError
+    if hasattr(e, "status_code"):
+        status = e.status_code
+    elif hasattr(e, "response"):
+        status = getattr(e.response, "status_code", 0)
+    return status in (429, 500, 502, 503) or "负载" in msg or "rate limit" in msg
 
 
 class _StreamResult:

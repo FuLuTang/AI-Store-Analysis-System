@@ -102,7 +102,7 @@ class CustomPipeline(AgentPipeline):
 
     def _write_plan(self, ws: Workspace):
         from .tools.impl.setup_impl import design_plan_impl
-        from .smol_pipeline import PLAN_TEMPLATE
+        from .plan_template import PLAN_TEMPLATE
         design_plan_impl(ws, json.dumps(PLAN_TEMPLATE, ensure_ascii=False))
         plan_path = ws.resolve("output/plan.json")
         plan = json.loads(plan_path.read_text(encoding="utf-8"))

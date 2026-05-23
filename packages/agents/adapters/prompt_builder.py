@@ -94,6 +94,7 @@ def task_instruction() -> str:
         "按 plan 中的步骤逐步推进。每完成一步后，必须调用 check_plan(step_index) 验证并前进到下一步。"
         "需要查询数据时使用 duckdb_query 工具，需要解析文档时使用 read_document/extract_document_tables 工具。"
         "最终产物：summary.md（诊断报告）+ summary_short.json（精简卡片）+ output/result.json（完整结构）。"
+        "卡片 color 取值：green=正常 yellow=关注 pink=数据口径不一致 red=报警 blue=信息/中性。"
     )
 
 

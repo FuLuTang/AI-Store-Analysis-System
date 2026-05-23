@@ -150,7 +150,7 @@ class ReportCard(BaseModel):
     explanation: str = ""
     suggestion: str = ""
     evidence: str = ""
-    color: Literal["green", "yellow", "pink", "red"] = "green"
+    color: Literal["green", "yellow", "pink", "red", "blue"] = "green"
 
 
 class PhaseResult(BaseModel):

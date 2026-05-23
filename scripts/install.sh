@@ -52,7 +52,8 @@ do_deploy() {
     cd "$APP_DIR"
 
     echo "==> 2. 正在准备系统环境与依赖..."
-    # 仅在第一次安装或依赖变化时可能需要 apt
+    # 清理上次中断残留的 apt 锁，否则 apt 直接报错退出
+    rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/cache/apt/archives/lock
     apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends
 
     # 处理虚拟环境 (确保 activate 脚本存在)

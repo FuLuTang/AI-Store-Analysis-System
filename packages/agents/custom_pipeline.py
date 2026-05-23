@@ -111,28 +111,32 @@ class CustomPipeline(AgentPipeline):
             plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _read_agent_outputs(self, ws: Workspace) -> tuple[list, str]:
-        """从 workspace 文件读取 Agent 的最终产物。"""
+        """从 workspace 文件读取 Agent 的最终产物。
+        cards 优先从 output/result.json（Agent validate 校验过的文件）读取，
+        其次从 summary_short.json 读取。
+        """
         cards = []
         full_report = ""
-
-        # summary_short.json 在 workspace 根目录，不在 output/ 下
-        try:
-            short_path = ws.resolve("summary_short.json")
-            if short_path.exists():
-                short = json.loads(short_path.read_text(encoding="utf-8"))
-                if isinstance(short, dict):
-                    cards = short.get("cards", [])
-        except Exception:
-            pass
 
         try:
             result_path = ws.resolve("output/result.json")
             if result_path.exists():
                 result_data = json.loads(result_path.read_text(encoding="utf-8"))
                 if isinstance(result_data, dict):
+                    cards = result_data.get("cards", [])
                     full_report = result_data.get("full_report", "")
         except Exception:
             pass
+
+        if not cards:
+            try:
+                short_path = ws.resolve("summary_short.json")
+                if short_path.exists():
+                    short = json.loads(short_path.read_text(encoding="utf-8"))
+                    if isinstance(short, dict):
+                        cards = short.get("cards", [])
+            except Exception:
+                pass
 
         if not full_report:
             try:

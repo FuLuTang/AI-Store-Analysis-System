@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from .base import AgentPipeline
-from .models import AgentResult, DatasetBundle
+from .models import AgentResult, DatasetBundle, TableMeta
 from .workspace import Workspace
 from .adapters import build_smol_tools
 
@@ -124,6 +124,7 @@ class SmolPipeline(AgentPipeline):
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
         ws = Workspace(base_dir=self._workspace_dir) if self._workspace_dir else Workspace(label="smol")
+        self._ref_bundle = bundle
 
         try:
             self._emit_log("smol_init", f"启动 Smolagent 管线，{len(bundle.tables)} 张表, {len(bundle.raw_files)} 个原始文件")
@@ -251,12 +252,24 @@ class SmolPipeline(AgentPipeline):
 
 
 
+        tables = [
+            TableMeta(
+                name=t.name,
+                duckdb_name=t.name,
+                path=f"input/{t.name.replace(" ", "_").replace("/", "_")}.json",
+                row_count=len(t.rows),
+                columns=[],
+            )
+            for t in (getattr(self, "_ref_bundle", None).tables if getattr(self, "_ref_bundle", None) else [])
+        ]
+
         try:
             return AgentResult(
                 report_id=ws.report_id,
                 pipeline=self.name,
                 elapsed_ms=elapsed_ms,
                 raw_output=raw_output[:2000],
+                tables=tables,
                 **({"scene": data.get("scene"), "mapping": data.get("mapping", []),
                     "metrics": data.get("metrics", []), "warnings": data.get("warnings", []),
                     "cards": data.get("cards", []), "full_report": data.get("full_report", "")}
@@ -268,6 +281,7 @@ class SmolPipeline(AgentPipeline):
                 pipeline=self.name,
                 elapsed_ms=elapsed_ms,
                 raw_output=raw_output[:2000],
+                tables=tables,
             )
 
     def _extract_json(self, raw: str) -> dict | None:

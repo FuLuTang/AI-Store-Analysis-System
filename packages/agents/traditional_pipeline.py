@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 
 from .base import AgentPipeline
 from .models import AgentResult, DatasetBundle, MetricResult, SceneContext, SemanticMapping, ReportCard, TableMeta, Manifest
+from .workspace import Workspace
 
 from packages.core.profiler import profile_dataset
 from packages.core.semantic_mapper import llm_map_profiles
@@ -47,6 +48,7 @@ class TraditionalPipeline(AgentPipeline):
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
         active_settings = self._llm_preset
+        ws = Workspace(base_dir=self._workspace_dir) if self._workspace_dir else Workspace(label="traditional")
 
         try:
             # 1) Input Adapter — 直接从 DatasetBundle 构建 core 模块所需 dict
@@ -241,7 +243,7 @@ class TraditionalPipeline(AgentPipeline):
                 self._write_summary_files(scene, cards, full_report)
 
                 return AgentResult(
-                    report_id=bundle.received_at.isoformat(),
+                    report_id=ws.report_id,
                     pipeline=self.name,
                     elapsed_ms=(time.time() - t0) * 1000,
                     full_report=full_report,
@@ -288,7 +290,7 @@ class TraditionalPipeline(AgentPipeline):
 
             elapsed = (time.time() - t0) * 1000
             return AgentResult(
-                report_id=bundle.received_at.isoformat(),
+                report_id=ws.report_id,
                 pipeline=self.name,
                 elapsed_ms=elapsed,
                 full_report=full_report,

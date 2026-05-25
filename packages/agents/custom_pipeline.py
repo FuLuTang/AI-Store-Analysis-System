@@ -9,7 +9,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from .base import AgentPipeline
-from .models import AgentResult, DatasetBundle
+from .models import AgentResult, DatasetBundle, TableMeta
 from .workspace import Workspace
 from .adapters.agent_loop import AgentLoop
 
@@ -75,6 +75,16 @@ class CustomPipeline(AgentPipeline):
 
             # ── Agent 已将产物写入 workspace，API 直接读文件 ──
             cards, full_report = self._read_agent_outputs(ws)
+            tables = [
+                TableMeta(
+                    name=t.name,
+                    duckdb_name=t.name,
+                    path=f"input/{t.name.replace(' ', '_').replace('/', '_')}.json",
+                    row_count=len(t.rows),
+                    columns=[],
+                )
+                for t in bundle.tables
+            ]
             return AgentResult(
                 report_id=ws.report_id,
                 pipeline=self.name,
@@ -85,6 +95,7 @@ class CustomPipeline(AgentPipeline):
                 warnings=output.get("warnings", []),
                 cards=cards,
                 full_report=full_report,
+                tables=tables,
             )
 
         finally:

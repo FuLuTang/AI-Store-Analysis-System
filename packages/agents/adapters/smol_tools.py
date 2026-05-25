@@ -124,12 +124,10 @@ def build_smol_tools(ws: Workspace, emit_log=None):
     def read_plan() -> str:
         """Read the full task plan from output/plan.json with all step details.
         """
-        plan_path = ws.resolve("output/plan.json")
-        if not plan_path.exists():
+        from ..tools.impl.plan_check_impl import read_plan_impl
+        plan = read_plan_impl(ws)
+        if plan is None:
             return json.dumps({"error": "plan.json not found"})
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        for step in plan:
-            step.pop("check", None)
         return json.dumps(plan, ensure_ascii=False, indent=2)
 
     @tool
@@ -142,45 +140,15 @@ def build_smol_tools(ws: Workspace, emit_log=None):
         Args:
             step_index: plan 中步骤的 0-based 索引。
         """
-        from ..tools.impl.plan_check_impl import run_step_check
-
-        plan_path = ws.resolve("output/plan.json")
-        if not plan_path.exists():
-            return json.dumps({"error": "plan.json not found"})
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        if step_index < 0 or step_index >= len(plan):
-            return json.dumps({"error": f"step_index {step_index} out of range (0-{len(plan)-1})"})
-
-        step = plan[step_index]
-        ok, errors = run_step_check(ws, step)
-        step["errors"] = errors
-        step["status"] = "success" if ok else "failed"
-
-        plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        if ok:
-            for i in range(step_index + 1, len(plan)):
-                if plan[i]["status"] == "pending":
-                    plan[i]["status"] = "in_progress"
-                    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-                    if emit_log:
-                        emit_log("smol_plan", f"Step {i} 开始: {plan[i]['title']}")
-                    break
-
+        from ..tools.impl.plan_check_impl import check_plan_impl
+        result = check_plan_impl(ws, step_index, emit_log=emit_log)
         if emit_log:
-            status_icon = "✓" if ok else "✗"
-            emit_log("smol_plan", f"Step {step_index} {status_icon}: {step['title']}")
-
-        result = {
-            "step_index": step_index,
-            "ok": ok,
-            "errors": errors,
-        }
-        if errors:
-            result["next_action"] = (
-                f"Step {step_index}（{step['title']}）未通过检查，请根据报错排查后重新 check_plan({step_index})\n"
-                + "\n".join(errors)
-            )
+            status_icon = "✓" if result.get("ok") else "✗"
+            # 读 plan 拿标题（check_plan_impl 已更新状态）
+            plan_path = ws.resolve("output/plan.json")
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            title = plan[step_index]["title"] if 0 <= step_index < len(plan) else "?"
+            emit_log("smol_plan", f"Step {step_index} {status_icon}: {title}")
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     @tool

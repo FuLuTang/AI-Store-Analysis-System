@@ -46,7 +46,7 @@
                 <div class="params-body">
                     <div id="paramsFormContainer"></div>
                     <div class="param-actions">
-                        <select id="presetSelect" class="param-select">
+                        <select id="presetSelect" style="background:#f1f5f9;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;cursor:pointer;">
                             <option value="">📋 预设...</option>
                         </select>
                         <button id="addParamBtn" class="btn-secondary btn-sm">
@@ -609,6 +609,8 @@
                         <input type="number" class="param-number" data-idx="${i}" value="${value}" ${minVal !== undefined ? `min="${minVal}"` : ''} ${maxVal !== undefined ? `max="${maxVal}"` : ''} style="width:60px;padding:2px 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;text-align:center;">
                         <button class="param-num-btn" data-idx="${i}" data-dir="1" style="width:24px;height:24px;border:1px solid #e2e8f0;border-radius:4px;background:#f8fafc;cursor:pointer;font-size:1rem;line-height:1;">+</button>
                     </div>`;
+                } else if (ctrlType === 'date') {
+                    ctrlHtml = `<input type="date" class="param-date" data-idx="${i}" value="${value || ''}" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;">`;
                 } else {
                     ctrlHtml = `<input type="text" class="param-text" data-idx="${i}" value="${String(value !== undefined && value !== null ? value : '').replace(/"/g,'&quot;')}" placeholder="输入值" style="width:160px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;">`;
                 }

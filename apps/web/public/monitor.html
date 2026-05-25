@@ -8,23 +8,25 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <div class="container" style="max-width: 1200px;">
+    <div class="container" style="max-width:1200px;">
         <nav>
             <a href="index.html">用户工作台</a>
             <a href="monitor.html" class="active">后台监控流</a>
             <a href="admin.html">管理员配置</a>
-            <button class="settings-btn" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';" style="color:#ef4444;">
-                <i class="fas fa-sign-out-alt"></i> 退出
-            </button>
+            <div class="nav-right">
+                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                    <i class="fas fa-sign-out-alt"></i> 退出
+                </button>
+            </div>
         </nav>
 
         <header>
             <h1>后台数据流转监视器</h1>
-            <p style="color: var(--text-muted); margin-bottom: 1.5rem;">实时观察系统处理步骤与日志输出。支持多文件（JSON / Excel / CSV）管线。</p>
+            <p class="subtitle" style="margin-bottom: 1.5rem;">实时观察系统处理步骤与日志输出。支持多文件（JSON / Excel / CSV）管线。</p>
         </header>
 
         <!-- 管线标签 -->
-        <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+        <div class="pipeline-tabs">
             <span class="pipeline-badge traditional">传统</span>
             <span class="pipeline-badge pydantic">Pydantic Agent</span>
             <span class="pipeline-badge smol">Smolagent</span>
@@ -223,7 +225,7 @@
                 </div>
 
             </div>
-            <div style="margin-top: 0.75rem; color: var(--text-muted); font-size: 0.8rem; display: flex; justify-content: space-between;">
+            <div class="flow-status">
                 <span>SSE: <span id="connStatus" style="color: var(--success)">已连接</span></span>
                 <span>管线: <span id="currentPipeline">-</span></span>
                 <span id="currentTime">等待任务...</span>

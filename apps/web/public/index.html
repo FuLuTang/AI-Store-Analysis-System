@@ -14,19 +14,21 @@
             <a href="index.html" class="active">用户工作台</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
-            <select id="reasoningEffortSelect" class="settings-btn" style="width:auto; padding:0 12px; margin-right:8px;">
-                <option value="medium">medium（默认）</option>
-                <option value="low">low（快速）</option>
-                <option value="high">high（深度）</option>
-            </select>
-            <button class="settings-btn" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';" style="color:#ef4444;">
-                <i class="fas fa-sign-out-alt"></i> 退出
-            </button>
+            <div class="nav-right">
+                <select id="reasoningEffortSelect" class="nav-select">
+                    <option value="medium">medium（默认）</option>
+                    <option value="low">low（快速）</option>
+                    <option value="high">high（深度）</option>
+                </select>
+                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                    <i class="fas fa-sign-out-alt"></i> 退出
+                </button>
+            </div>
         </nav>
 
         <header>
             <h1>药店经营 AI 智能诊断</h1>
-            <p style="color: var(--text-muted); margin-bottom: 2rem;">拖入门店经营 JSON 数据，一键获取深度归因与优化策略。</p>
+            <p class="subtitle">拖入门店经营 JSON 数据，一键获取深度归因与优化策略。</p>
         </header>
 
         <div class="card">
@@ -37,56 +39,52 @@
                 <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.md">
             </div>
 
-            <details class="analysis-params-details" id="paramsDetails" style="margin: 1rem 0 0.5rem;">
-                <summary style="cursor: pointer; font-size: 0.9rem; color: var(--text-muted); user-select: none;">
+            <details class="analysis-params-details" id="paramsDetails">
+                <summary>
                     <i class="fas fa-sliders-h"></i> 分析参数（可选）
                 </summary>
-                <div style="margin-top: 0.5rem;">
+                <div class="params-body">
                     <div id="paramsFormContainer"></div>
-                    <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;">
-                        <select id="presetSelect" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;background:#f1f5f9;color:var(--primary);cursor:pointer;">
+                    <div class="param-actions">
+                        <select id="presetSelect" class="param-select">
                             <option value="">📋 预设...</option>
                         </select>
-                        <button id="addParamBtn" class="btn btn-secondary" style="font-size: 0.8rem; padding: 4px 14px; background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
+                        <button id="addParamBtn" class="btn-secondary btn-sm">
                             <i class="fas fa-plus"></i> 添加参数
                         </button>
-                        <button id="saveParamsBtn" class="btn" style="font-size: 0.8rem; padding: 4px 14px;">
+                        <button id="saveParamsBtn" class="btn btn-sm">
                             <i class="fas fa-save"></i> 保存
                         </button>
-                        <span id="paramsSavedHint" style="font-size: 0.8rem; color: var(--success); display: none; align-self: center;">✓ 已保存</span>
+                        <span id="paramsSavedHint" class="saved-hint">✓ 已保存</span>
                     </div>
                 </div>
             </details>
 
-            <div style="text-align: center; display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
-                <button id="exampleBtn" class="btn btn-secondary" style="background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
+            <div class="action-bar">
+                <button id="exampleBtn" class="btn-secondary">
                     <i class="fas fa-vial"></i> 使用案例 JSON 文件
                 </button>
                 <button id="startBtn" class="btn" disabled>
                     <i class="fas fa-magic"></i> 开始多维 AI 诊断
                 </button>
-                <button id="stopBtn" class="btn btn-secondary" style="display: none; background: #ef4444; color: white; border-color: #ef4444;">
+                <button id="stopBtn" class="btn-danger" hidden>
                     <i class="fas fa-stop-circle"></i> 强制停止
                 </button>
             </div>
 
-            <div id="loading" class="loading" style="display: none; justify-content: center; align-items: center; gap: 0.5rem;">
-                <div class="spinner" style="width: 20px; height: 20px;"></div>
-                <span id="statusText" style="color: #666;">任务正在后台运行，请等待...</span>
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <span id="statusText">任务正在后台运行，请等待...</span>
             </div>
 
-
-
-            <div style="text-align: center; margin-top: 1rem; display: flex; justify-content: center; align-items: center; gap: 0.5rem;">
-                <span id="labelSimple" style="font-size: 0.9rem; color: var(--text-muted); font-weight: bold;">精简</span>
+            <div class="report-toggle" id="reportToggleBar">
+                <span id="labelSimple">精简</span>
                 <label class="switch">
                     <input type="checkbox" id="reportToggle">
                     <span class="slider round"></span>
                 </label>
-                <span id="labelFull" style="font-size: 0.9rem; color: var(--text-muted);">完整</span>
+                <span id="labelFull">完整</span>
             </div>
-
-
 
             <div id="result" class="report-section">
                 <div class="report-card">
@@ -95,20 +93,20 @@
             </div>
 
             <!-- 底部日志与进度 -->
-            <div id="progressContainer" style="display: none; max-width: 800px; margin: 30px auto 10px; padding: 0; border-top: 1px solid #e2e8f0; padding-top: 20px;">
-                <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--text-muted); margin-bottom: 5px; padding: 0 5px;">
-                    <span style="font-weight: 600;"><i class="fas fa-tasks"></i> 系统处理进度 <span style="font-weight: normal; font-size: 12px; color: #94a3b8; margin-left: 6px;">(预计 3-5 分钟)</span></span>
-                    <span id="progressText" style="font-weight: bold; color: var(--primary);">0%</span>
+            <div class="progress-section" id="progressContainer">
+                <div class="progress-header">
+                    <span class="progress-header-title"><i class="fas fa-tasks"></i> 系统处理进度 <span class="progress-header-hint">(预计 3-5 分钟)</span></span>
+                    <span class="progress-text" id="progressText">0%</span>
                 </div>
-                <div style="width: 100%; background-color: #e2e8f0; border-radius: 6px; height: 10px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
-                    <div id="progressBar" style="width: 0%; height: 100%; background-color: var(--primary); transition: width 0.4s ease-out; background-image: linear-gradient(45deg, rgba(255,255,255,.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.15) 50%, rgba(255,255,255,.15) 75%, transparent 75%, transparent); background-size: 1rem 1rem;"></div>
+                <div class="progress-track">
+                    <div class="progress-bar" id="progressBar"></div>
                 </div>
             </div>
 
-            <div id="globalLogContainer" style="display: none; max-width: 800px; margin: 0 auto 20px; background: #1e1e1e; color: #a3be8c; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 150px; overflow-y: auto; text-align: left; box-shadow: inset 0 0 10px rgba(0,0,0,0.5);">
-                <div style="color: #88c0d0; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #4c566a; padding-bottom: 5px; display: flex; justify-content: space-between;">
+            <div class="log-container" id="globalLogContainer">
+                <div class="log-header">
                     <span><i class="fas fa-terminal"></i> 总后台运行日志</span>
-                    <a href="monitor.html" target="_blank" style="color: #81a1c1; text-decoration: none; font-weight: normal;"><i class="fas fa-external-link-alt"></i> 详细监控视图</a>
+                    <a href="monitor.html" target="_blank"><i class="fas fa-external-link-alt"></i> 详细监控视图</a>
                 </div>
                 <div id="globalLogContent"></div>
             </div>

@@ -33,6 +33,7 @@ def security_rules() -> str:
         "安全规则：\n"
         "- 所有结论必须引用工具返回的真实数据，不得编造数值\n"
         "- duckdb_query 只能执行只读 SELECT 查询，禁止 INSERT/DROP/DELETE/ALTER\n"
+        "- DuckDB 表名列名含中文或括号时需要双引号引用，如 SELECT \"毛利(元)\" FROM \"月营业数据\"，不要用反引号\n"
         "- Python 代码只能操作 workspace 内目录\n"
         "- 最终报告必须通过 validate_result 校验后才能写入 output/result.json\n"
         "- 禁止结尾写客套话"

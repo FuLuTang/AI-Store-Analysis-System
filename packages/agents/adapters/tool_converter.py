@@ -98,7 +98,7 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
         # ── DuckDB ──
         _make_tool(
             name="duckdb_query",
-            description="在 workspace 的 DuckDB 上执行只读 SELECT 查询，返回 JSON 结果。禁止 INSERT/DROP/DELETE/ALTER。",
+            description="在 workspace 的 DuckDB 上执行只读 SELECT 查询，返回 JSON 结果。禁止 INSERT/DROP/DELETE/ALTER。注意 DuckDB 标识符需用双引号，如 SELECT \"毛利(元)\" FROM 表名，不要用反引号。",
             parameters={
                 "type": "object",
                 "properties": {

@@ -60,6 +60,37 @@
                 </div>
             </details>
 
+            <!-- 参数编辑弹窗 -->
+            <div id="paramEditorModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center;">
+                <div style="background:#fff;border-radius:var(--radius);padding:2rem;max-width:440px;width:90%;box-shadow:var(--shadow-lg);max-height:90vh;overflow-y:auto;">
+                    <h3 style="margin-bottom:1.25rem;font-size:1.15rem;"><i class="fas fa-plus-circle"></i> 新建参数</h3>
+                    <div class="form-group">
+                        <label>控件类型</label>
+                        <select id="peType" class="form-select" onchange="window.updateParamEditor()">
+                            <option value="text">文本</option>
+                            <option value="number">数字</option>
+                            <option value="toggle">开关</option>
+                            <option value="slider">滑块</option>
+                            <option value="select">下拉选择</option>
+                            <option value="date">日期选择</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>参数名称</label>
+                        <input id="peKey" class="form-input" placeholder="例如：分析时间颗粒度">
+                    </div>
+                    <div class="form-group" id="peValueGroup">
+                        <label id="peValueLabel">默认值</label>
+                        <div id="peValueInner"></div>
+                    </div>
+                    <div id="peExtras"></div>
+                    <div class="modal-actions">
+                        <button class="btn-secondary" onclick="window.closeParamEditor()">取消</button>
+                        <button class="btn" onclick="window.confirmAddParam()"><i class="fas fa-check"></i> 确认添加</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="action-bar">
                 <button id="exampleBtn" class="btn-secondary">
                     <i class="fas fa-vial"></i> 使用案例 JSON 文件
@@ -799,13 +830,92 @@
             }
         };
 
-        addParamBtn.onclick = () => {
-            paramsData.push({key: '', value: ''});
+        addParamBtn.onclick = () => openParamEditor();
+
+        // ========== 参数编辑弹窗 ==========
+        function openParamEditor() {
+            document.getElementById('paramEditorModal').style.display = 'flex';
+            document.getElementById('peKey').value = '';
+            updateParamEditor();
+        }
+
+        function closeParamEditor() {
+            document.getElementById('paramEditorModal').style.display = 'none';
+        }
+
+        function updateParamEditor() {
+            const type = document.getElementById('peType').value;
+            const inner = document.getElementById('peValueInner');
+            const extras = document.getElementById('peExtras');
+            extras.innerHTML = '';
+
+            if (type === 'toggle') {
+                inner.innerHTML = `<label class="param-toggle" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="peValue" checked style="display:none;">
+                    <span style="position:relative;display:inline-block;width:40px;height:22px;background:var(--success);border-radius:11px;transition:.2s;">
+                        <span style="position:absolute;top:2px;left:20px;width:18px;height:18px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2);"></span>
+                    </span>
+                    <span style="font-size:0.8rem;color:var(--success);" id="peToggleLabel">ON</span>
+                </label>`;
+                const cb = inner.querySelector('input');
+                cb.onchange = () => {
+                    const bg = cb.closest('label').querySelector('span:first-of-type');
+                    const dot = bg.querySelector('span');
+                    const txt = document.getElementById('peToggleLabel');
+                    bg.style.background = cb.checked ? 'var(--success)' : '#e2e8f0';
+                    dot.style.left = cb.checked ? '20px' : '2px';
+                    txt.textContent = cb.checked ? 'ON' : 'OFF';
+                    txt.style.color = cb.checked ? 'var(--success)' : '#94a3b8';
+                };
+            } else if (type === 'select') {
+                inner.innerHTML = `<input id="peValue" class="form-input" placeholder="例如：选项A">`;
+                extras.innerHTML = `<div class="form-group"><label>选项列表（每行一个）</label><textarea id="peOptions" class="form-input" rows="4" placeholder="选项A\n选项B\n选项C" style="resize:vertical;"></textarea></div>`;
+            } else if (type === 'slider') {
+                inner.innerHTML = `<input id="peValue" type="number" class="form-input" step="0.01" min="0" max="1" value="0.5" placeholder="0.5">`;
+                extras.innerHTML = `<div style="display:flex;gap:1rem;"><div class="form-group" style="flex:1;"><label>最小值</label><input id="peMin" type="number" class="form-input" step="0.01" value="0"></div><div class="form-group" style="flex:1;"><label>最大值</label><input id="peMax" type="number" class="form-input" step="0.01" value="1"></div></div>`;
+            } else if (type === 'number') {
+                inner.innerHTML = `<input id="peValue" type="number" class="form-input" value="0" placeholder="0">`;
+                extras.innerHTML = `<div style="display:flex;gap:1rem;"><div class="form-group" style="flex:1;"><label>最小值</label><input id="peMin" type="number" class="form-input" value="0"></div><div class="form-group" style="flex:1;"><label>最大值</label><input id="peMax" type="number" class="form-input" value="100"></div></div>`;
+            } else if (type === 'date') {
+                inner.innerHTML = `<input id="peValue" type="date" class="form-input" value="">`;
+            } else {
+                inner.innerHTML = `<input id="peValue" class="form-input" placeholder="输入默认值">`;
+            }
+        }
+
+        function confirmAddParam() {
+            const type = document.getElementById('peType').value;
+            const key = document.getElementById('peKey').value.trim();
+            if (!key) { alert('请输入参数名称'); return; }
+
+            let value, extra = {};
+            if (type === 'toggle') {
+                value = document.querySelector('#peValueInner input[type=checkbox]').checked;
+            } else if (type === 'select') {
+                value = document.getElementById('peValue').value;
+                const opts = document.getElementById('peOptions').value.split('\n').map(s => s.trim()).filter(Boolean);
+                if (opts.length) extra.options = opts;
+            } else if (type === 'slider') {
+                value = parseFloat(document.getElementById('peValue').value) || 0.5;
+                extra.min = parseFloat(document.getElementById('peMin').value) || 0;
+                extra.max = parseFloat(document.getElementById('peMax').value) || 1;
+                extra.type = 'slider';
+            } else if (type === 'number') {
+                value = parseFloat(document.getElementById('peValue').value) || 0;
+                extra.min = parseFloat(document.getElementById('peMin').value) || 0;
+                extra.max = parseFloat(document.getElementById('peMax').value) || 100;
+                extra.type = 'number';
+            } else if (type === 'date') {
+                value = document.getElementById('peValue').value || '';
+                extra.type = 'date';
+            } else {
+                value = document.getElementById('peValue').value || '';
+            }
+
+            paramsData.push({ key, value, ...extra });
             renderParamsForm(paramsData);
-            // 滚动到新行
-            const rows = paramsContainer.querySelectorAll('.param-row');
-            if (rows.length) rows[rows.length - 1].scrollIntoView({behavior: 'smooth'});
-        };
+            closeParamEditor();
+        }
     </script>
 </body>
 </html>

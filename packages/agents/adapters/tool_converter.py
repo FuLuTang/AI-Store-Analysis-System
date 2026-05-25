@@ -180,7 +180,7 @@ def build_tool_map(ws: Workspace) -> dict:
     from ..tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
     from ..tools.impl.context_impl import read_context_impl
     from ..tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
-    from ..tools.impl.plan_check_impl import run_step_check
+    from ..tools.impl.plan_check_impl import read_plan_impl, check_plan_impl
     from ..tools.impl.validate_impl import validate_result_impl
 
     def _read_document(path: str) -> str:
@@ -212,46 +212,17 @@ def build_tool_map(ws: Workspace) -> dict:
         return list_tables_impl(ws)
 
     def _read_context(topic: str) -> str:
-        from pathlib import Path
-        root = Path(__file__).resolve().parent.parent.parent
-        doc_map = {
-            "指标计算文档": root / "docs" / "指标计算文档.md",
-        }
-        path = doc_map.get(topic.replace(".md", ""))
-        if path and path.is_file():
-            return path.read_text(encoding="utf-8")
-        return f"未找到文档: topic={topic}"
+        doc_name = topic if topic.endswith(".md") else f"{topic}.md"
+        return read_context_impl(ws, doc_name)
 
     def _read_plan() -> str:
-        plan_path = ws.resolve("output/plan.json")
-        if not plan_path.exists():
+        plan = read_plan_impl(ws)
+        if plan is None:
             return "(plan 尚未初始化)"
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        for step in plan:
-            step.pop("check", None)
         return json.dumps(plan, ensure_ascii=False, indent=2)
 
     def _check_plan(step_index: int) -> str:
-        plan_path = ws.resolve("output/plan.json")
-        if not plan_path.exists():
-            return json.dumps({"error": "plan.json not found"})
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        if step_index < 0 or step_index >= len(plan):
-            return json.dumps({"error": f"step_index {step_index} out of range (0-{len(plan)-1})"})
-        step = plan[step_index]
-        ok, errors = run_step_check(ws, step)
-        step["errors"] = errors
-        step["status"] = "success" if ok else "failed"
-        # 推进下一步
-        if ok:
-            for i in range(step_index + 1, len(plan)):
-                if plan[i]["status"] == "pending":
-                    plan[i]["status"] = "in_progress"
-                    break
-        plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-        result = {"step_index": step_index, "ok": ok, "errors": errors}
-        if ok:
-            result["advanced"] = True
+        result = check_plan_impl(ws, step_index)
         return json.dumps(result, ensure_ascii=False)
 
     def _validate_result(result_json: str) -> str:

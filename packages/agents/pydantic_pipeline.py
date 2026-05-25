@@ -361,7 +361,7 @@ class PydanticPipeline(AgentPipeline):
             json.dumps({
                 "health_status": health,
                 "overview_text": f"共 {len(cards)} 项待关注",
-                "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "color": c.color} for c in cards],
+                "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "evidence": c.evidence, "color": c.color} for c in cards],
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

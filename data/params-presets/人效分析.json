@@ -1,6 +1,7 @@
 [
-  {"key":"分析聚焦","value":"人效深度分析"},
-  {"key":"分析时间颗粒度","value":"月","options":["日","周","月","季","年"]},
+  {"key":"门店名称","value":"","type":"text","placeholder":"例：福州鼓楼店"},
+  {"key":"聚焦方向","value":"人效","options":["人效","坪效","品效"]},
   {"key":"词藻风格","value":"偏数据","options":["偏白话","偏数据","偏结论"]},
-  {"key":"输出限制","value":"卡片不超过5张"}
+  {"key":"最低人效阈值","value":5000,"type":"number","min":1000,"max":50000},
+  {"key":"异常倍率","value":1.5,"type":"slider","min":1,"max":3,"step":0.1}
 ]

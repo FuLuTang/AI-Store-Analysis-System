@@ -792,7 +792,16 @@
                 presetSelect.value = '';
                 return;
             }
-            paramsData = JSON.parse(JSON.stringify(presetsMap[name]));
+            const preset = presetsMap[name];
+            // 新格式: {reasoning_effort, params} / 旧格式: [...] 数组
+            if (Array.isArray(preset)) {
+                paramsData = JSON.parse(JSON.stringify(preset));
+            } else {
+                if (preset.reasoning_effort) {
+                    document.getElementById('reasoningEffortSelect').value = preset.reasoning_effort;
+                }
+                paramsData = JSON.parse(JSON.stringify(preset.params || []));
+            }
             renderParamsForm(paramsData);
             presetSelect.value = '';
         };

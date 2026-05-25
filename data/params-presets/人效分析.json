@@ -1,7 +1,10 @@
-[
-  {"key":"门店名称","value":"","placeholder":"例：福州鼓楼店"},
-  {"key":"聚焦方向","value":"人效","options":["人效","坪效","品效"]},
-  {"key":"词藻风格","value":"偏数据","options":["偏白话","偏数据","偏结论"]},
-  {"key":"最低人效阈值","value":5000},
-  {"key":"异常倍率","value":1.5,"min":1,"max":3,"step":0.1}
-]
+{
+  "reasoning_effort": "high",
+  "params": [
+    {"key":"门店名称","value":"","placeholder":"例：福州鼓楼店"},
+    {"key":"聚焦方向","value":"人效","options":["人效","坪效","品效"]},
+    {"key":"词藻风格","value":"偏数据","options":["偏白话","偏数据","偏结论"]},
+    {"key":"最低人效阈值","value":5000},
+    {"key":"异常倍率","value":1.5,"min":1,"max":3,"step":0.1}
+  ]
+}

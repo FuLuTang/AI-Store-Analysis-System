@@ -144,7 +144,7 @@ class AgentLoop:
         last_exc = None
         for attempt in range(3):  # 首次 + 最多 2 次重试
             try:
-                stream = self.client.chat.completions.create(**kwargs, timeout=120)
+                stream = self.client.chat.completions.create(**kwargs, timeout=300)
                 last_exc = None
                 break
             except Exception as e:
@@ -290,7 +290,7 @@ class AgentLoop:
             result = self.tool_map[name](**args)
             elapsed = (time.time() - t0) * 1000
             logger.info("tool_exec name=%s elapsed=%.0fms args=%s", name, elapsed,
-                        json.dumps(args, ensure_ascii=False, default=str)[:200])
+                        json.dumps(args, ensure_ascii=False, default=str)[:200].replace('\n', ' '))
             if isinstance(result, (dict, list)):
                 return json.dumps(result, ensure_ascii=False, default=str)
             return str(result)
@@ -352,7 +352,7 @@ def _is_retryable(e: Exception) -> bool:
         status = e.status_code
     elif hasattr(e, "response"):
         status = getattr(e.response, "status_code", 0)
-    return status in (429, 500, 502, 503) or "负载" in msg or "rate limit" in msg
+    return status in (429, 500, 502, 503) or "负载" in msg or "rate limit" in msg or "timeout" in msg or "timed out" in msg
 
 
 def _tool_target(name: str, args_json: str) -> str:

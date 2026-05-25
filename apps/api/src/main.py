@@ -111,9 +111,9 @@ def _default_llm_presets() -> dict:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini").strip()
     return {
-        "low": {"baseUrl": base_url, "apiKey": api_key, "model": model},
-        "medium": {"baseUrl": base_url, "apiKey": api_key, "model": model},
-        "high": {"baseUrl": base_url, "apiKey": api_key, "model": model}
+        "low": {"baseUrl": base_url, "apiKey": api_key, "model": model, "reasoningEffort": "low"},
+        "medium": {"baseUrl": base_url, "apiKey": api_key, "model": model, "reasoningEffort": "medium"},
+        "high": {"baseUrl": base_url, "apiKey": api_key, "model": model, "reasoningEffort": "high"}
     }
 
 
@@ -167,7 +167,8 @@ def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
     return {
         "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback.get("baseUrl", "")),
         "apiKey": api_key.strip() if isinstance(api_key, str) else str(fallback.get("apiKey", "")),
-        "model": model.strip() if isinstance(model, str) else str(fallback.get("model", ""))
+        "model": model.strip() if isinstance(model, str) else str(fallback.get("model", "")),
+        "reasoningEffort": data.get("reasoningEffort", fallback.get("reasoningEffort", ""))
     }
 
 
@@ -225,7 +226,8 @@ def save_llm_presets_locked():
         safe_presets[effort] = {
             "baseUrl": preset.get("baseUrl", ""),
             "apiKeyEnc": _encrypt_text(preset.get("apiKey", "")),
-            "model": preset.get("model", "")
+            "model": preset.get("model", ""),
+            "reasoningEffort": preset.get("reasoningEffort", effort)
         }
     LLM_PRESETS_FILE.write_text(
         json.dumps({"presets": safe_presets}, ensure_ascii=False, indent=2),

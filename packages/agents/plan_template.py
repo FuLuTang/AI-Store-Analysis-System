@@ -110,16 +110,5 @@ PLAN_TEMPLATE = [
          "assert os.path.exists('output/result.json'), 'result.json 不存在'\n"
      ),
      "errors": []},
-    {"title": "清理大文件",
-     "detail": (
-         "确认产物都保存好了，调 cleanup_workspace('large') 删掉 parquet 和 duckdb 省空间。"
-         "完成后调 check_plan(5) 验证。"
-     ),
-     "status": "pending",
-     "check": (
-         "# 确认产物已保存\n"
-         "import os\n"
-         "assert os.path.exists('output/result.json'), 'result.json 不存在'\n"
-     ),
-     "errors": []},
 ]
+

@@ -319,13 +319,17 @@ class AgentLoop:
 
     def _with_usage(self, result: dict) -> dict:
         """注入累计 token 统计到返回结果中。"""
+        total = self._total_input + self._total_output
         result["_token_usage"] = {
             "input_tokens": self._total_input,
             "output_tokens": self._total_output,
             "cache_hit_tokens": self._total_cache_hit,
             "cache_miss_tokens": self._total_cache_miss,
-            "total_tokens": self._total_input + self._total_output,
+            "total_tokens": total,
         }
+        logger.info("[agent] round=%d input=%d output=%d cache_hit=%d cache_miss=%d total=%d",
+                    self._round, self._total_input, self._total_output,
+                    self._total_cache_hit, self._total_cache_miss, total)
         return result
 
     def _parse_final_output(self, content: str) -> dict:

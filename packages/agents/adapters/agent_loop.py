@@ -36,6 +36,10 @@ class AgentLoop:
         self.reasoning_effort = llm_preset.get("reasoningEffort", "medium")
         self.analysis_params = analysis_params
         self._check_aborted = check_aborted
+        self._total_input = 0
+        self._total_output = 0
+        self._total_cache_hit = 0
+        self._total_cache_miss = 0
         self.messages: list[dict] = []
         self.tools = available_tool_call_for_agent(ws)
         self.tool_map = build_tool_map(ws)
@@ -69,6 +73,10 @@ class AgentLoop:
                     out = getattr(u, "completion_tokens", 0) or 0
                     hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
                     miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
+                    self._total_input += inp
+                    self._total_output += out
+                    self._total_cache_hit += hit
+                    self._total_cache_miss += miss
                     logger.info("llm_usage %s",
                         json.dumps({
                             "report_id": self.ws.report_id, "pipeline": "custom",
@@ -86,7 +94,7 @@ class AgentLoop:
                 if not sr.tool_calls and sr.finish_reason != "tool_calls":
                     self._emit_log("custom_agent", f"✅ 分析完成，最终回答 {len(sr.content)} 字")
                     self._emit_status("custom_agent", "success")
-                    return self._parse_final_output(sr.content)
+                    return self._with_usage(self._parse_final_output(sr.content))
 
                 # ── 有 tool_calls → 执行工具 ──
                 if sr.tool_calls:
@@ -112,7 +120,7 @@ class AgentLoop:
                         self.messages.append(self._normalize_assistant_message(sr))
                         self._emit_log("custom_agent", f"✅ 分析完成，最终回答 {len(sr.content)} 字")
                         self._emit_status("custom_agent", "success")
-                        return self._parse_final_output(sr.content)
+                        return self._with_usage(self._parse_final_output(sr.content))
 
         except Exception as e:
             # 用户强制停止 → 让 PipelineAbortedError 透传
@@ -121,12 +129,12 @@ class AgentLoop:
             logger.exception("[agent] 循环异常")
             self._emit_log("custom_agent", f"❌ Agent 循环异常: {str(e)[:300]}")
             self._emit_status("custom_agent", "error")
-            return {"full_report": f"Agent 执行异常: {e}", "cards": [], "metrics": [],
-                    "mapping": [], "warnings": [str(e)]}
+            return self._with_usage({"full_report": f"Agent 执行异常: {e}", "cards": [], "metrics": [],
+                                      "mapping": [], "warnings": [str(e)]})
 
         self._emit_log("custom_agent", f"达到最大轮次 {max_rounds}")
         self._emit_status("custom_agent", "max_rounds")
-        return self._parse_final_output("")
+        return self._with_usage(self._parse_final_output(""))
 
     # ── 内部 ──
 
@@ -308,6 +316,17 @@ class AgentLoop:
         except Exception as e:
             logger.error("tool_exec_error tool=%s error=%s", name, e)
             return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+    def _with_usage(self, result: dict) -> dict:
+        """注入累计 token 统计到返回结果中。"""
+        result["_token_usage"] = {
+            "input_tokens": self._total_input,
+            "output_tokens": self._total_output,
+            "cache_hit_tokens": self._total_cache_hit,
+            "cache_miss_tokens": self._total_cache_miss,
+            "total_tokens": self._total_input + self._total_output,
+        }
+        return result
 
     def _parse_final_output(self, content: str) -> dict:
         """从最终回答中解析 AgentResult JSON。"""

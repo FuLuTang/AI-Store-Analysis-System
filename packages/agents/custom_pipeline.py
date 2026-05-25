@@ -75,7 +75,8 @@ class CustomPipeline(AgentPipeline):
             elapsed_ms = (time.time() - t0) * 1000
 
             # ── Agent 已将产物写入 workspace，API 直接读文件 ──
-            cards, full_report, metrics = self._read_agent_outputs(ws)
+            token_usage = output.get("_token_usage", {})
+            cards, full_report, metrics = self._read_agent_outputs(ws, token_usage)
             return AgentResult(
                 report_id=ws.report_id,
                 pipeline=self.name,
@@ -83,6 +84,10 @@ class CustomPipeline(AgentPipeline):
                 metrics=metrics,
                 cards=cards,
                 full_report=full_report,
+                total_tokens=token_usage.get("total_tokens", 0),
+                input_tokens=token_usage.get("input_tokens", 0),
+                cache_hit_tokens=token_usage.get("cache_hit_tokens", 0),
+                cache_miss_tokens=token_usage.get("cache_miss_tokens", 0),
             )
 
         finally:
@@ -108,7 +113,7 @@ class CustomPipeline(AgentPipeline):
             plan[0]["status"] = "in_progress"
             plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _read_agent_outputs(self, ws: Workspace) -> tuple[list, str, list]:
+    def _read_agent_outputs(self, ws: Workspace, token_usage: dict | None = None) -> tuple[list, str, list]:
         """从 workspace 文件组装 Agent 最终产物，程序化写入 output/result.json。"""
         cards = []
         full_report = ""
@@ -142,6 +147,8 @@ class CustomPipeline(AgentPipeline):
             pass
 
         result = {"cards": cards, "full_report": full_report, "metrics": metrics}
+        if token_usage:
+            result["token_usage"] = token_usage
         try:
             result_path = ws.resolve("output/result.json")
             result_path.parent.mkdir(parents=True, exist_ok=True)

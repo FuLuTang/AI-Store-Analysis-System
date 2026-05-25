@@ -64,8 +64,8 @@ class AgentLoop:
                 # ── 缓存 & token 日志（仅文件日志，不推 SSE）──
                 if sr.usage:
                     u = sr.usage
-                    inp = getattr(u, "prompt_tokens", 0)
-                    out = getattr(u, "completion_tokens", 0)
+                    inp = getattr(u, "prompt_tokens", 0) or 0
+                    out = getattr(u, "completion_tokens", 0) or 0
                     hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
                     miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
                     logger.info("llm_usage %s",

@@ -151,7 +151,7 @@ class AgentLoop:
                 last_exc = e
                 logger.error("[round_%d] API 调用失败 (attempt %d/3): %s", self._round, attempt + 1, str(e))
                 if attempt < 2 and _is_retryable(e):
-                    self._emit_log("custom_agent", f"⏳ API 调用失败，15 秒后重试 ({attempt + 1}/2)...")
+                    self._emit_log("custom_agent", f"⏳ API 调用失败: {str(e)[:100]}，15 秒后重试 ({attempt + 1}/2)...")
                     time.sleep(15)
                 else:
                     self._emit_log("custom_agent", f"❌ API 调用失败: {str(e)[:300]}")

@@ -58,8 +58,6 @@ def validate_analysis_params(raw):
                 entry = {"key": item.get("key", ""), "value": item.get("value", "")}
                 if "options" in item:
                     entry["options"] = item["options"]
-                if "type" in item:
-                    entry["type"] = item["type"]
                 if "min" in item:
                     entry["min"] = item["min"]
                 if "max" in item:

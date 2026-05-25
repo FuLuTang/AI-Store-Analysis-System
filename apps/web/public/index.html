@@ -587,15 +587,12 @@
         function detectControlType(item) {
             if (item.options && Array.isArray(item.options) && item.options.length) return 'select';
             if (typeof item.value === 'boolean') return 'toggle';
-            if (item.type === 'slider') return 'slider';
-            if (item.type === 'number') return 'number';
-            if (item.type === 'text') return 'text';
-            if (item.type === 'date') return 'date';
             if (typeof item.value === 'number') {
-                if (Number.isInteger(item.value)) return 'number';
-                if (item.value >= 0 && item.value <= 1) return 'slider';
+                if (item.step !== undefined) return 'slider';
+                if (item.min !== undefined && item.max !== undefined) return 'slider';
                 return 'number';
             }
+            if (typeof item.value === 'string' && /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(item.value)) return 'date';
             return 'text';
         }
 
@@ -636,11 +633,7 @@
                         <span class="param-slider-val" style="font-size:0.8rem;color:var(--text-muted);min-width:32px;">${pct}%</span>
                     </div>`;
                 } else if (ctrlType === 'number') {
-                    ctrlHtml = `<div style="display:inline-flex;align-items:center;gap:2px;">
-                        <button class="param-num-btn" data-idx="${i}" data-dir="-1" style="width:24px;height:24px;border:1px solid #e2e8f0;border-radius:4px;background:#f8fafc;cursor:pointer;font-size:1rem;line-height:1;">−</button>
-                        <input type="number" class="param-number" data-idx="${i}" value="${value}" ${minVal !== undefined ? `min="${minVal}"` : ''} ${maxVal !== undefined ? `max="${maxVal}"` : ''} style="width:60px;padding:2px 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;text-align:center;">
-                        <button class="param-num-btn" data-idx="${i}" data-dir="1" style="width:24px;height:24px;border:1px solid #e2e8f0;border-radius:4px;background:#f8fafc;cursor:pointer;font-size:1rem;line-height:1;">+</button>
-                    </div>`;
+                    ctrlHtml = `<input type="number" class="param-number" data-idx="${i}" value="${value}" ${minVal !== undefined ? `min="${minVal}"` : ''} ${maxVal !== undefined ? `max="${maxVal}"` : ''} style="width:80px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;">`;
                 } else if (ctrlType === 'date') {
                     ctrlHtml = `<input type="date" class="param-date" data-idx="${i}" value="${value || ''}" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;">`;
                 } else {
@@ -717,23 +710,7 @@
                     sl.parentNode.querySelector('.param-slider-val').textContent = pct + '%';
                 };
             });
-            // number stepper buttons
-            document.querySelectorAll('.param-num-btn').forEach(btn => {
-                btn.onclick = () => {
-                    const idx = parseInt(btn.dataset.idx);
-                    const inp = document.querySelector(`.param-number[data-idx="${idx}"]`);
-                    if (!inp) return;
-                    const dir = parseInt(btn.dataset.dir);
-                    const step = parseFloat(inp.step) || 1;
-                    let val = parseFloat(inp.value) || 0;
-                    val = Math.round((val + dir * step) * 100) / 100;
-                    if (inp.min !== '' && val < parseFloat(inp.min)) val = parseFloat(inp.min);
-                    if (inp.max !== '' && val > parseFloat(inp.max)) val = parseFloat(inp.max);
-                    inp.value = val;
-                    if (paramsData[idx]) paramsData[idx].value = val;
-                };
-            });
-            // number input direct change
+            // number input change
             document.querySelectorAll('.param-number').forEach(inp => {
                 inp.oninput = () => {
                     const idx = parseInt(inp.dataset.idx);
@@ -741,11 +718,21 @@
                     if (paramsData[idx]) paramsData[idx].value = val;
                 };
             });
+            // date 输入
+            document.querySelectorAll('.param-date').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = inp.value || '';
+                };
+            });
         }
 
         function collectParamsData() {
-            // 收集 + 清理：移除空 key 的行
-            return paramsData.filter(item => item && item.key && item.key.trim() !== '');
+            // 收集 + 清理：移除空 key 的行，去掉 UI 冗余字段
+            return paramsData.filter(item => item && item.key && item.key.trim() !== '').map(item => {
+                const { type, ...rest } = item;
+                return rest;
+            });
         }
 
         async function loadAnalysisParams() {
@@ -876,7 +863,6 @@
                 extras.innerHTML = `<div style="display:flex;gap:1rem;"><div class="form-group" style="flex:1;"><label>最小值</label><input id="peMin" type="number" class="form-input" step="0.01" value="0"></div><div class="form-group" style="flex:1;"><label>最大值</label><input id="peMax" type="number" class="form-input" step="0.01" value="1"></div></div>`;
             } else if (type === 'number') {
                 inner.innerHTML = `<input id="peValue" type="number" class="form-input" value="0" placeholder="0">`;
-                extras.innerHTML = `<div style="display:flex;gap:1rem;"><div class="form-group" style="flex:1;"><label>最小值</label><input id="peMin" type="number" class="form-input" value="0"></div><div class="form-group" style="flex:1;"><label>最大值</label><input id="peMax" type="number" class="form-input" value="100"></div></div>`;
             } else if (type === 'date') {
                 inner.innerHTML = `<input id="peValue" type="date" class="form-input" value="">`;
             } else {
@@ -900,15 +886,10 @@
                 value = parseFloat(document.getElementById('peValue').value) || 0.5;
                 extra.min = parseFloat(document.getElementById('peMin').value) || 0;
                 extra.max = parseFloat(document.getElementById('peMax').value) || 1;
-                extra.type = 'slider';
             } else if (type === 'number') {
                 value = parseFloat(document.getElementById('peValue').value) || 0;
-                extra.min = parseFloat(document.getElementById('peMin').value) || 0;
-                extra.max = parseFloat(document.getElementById('peMax').value) || 100;
-                extra.type = 'number';
             } else if (type === 'date') {
                 value = document.getElementById('peValue').value || '';
-                extra.type = 'date';
             } else {
                 value = document.getElementById('peValue').value || '';
             }

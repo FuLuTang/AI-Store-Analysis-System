@@ -352,7 +352,7 @@ def _is_retryable(e: Exception) -> bool:
         status = e.status_code
     elif hasattr(e, "response"):
         status = getattr(e.response, "status_code", 0)
-    return status in (429, 500, 502, 503) or "负载" in msg or "rate limit" in msg or "timeout" in msg or "timed out" in msg
+    return status in (429, 500, 502, 503) or "负载" in msg or "rate limit" in msg or "timeout" in msg or "timed out" in msg or "closed connection" in msg or "incomplete chunked" in msg
 
 
 def _tool_target(name: str, args_json: str) -> str:

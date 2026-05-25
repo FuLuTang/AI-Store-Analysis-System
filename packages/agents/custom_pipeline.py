@@ -75,15 +75,12 @@ class CustomPipeline(AgentPipeline):
             elapsed_ms = (time.time() - t0) * 1000
 
             # ── Agent 已将产物写入 workspace，API 直接读文件 ──
-            cards, full_report = self._read_agent_outputs(ws)
+            cards, full_report, metrics = self._read_agent_outputs(ws)
             return AgentResult(
                 report_id=ws.report_id,
                 pipeline=self.name,
                 elapsed_ms=elapsed_ms,
-                scene=output.get("scene"),
-                mapping=output.get("mapping", []),
-                metrics=output.get("metrics", []),
-                warnings=output.get("warnings", []),
+                metrics=metrics,
                 cards=cards,
                 full_report=full_report,
             )
@@ -111,40 +108,45 @@ class CustomPipeline(AgentPipeline):
             plan[0]["status"] = "in_progress"
             plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _read_agent_outputs(self, ws: Workspace) -> tuple[list, str]:
-        """从 workspace 文件读取 Agent 的最终产物。
-        cards 优先从 output/result.json（Agent validate 校验过的文件）读取，
-        其次从 summary_short.json 读取。
-        """
+    def _read_agent_outputs(self, ws: Workspace) -> tuple[list, str, list]:
+        """从 workspace 文件组装 Agent 最终产物，程序化写入 output/result.json。"""
         cards = []
         full_report = ""
+        metrics = []
 
         try:
-            result_path = ws.resolve("output/result.json")
-            if result_path.exists():
-                result_data = json.loads(result_path.read_text(encoding="utf-8"))
-                if isinstance(result_data, dict):
-                    cards = result_data.get("cards", [])
-                    full_report = result_data.get("full_report", "")
+            short_path = ws.resolve("summary_short.json")
+            if short_path.exists():
+                short = json.loads(short_path.read_text(encoding="utf-8"))
+                if isinstance(short, dict):
+                    cards = short.get("cards", [])
         except Exception:
             pass
 
-        if not cards:
-            try:
-                short_path = ws.resolve("summary_short.json")
-                if short_path.exists():
-                    short = json.loads(short_path.read_text(encoding="utf-8"))
-                    if isinstance(short, dict):
-                        cards = short.get("cards", [])
-            except Exception:
-                pass
+        try:
+            summary_path = ws.resolve("summary.md")
+            if summary_path.exists():
+                full_report = summary_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
 
-        if not full_report:
-            try:
-                summary_path = ws.resolve("summary.md")
-                if summary_path.exists():
-                    full_report = summary_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
+        try:
+            metrics_path = ws.resolve("output/指标.json")
+            if metrics_path.exists():
+                data = json.loads(metrics_path.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    metrics = data
+                elif isinstance(data, dict):
+                    metrics = data.get("metrics", data.get("indicators", []))
+        except Exception:
+            pass
 
-        return cards, full_report
+        result = {"cards": cards, "full_report": full_report, "metrics": metrics}
+        try:
+            result_path = ws.resolve("output/result.json")
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+        return cards, full_report, metrics

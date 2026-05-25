@@ -399,7 +399,6 @@ def _tool_target(name: str, args_json: str) -> str:
         "read_context": lambda a: f"读取上下文: {a.get('topic', '?')}",
         "read_plan": lambda a: "读取任务计划",
         "check_plan": lambda a: f"检查步骤 {a.get('step_index', '?')} 是否完成",
-        "validate_result": lambda a: "校验结果格式",
     }
     fn = labels.get(name)
     if fn:

@@ -98,12 +98,7 @@ PLAN_TEMPLATE = [
          '\"suggestion\": \"咋办\", \"evidence\": \"数据证据（优先 Markdown 迷你表格）\", '
          '\"color\": \"red/yellow/green/blue/pink\"}]}。'
          "cards 最多 7 个；color: red=报警 yellow=关注 green=正常 blue=信息 pink=数据口径不一致。"
-         "2) 写 output/result.json — 完整的 AgentResult JSON，顶级字段: "
-         "scene（对象: industry/business_model/data_scope/analysis_goal）、"
-         "mapping（列表: raw_field/table/semantic_field/confidence/reason）、"
-         "metrics（列表: metric_id/name/value/unit/status/reason/evidence）、"
-         "warnings（字符串列表）、cards（同上）、full_report（summary.md 的完整内容）。"
-         "先调 validate_result(json_str) 校验格式，通过后再 write_file 写入。"
+         "2) output/result.json 由系统自动组装，无需手动写入。"
          "完成后调 check_plan(4) 验证。"
      ),
      "status": "pending",

@@ -158,18 +158,6 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
                 "required": ["step_index"],
             },
         ),
-        _make_tool(
-            name="validate_result",
-            description="校验最终 AgentResult JSON 的完整性和格式正确性。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "result_json": {"type": "string", "description": "AgentResult 的 JSON 字符串"},
-                },
-                "required": ["result_json"],
-            },
-        ),
-    ]
 
 
 def build_tool_map(ws: Workspace) -> dict:
@@ -181,8 +169,6 @@ def build_tool_map(ws: Workspace) -> dict:
     from ..tools.impl.context_impl import read_context_impl
     from ..tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
     from ..tools.impl.plan_check_impl import run_step_check
-    from ..tools.impl.validate_impl import validate_result_impl
-
     def _read_document(path: str) -> str:
         return read_document_impl(ws, path)
 
@@ -254,13 +240,6 @@ def build_tool_map(ws: Workspace) -> dict:
             result["advanced"] = True
         return json.dumps(result, ensure_ascii=False)
 
-    def _validate_result(result_json: str) -> str:
-        try:
-            parsed = json.loads(result_json) if isinstance(result_json, str) else result_json
-        except json.JSONDecodeError as e:
-            return json.dumps({"valid": False, "errors": f"JSON 解析失败: {e}"})
-        return validate_result_impl(parsed)
-
     return {
         "read_document": _read_document,
         "extract_document_tables": _extract_document_tables,
@@ -274,7 +253,6 @@ def build_tool_map(ws: Workspace) -> dict:
         "read_context": _read_context,
         "read_plan": _read_plan,
         "check_plan": _check_plan,
-        "validate_result": _validate_result,
     }
 
 

@@ -1136,5 +1136,145 @@ hr {
 @media (max-width: 768px) {
     .masonry-grid {
         grid-template-columns: 1fr;
+        gap: 1rem;
     }
+}
+
+@media (max-width: 640px) {
+    body { padding: 0.75rem; }
+
+    .container { max-width: 100%; }
+
+    h1 { font-size: 1.4rem; }
+    .subtitle { font-size: 0.9rem; margin-bottom: 1rem; }
+
+    nav {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    nav a { font-size: 0.85rem; padding: 0.3rem 0; }
+    nav .active { margin-bottom: -0.3rem; }
+    .nav-right {
+        width: 100%;
+        margin-left: 0;
+        justify-content: flex-end;
+        gap: 0.4rem;
+        padding-top: 0.3rem;
+        border-top: 1px solid var(--border);
+    }
+    .nav-select { font-size: 0.75rem; padding: 0.3rem 0.5rem; }
+    .nav-right .nav-btn { font-size: 0.75rem; padding: 0.3rem 0.5rem; }
+
+    .card, .card-glass { padding: 1rem; }
+
+    .drop-zone {
+        padding: 1.5rem 1rem;
+        margin-bottom: 1rem;
+    }
+    .drop-zone i { font-size: 1.8rem; }
+    .drop-zone p { font-size: 0.85rem; }
+
+    .action-bar {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    .action-bar .btn,
+    .action-bar .btn-secondary,
+    .action-bar .btn-danger {
+        width: 100%;
+        justify-content: center;
+        font-size: 0.85rem;
+    }
+
+    .modal-actions { gap: 0.5rem; }
+    .modal-actions .btn,
+    .modal-actions .btn-secondary {
+        font-size: 0.8rem;
+        padding: 0.5rem 1rem;
+    }
+
+    #paramEditorModal > div {
+        padding: 1rem !important;
+        max-width: 96% !important;
+    }
+
+    .param-row {
+        flex-wrap: wrap;
+        gap: 4px !important;
+        padding: 4px 0 !important;
+    }
+    .param-row input,
+    .param-row select {
+        font-size: 0.8rem !important;
+    }
+    .param-key { width: 100% !important; }
+    .param-text { width: 100% !important; }
+    .param-number { width: 80px !important; }
+    .param-slider { width: 80px !important; }
+    .param-date { width: 140px !important; }
+    .param-select { max-width: 140px !important; }
+    .param-del { font-size: 0.9rem !important; }
+
+    .params-body .btn-sm { font-size: 0.75rem !important; padding: 3px 10px !important; }
+    .param-actions { gap: 4px; }
+
+    .file-list { gap: 0.3rem; }
+    .file-item { font-size: 0.75rem; padding: 0.2rem 0.4rem; }
+
+    .dashboard-overview { padding: 1rem; }
+    .dashboard-overview h2 { font-size: 1.2rem; }
+
+    .issue-card { padding: 1rem; }
+    .issue-title { font-size: 1rem; padding-right: 1.5rem; }
+    .issue-explanation { font-size: 0.85rem; }
+    .issue-suggestion { font-size: 0.85rem; padding: 0.5rem; }
+    .evidence-tooltip {
+        width: calc(100vw - 2rem);
+        min-width: 0;
+        right: -1rem;
+        font-size: 0.8rem;
+        padding: 0.75rem;
+    }
+
+    .report-section { gap: 1rem; margin-top: 1rem; }
+    .report-card { padding: 1rem; }
+
+    .markdown-body { font-size: 0.9rem; }
+    .markdown-body table { font-size: 0.75rem; }
+    .markdown-body th,
+    .markdown-body td { padding: 0.4rem 0.5rem; }
+    .markdown-body h1 { font-size: 1.2rem; }
+    .markdown-body h2 { font-size: 1.1rem; }
+    .markdown-body h3 { font-size: 1rem; }
+
+    .progress-section { margin: 20px auto 5px; padding: 15px 0 0; }
+    .progress-header { font-size: 0.8rem; }
+    .log-container { font-size: 0.7rem; height: 120px; padding: 10px; }
+
+    .report-toggle { gap: 0.3rem; }
+    .report-toggle span { font-size: 0.8rem; }
+    .switch { width: 38px; height: 20px; }
+    .slider:before { height: 14px; width: 14px; left: 3px; bottom: 3px; }
+    input:checked + .slider:before { transform: translateX(18px); }
+
+    .form-input, .form-select, select, textarea { font-size: 0.85rem; padding: 0.5rem 0.6rem; }
+    .form-group { margin-bottom: 0.75rem; }
+
+    .flow-row { flex-direction: column; align-items: stretch; gap: 0.75rem; }
+    .node { width: 100%; }
+
+    details.analysis-params-details summary { font-size: 0.85rem; }
+
+    #presetSelect { font-size: 0.8rem !important; max-width: 100%; }
+}
+
+@media (max-width: 400px) {
+    body { padding: 0.5rem; }
+    h1 { font-size: 1.2rem; }
+    nav a { font-size: 0.8rem; }
+    .nav-right { flex-wrap: wrap; }
+    .card, .card-glass { padding: 0.75rem; }
+    .drop-zone { padding: 1rem 0.75rem; }
+    .drop-zone i { font-size: 1.5rem; }
 }

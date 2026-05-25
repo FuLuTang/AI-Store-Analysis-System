@@ -109,14 +109,14 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
         ),
         _make_tool(
             name="duckdb_register_parquet",
-            description="将 workspace 中的 parquet 或 JSON 数据文件注册为 DuckDB 视图，自动识别后缀。JSON 文件应为行对象数组 [{\"col\": val}, ...]。",
+            description="将 workspace 中的 parquet 文件注册为 DuckDB 视图。",
             parameters={
                 "type": "object",
                 "properties": {
                     "table_name": {"type": "string", "description": "注册后的表名"},
                     "parquet_path": {
                         "type": "string",
-                        "description": "文件的相对路径，如 'tables/sales.parquet' 或 'tables/data.json'",
+                        "description": "parquet 文件的相对路径，如 'tables/sales.parquet'",
                     },
                 },
                 "required": ["table_name", "parquet_path"],

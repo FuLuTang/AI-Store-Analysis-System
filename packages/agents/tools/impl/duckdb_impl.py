@@ -30,10 +30,7 @@ def duckdb_register_parquet_impl(ws: Workspace, table_name: str, parquet_path: s
         if not p.is_absolute():
             p = ws.dir / parquet_path
         abs_path = str(p.resolve())
-        if p.suffix.lower() == ".json":
-            con.execute(f"CREATE OR REPLACE VIEW {safe_table} AS SELECT * FROM read_json_auto('{abs_path}')")
-        else:
-            con.execute(f"CREATE OR REPLACE VIEW {safe_table} AS SELECT * FROM read_parquet('{abs_path}')")
+        con.execute(f"CREATE OR REPLACE VIEW {safe_table} AS SELECT * FROM read_parquet('{abs_path}')")
         row_count = con.execute(f"SELECT COUNT(*) FROM {safe_table}").fetchone()[0]
         return f"表 {table_name} 已注册, {row_count} 行"
     finally:

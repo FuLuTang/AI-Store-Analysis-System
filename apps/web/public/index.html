@@ -590,6 +590,7 @@
             if (item.type === 'slider') return 'slider';
             if (item.type === 'number') return 'number';
             if (item.type === 'text') return 'text';
+            if (item.type === 'date') return 'date';
             if (typeof item.value === 'number') {
                 if (Number.isInteger(item.value)) return 'number';
                 if (item.value >= 0 && item.value <= 1) return 'slider';

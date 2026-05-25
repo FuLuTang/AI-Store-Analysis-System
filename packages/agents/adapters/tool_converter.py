@@ -25,24 +25,6 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
                 "required": ["path"],
             },
         ),
-        _make_tool(
-            name="extract_document_tables",
-            description="从文档中提取结构化表格数据，返回 JSON 行数组。支持 xlsx, csv, pdf, docx。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "workspace 内的相对路径，如 'input/sales.xlsx'",
-                    },
-                    "sheet": {
-                        "type": "string",
-                        "description": "Sheet 名称（可选），不区分大小写。留空则使用第一个 sheet",
-                    },
-                },
-                "required": ["path"],
-            },
-        ),
         # ── 文件读写 ──
         _make_tool(
             name="read_file",
@@ -158,11 +140,12 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
                 "required": ["step_index"],
             },
         ),
+    ]
 
 
 def build_tool_map(ws: Workspace) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。"""
-    from ..tools.impl.doc_impl import read_document_impl, extract_document_tables_impl
+    from ..tools.impl.doc_impl import read_document_impl
     from ..tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
     from ..tools.impl.python_impl import run_python_impl
     from ..tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
@@ -171,9 +154,6 @@ def build_tool_map(ws: Workspace) -> dict:
     from ..tools.impl.plan_check_impl import run_step_check
     def _read_document(path: str) -> str:
         return read_document_impl(ws, path)
-
-    def _extract_document_tables(path: str, sheet: str = "") -> str:
-        return extract_document_tables_impl(ws, path, sheet)
 
     def _read_file(path: str) -> str:
         return read_file_impl(ws, path)
@@ -242,7 +222,6 @@ def build_tool_map(ws: Workspace) -> dict:
 
     return {
         "read_document": _read_document,
-        "extract_document_tables": _extract_document_tables,
         "read_file": _read_file,
         "write_file": _write_file,
         "list_files": _list_files,

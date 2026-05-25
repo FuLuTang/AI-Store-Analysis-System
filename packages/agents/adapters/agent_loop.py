@@ -412,7 +412,6 @@ def _tool_target(name: str, args_json: str) -> str:
     # 按工具名返回可读的描述
     labels = {
         "read_document": lambda a: f"读取 {a.get('path', '?')}",
-        "extract_document_tables": lambda a: f"提取 {a.get('path', '?')} 的表格数据",
         "read_file": lambda a: f"读取 {a.get('path', '?')}",
         "write_file": lambda a: f"写入 {a.get('path', '?')}",
         "list_files": lambda a: f"列出 {a.get('subdir', '根目录')}/ 目录",

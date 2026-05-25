@@ -8,7 +8,7 @@ from ..tools.impl.context_impl import read_context_impl
 from ..tools.impl.profile_impl import profile_table_impl
 from ..tools.impl.validate_impl import validate_result_impl
 from ..tools.impl.setup_impl import setup_workspace_impl, cleanup_workspace_impl, list_tables_impl
-from ..tools.impl.doc_impl import read_document_impl, extract_document_tables_impl
+from ..tools.impl.doc_impl import read_document_impl
 
 
 def build_smol_tools(ws: Workspace, emit_log=None):
@@ -197,23 +197,6 @@ def build_smol_tools(ws: Workspace, emit_log=None):
         """
         return read_document_impl(ws, path)
 
-    @tool
-    def extract_document_tables(path: str, sheet: str = "") -> str:
-        """Extract structured table data from a document as JSON rows.
-
-        Supports xlsx, csv, pdf, docx.
-        For xlsx: extracts the given sheet (or first sheet if not specified).
-        For csv: extracts all rows.
-        For pdf: extracts tables from all pages.
-        For docx: extracts tables from the document.
-        Each row is a dict with column names as keys.
-
-        Args:
-            path: Relative path in workspace, e.g. 'input/sales.xlsx'.
-            sheet: (Optional) Sheet name to extract. Case-insensitive partial match. Leave empty for auto/first.
-        """
-        return extract_document_tables_impl(ws, path, sheet)
-
     return [
         read_file, write_file, list_files,
         run_python,
@@ -223,5 +206,5 @@ def build_smol_tools(ws: Workspace, emit_log=None):
         validate_result,
         setup_workspace, list_tables,
         read_plan, check_plan,
-        read_document, extract_document_tables,
+        read_document,
     ]

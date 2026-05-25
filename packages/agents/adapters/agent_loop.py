@@ -29,12 +29,13 @@ if not logger.handlers:
 class AgentLoop:
     """薄封装：OpenAI SDK 客户端 + messages 管理 + tool 执行。"""
 
-    def __init__(self, client: OpenAI, ws: Workspace, llm_preset: dict, emit_log=None, emit_status=None, analysis_params: str = ""):
+    def __init__(self, client: OpenAI, ws: Workspace, llm_preset: dict, emit_log=None, emit_status=None, analysis_params: str = "", check_aborted=None):
         self.client = client
         self.ws = ws
         self.model = llm_preset.get("model", "deepseek-chat")
         self.reasoning_effort = llm_preset.get("reasoningEffort", "medium")
         self.analysis_params = analysis_params
+        self._check_aborted = check_aborted
         self.messages: list[dict] = []
         self.tools = available_tool_call_for_agent(ws)
         self.tool_map = build_tool_map(ws)
@@ -114,6 +115,9 @@ class AgentLoop:
                         return self._parse_final_output(sr.content)
 
         except Exception as e:
+            # 用户强制停止 → 让 PipelineAbortedError 透传
+            if "aborted" in type(e).__name__.lower() or "强制" in str(e):
+                raise
             logger.exception("[agent] 循环异常")
             self._emit_log("custom_agent", f"❌ Agent 循环异常: {str(e)[:300]}")
             self._emit_status("custom_agent", "error")
@@ -151,8 +155,15 @@ class AgentLoop:
                 last_exc = e
                 logger.error("[round_%d] API 调用失败 (attempt %d/3): %s", self._round, attempt + 1, str(e))
                 if attempt < 2 and _is_retryable(e):
-                    self._emit_log("custom_agent", f"⏳ API 调用失败: {str(e)[:100]}，15 秒后重试 ({attempt + 1}/2)...")
-                    time.sleep(15)
+                    self._emit_log("custom_agent", f"⏳ API 调用失败: {str(e)[:100]}，15 秒后重试 ({attempt + 1}/2)，可点强制停止中断...")
+                    for _ in range(15):
+                        if self._check_aborted:
+                            try:
+                                self._check_aborted()
+                            except Exception:
+                                self._emit_log("custom_agent", "⛔ 用户已强制停止")
+                                raise
+                        time.sleep(1)
                 else:
                     self._emit_log("custom_agent", f"❌ API 调用失败: {str(e)[:300]}")
                     raise

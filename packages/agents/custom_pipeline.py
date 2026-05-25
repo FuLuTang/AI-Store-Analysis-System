@@ -68,6 +68,7 @@ class CustomPipeline(AgentPipeline):
                 analysis_params=self._analysis_params,
                 emit_log=self._emit_log,
                 emit_status=self._emit_status,
+                check_aborted=self._check_aborted,
             )
             output = await asyncio.to_thread(loop.run)
 

@@ -56,14 +56,15 @@ do_deploy() {
     rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/cache/apt/archives/lock
     apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends
 
-    # 处理虚拟环境 (确保 activate 脚本存在)
+    # 处理虚拟环境 (每次重建确保干净，避免中断残留导致包损坏)
+    echo "==> 正在创建 Python 虚拟环境..."
+    rm -rf venv
+    python3 -m venv venv
     if [ ! -f "venv/bin/activate" ]; then
-        echo "==> 正在创建 Python 虚拟环境..."
-        rm -rf venv
-        python3 -m venv venv
+        echo "❌ 虚拟环境创建失败！"
+        exit 1
     fi
     . venv/bin/activate
-    pip install --upgrade pip
     pip install -r requirements.txt
 
     # 询问是否安装完整依赖（pydantic-ai + smolagents）

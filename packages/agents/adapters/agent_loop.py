@@ -344,7 +344,7 @@ def _plan_step_tag(ws) -> str:
 
 
 def _is_retryable(e: Exception) -> bool:
-    """429 / 5xx 可重试，其他直接报错。"""
+    """429 / 5xx / APIConnectionError 可重试，其他直接报错。"""
     msg = str(e).lower()
     status = getattr(e, "status_code", 0) or getattr(e, "code", 0)
     # openai.RateLimitError / openai.APIStatusError
@@ -352,7 +352,20 @@ def _is_retryable(e: Exception) -> bool:
         status = e.status_code
     elif hasattr(e, "response"):
         status = getattr(e.response, "status_code", 0)
-    return status in (429, 500, 502, 503) or "负载" in msg or "rate limit" in msg or "timeout" in msg or "timed out" in msg or "closed connection" in msg or "incomplete chunked" in msg
+    if status in (429, 500, 502, 503):
+        return True
+    if "负载" in msg or "rate limit" in msg:
+        return True
+    if "timeout" in msg or "timed out" in msg:
+        return True
+    if "closed connection" in msg or "incomplete chunked" in msg:
+        return True
+    if "connection error" in msg or "connection refused" in msg:
+        return True
+    # openai.APIConnectionError 类名匹配
+    if "APIConnectionError" in type(e).__name__:
+        return True
+    return False
 
 
 def _tool_target(name: str, args_json: str) -> str:

@@ -4,7 +4,7 @@
 """
 
 import json
-from ..workspace import Workspace
+from .workspace import Workspace
 
 
 def available_tool_call_for_agent(ws: Workspace) -> list[dict]:

@@ -14,7 +14,7 @@ import sys
 import time
 from openai import OpenAI
 
-from ..workspace import Workspace
+from .workspace import Workspace
 from .prompt_builder import build_system_content, build_user_content
 from .tool_converter import available_tool_call_for_agent, build_tool_map
 
@@ -62,6 +62,14 @@ class AgentLoop:
         try:
             for self._round in range(max_rounds):
                 sr = self._call_api()
+
+                # ── 流式返回后立即检查：用户可能在 API 调用期间点了强制停止 ──
+                if self._check_aborted:
+                    try:
+                        self._check_aborted()
+                    except Exception:
+                        self._emit_log("custom_agent", "⛔ 用户已强制停止")
+                        raise
 
                 # ── 保存 assistant message ──
                 self.messages.append(self._normalize_assistant_message(sr))
@@ -145,7 +153,6 @@ class AgentLoop:
             "messages": self.messages,
             "tools": self.tools,
             "stream": True,
-            "stream_options": {"include_usage": True},
         }
         if self.reasoning_effort:
             kwargs["reasoning_effort"] = self.reasoning_effort
@@ -186,7 +193,7 @@ class AgentLoop:
         usage = None
         finish = "stop"
 
-        for chunk in stream:
+        for _chunk_count, chunk in enumerate(stream):
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -216,6 +223,13 @@ class AgentLoop:
             # usage 通常在最后一个 chunk
             if chunk.usage:
                 usage = chunk.usage
+
+            # 流式传输中定期检查强制停止
+            if self._check_aborted and _chunk_count % 20 == 0:
+                try:
+                    self._check_aborted()
+                except Exception:
+                    raise
 
         elapsed = (time.time() - t0) * 1000
         reasoning = "".join(reasoning_parts)
@@ -288,8 +302,8 @@ class AgentLoop:
                  "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                 for tc in sr.tool_calls
             ]
-            if reasoning:
-                saved["reasoning_content"] = reasoning
+            # 有 tool_calls 时必须传 reasoning_content，即使为空
+            saved["reasoning_content"] = reasoning or ""
 
         return saved
 

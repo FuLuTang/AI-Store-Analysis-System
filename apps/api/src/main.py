@@ -564,11 +564,30 @@ def add_status(session: SessionState, node_id: str, status: str):
     emit_event(session, "status", {"nodeId": node_id, "status": status})
 
 
-def add_log(session: SessionState, node_id: str, message: str):
-    safe_message = _mask_sensitive_text(message)
-    log_entry = emit_event(session, "log", {"nodeId": node_id, "message": safe_message})
+def add_log(session: SessionState, node_id: str, message):
+    """支持 str 或 dict 格式的日志消息。
+
+    dict 格式示例:
+      {"level": "info", "message": "...", "step": {...}, "error_details": "..."}
+    level 可选: debug / info / status / error（默认 info）
+    """
+    if isinstance(message, dict):
+        level = message.get("level", "info")
+        raw_msg = message.get("message", "")
+        safe_msg = _mask_sensitive_text(raw_msg)
+        payload = {"nodeId": node_id, "level": level, "message": safe_msg}
+        if "step" in message:
+            payload["step"] = message["step"]
+        if "error_details" in message:
+            payload["error_details"] = _mask_sensitive_text(str(message["error_details"]))
+    else:
+        level = "info"
+        safe_msg = _mask_sensitive_text(str(message))
+        payload = {"nodeId": node_id, "level": level, "message": safe_msg}
+
+    log_entry = emit_event(session, "log", payload)
     hash_prefix = session.key_hash[:8]
-    logger.info("[%s] %s %s", log_entry["time"], hash_prefix, node_id)
+    logger.info("[%s] %s %s [%s]", log_entry["time"], hash_prefix, node_id, level)
 
 
 def add_progress(session: SessionState, node_id: str, current: int, total: int):

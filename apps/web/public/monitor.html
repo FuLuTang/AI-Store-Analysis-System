@@ -6,6 +6,174 @@
     <title>系统后台监控 - AI 分析系统</title>
     <link rel="stylesheet" href="index.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* ── 监控面板专用样式 ── */
+        .workflow-pipeline {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0;
+            padding: 2rem 1rem 1.5rem;
+        }
+        .workflow-node {
+            width: 100%;
+            max-width: 520px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            background: #fff;
+            transition: all 0.35s cubic-bezier(.4,0,.2,1);
+            position: relative;
+        }
+        .workflow-node .node-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 0.92rem;
+            color: #334155;
+        }
+        .workflow-node .node-header .step-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px; height: 26px;
+            border-radius: 50%;
+            background: #e2e8f0;
+            color: #64748b;
+            font-size: 0.72rem;
+            font-weight: 700;
+            flex-shrink: 0;
+            transition: background 0.3s, color 0.3s;
+        }
+        .workflow-node .node-header i.fa-icon {
+            font-size: 1rem;
+            color: #94a3b8;
+            transition: color 0.3s;
+        }
+        .workflow-node .node-log {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease;
+            font-size: 0.78rem;
+            color: #64748b;
+            margin-top: 0;
+            line-height: 1.5;
+        }
+        .workflow-node.active .node-log,
+        .workflow-node.success .node-log,
+        .workflow-node.error .node-log {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 0.5rem;
+        }
+
+        /* 状态色 */
+        .workflow-node.pending { border-color: #e2e8f0; }
+        .workflow-node.active {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+            animation: pulse-border 2s infinite;
+        }
+        .workflow-node.success {
+            border-color: var(--success);
+            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+        }
+        .workflow-node.error {
+            border-color: var(--error);
+            background: linear-gradient(135deg, #fef2f2 0%, #fff1f2 100%);
+        }
+        .workflow-node.active .step-badge { background: var(--primary); color: #fff; }
+        .workflow-node.success .step-badge { background: var(--success); color: #fff; }
+        .workflow-node.error .step-badge { background: var(--error); color: #fff; }
+        .workflow-node.active .node-header i.fa-icon { color: var(--primary); }
+        .workflow-node.success .node-header i.fa-icon { color: var(--success); }
+        .workflow-node.error .node-header i.fa-icon { color: var(--error); }
+
+        @keyframes pulse-border {
+            0%, 100% { box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+            50% { box-shadow: 0 0 0 6px rgba(99,102,241,0.08); }
+        }
+
+        /* 连接线 */
+        .workflow-connector {
+            width: 2px;
+            height: 24px;
+            background: #cbd5e1;
+            position: relative;
+        }
+        .workflow-connector::after {
+            content: '';
+            position: absolute;
+            bottom: -3px;
+            left: -3px;
+            width: 8px; height: 8px;
+            border-left: 2px solid #cbd5e1;
+            border-bottom: 2px solid #cbd5e1;
+            transform: rotate(-45deg);
+        }
+
+        /* 分组标签 */
+        .group-label {
+            font-size: 0.68rem;
+            color: #94a3b8;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 0.75rem 0 0.25rem;
+            text-align: center;
+        }
+        .group-label.first { margin-top: 0; }
+
+        /* 日志行 */
+        .log-line {
+            padding: 1px 0;
+            word-break: break-all;
+        }
+        .log-line .log-time {
+            color: #94a3b8;
+            font-size: 0.72rem;
+            margin-right: 4px;
+        }
+        .log-line.error-line {
+            color: #ef4444;
+            font-weight: 600;
+        }
+
+        /* 常驻状态栏 */
+        .status-banner {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0.6rem 1rem;
+            background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+            border: 1px solid #c7d2fe;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            font-size: 0.88rem;
+            color: #4338ca;
+            font-weight: 500;
+            min-height: 38px;
+            transition: all 0.3s;
+        }
+        .status-banner i { font-size: 1rem; }
+
+        /* 底部全局日志面板 */
+        .monitor-log-panel {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            max-height: 360px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.78rem;
+            line-height: 1.6;
+            color: #475569;
+        }
+        .monitor-log-panel::-webkit-scrollbar { width: 6px; }
+        .monitor-log-panel::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    </style>
 </head>
 <body>
     <div class="container" style="max-width:1200px;">
@@ -22,214 +190,110 @@
 
         <header>
             <h1>后台数据流转监视器</h1>
-            <p class="subtitle" style="margin-bottom: 1.5rem;">实时观察系统处理步骤与日志输出。支持多文件（JSON / Excel / CSV）管线。</p>
+            <p class="subtitle" style="margin-bottom: 1.5rem;">实时观察 Custom Agent 工作流各阶段运行状态与日志输出。</p>
         </header>
 
-        <!-- 管线标签 -->
-        <div class="pipeline-tabs">
-            <span class="pipeline-badge traditional">传统</span>
-            <span class="pipeline-badge pydantic">Pydantic Agent</span>
-            <span class="pipeline-badge smol">Smolagent</span>
+        <!-- 常驻状态栏 -->
+        <div class="status-banner" id="statusBanner">
+            <i class="fas fa-info-circle"></i>
+            <span id="statusBannerText">等待任务启动...</span>
         </div>
 
-        <!-- 流程图 -->
+        <!-- 可视化流程图 -->
         <div class="card" style="margin-bottom: 1.5rem;">
-            <div class="flow-container" id="flowContainer">
+            <div class="workflow-pipeline" id="workflowPipeline">
 
-                <!-- ========== 传统管线 ========== -->
-                <div class="pipeline-view" id="pipeline-traditional">
+                <div class="group-label first">🏗️ 准备阶段</div>
 
-                    <div class="flow-row">
-                        <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                            <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">数据接入 · 纯算法</div>
-                            <div id="input" class="node pending">
-                                <div class="node-title"><i class="fas fa-file-import"></i> <span>数据输入</span></div>
-                                <div class="node-log" id="log-input"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="profile" class="node pending">
-                                <div class="node-title"><i class="fas fa-chart-bar"></i> <span>数据画像</span></div>
-                                <div class="node-log" id="log-profile"></div>
-                            </div>
-                        </div>
+                <div class="workflow-node pending" id="custom_init">
+                    <div class="node-header">
+                        <span class="step-badge">1</span>
+                        <i class="fas fa-server fa-icon"></i>
+                        <span>环境初始化</span>
                     </div>
-
-                    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin:4px 0;">
-                        <div style="height:2px;flex:1;background:#94a3b8;"></div>
-                        <span style="font-size:0.7rem;color:#64748b;font-weight:600;">⬇ 并行 ⬇</span>
-                        <div style="height:2px;flex:1;background:#94a3b8;"></div>
-                    </div>
-
-                    <div style="display:flex;gap:1rem;">
-                        <div style="flex:1;min-width:0;">
-                            <div class="flow-row">
-                                <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #8b5cf6; background: #faf5ff;">
-                                    <div style="font-size: 0.65rem; color: #8b5cf6; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">AI 初诊 · 并行（纯数据结构）</div>
-                                    <div id="report" class="node pending">
-                                        <div class="node-title"><i class="fas fa-robot"></i> <span>AI初诊报告</span></div>
-                                        <div class="node-log" id="log-report"></div>
-                                    </div>
-                                    <div class="v-connector"></div>
-                                    <div id="review" class="node pending">
-                                        <div class="node-title"><i class="fas fa-search-check"></i> <span>错误评审 (AI)</span></div>
-                                        <div class="node-log" id="log-review"></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div style="flex:1;min-width:0;">
-                            <div class="flow-row">
-                                <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #a78bfa; background: #faf5ff;">
-                                    <div style="font-size: 0.65rem; color: #a78bfa; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">语义理解 · AI辅助</div>
-                                    <div id="scene" class="node pending">
-                                        <div class="node-title"><i class="fas fa-lightbulb"></i> <span>场景识别 (AI)</span></div>
-                                        <div class="node-log" id="log-scene"></div>
-                                    </div>
-                                    <div class="v-connector"></div>
-                                    <div id="mapping" class="node pending">
-                                        <div class="node-title"><i class="fas fa-tags"></i> <span>语义映射 (AI)</span></div>
-                                        <div class="node-log" id="log-mapping"></div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div class="flow-row">
-                                <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                                    <div style="font-size: 0.65rem; color: #64748b; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">标准数据与指标 · 纯算法</div>
-                                    <div id="canonical" class="node pending">
-                                        <div class="node-title"><i class="fas fa-layer-group"></i> <span>标准数据层</span></div>
-                                        <div class="node-log" id="log-canonical"></div>
-                                    </div>
-                                    <div class="v-connector"></div>
-                                    <div id="registry" class="node pending">
-                                        <div class="node-title"><i class="fas fa-list-check"></i> <span>指标匹配</span></div>
-                                        <div class="node-log" id="log-registry"></div>
-                                    </div>
-                                    <div class="v-connector"></div>
-                                    <div id="engine" class="node pending">
-                                        <div class="node-title">
-                                            <i class="fas fa-calculator"></i> <span>指标计算</span>
-                                            <span id="engine-progress" class="progress-badge" style="display:none;">0/0</span>
-                                        </div>
-                                        <div class="node-log" id="log-engine"></div>
-                                    </div>
-                                    <div class="v-connector"></div>
-                                    <div id="threshold" class="node pending">
-                                        <div class="node-title">
-                                            <i class="fas fa-scale-balanced"></i> <span>健康判断</span>
-                                            <span id="threshold-tally" class="tally-badges" style="display:none;"></span>
-                                        </div>
-                                        <div class="node-log" id="log-threshold"></div>
-                                    </div>
-                                    <div class="v-connector"></div>
-                                    <div id="evidence" class="node pending">
-                                        <div class="node-title"><i class="fas fa-database"></i> <span>证据包</span></div>
-                                        <div class="node-log" id="log-evidence"></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin:4px 0;">
-                        <div style="height:2px;flex:1;background:#94a3b8;"></div>
-                        <span style="font-size:0.7rem;color:#64748b;font-weight:600;">⬇ 合并 ⬇</span>
-                        <div style="height:2px;flex:1;background:#94a3b8;"></div>
-                    </div>
-
-                    <div class="flow-row">
-                        <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem; border-color: #8b5cf6; background: #faf5ff;">
-                            <div style="font-size: 0.65rem; color: #8b5cf6; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">报告生成 · AI</div>
-                            <div id="fusion" class="node pending">
-                                <div class="node-title"><i class="fas fa-object-group"></i> <span>数据融合</span></div>
-                                <div class="node-log" id="log-fusion"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="rep1" class="node pending">
-                                <div class="node-title"><i class="fas fa-file-medical"></i> <span>完整报告 (AI)</span></div>
-                                <div class="node-log" id="log-rep1"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="rep2" class="node pending">
-                                <div class="node-title"><i class="fas fa-file-contract"></i> <span>精简报告 (AI)</span></div>
-                                <div class="node-log" id="log-rep2"></div>
-                            </div>
-                        </div>
-                    </div>
-
+                    <div class="node-log" id="log-custom_init"></div>
                 </div>
+                <div class="workflow-connector"></div>
 
-                <!-- ========== Pydantic 管线 ========== -->
-                <div class="pipeline-view" id="pipeline-pydantic" style="display:none;">
-
-                    <div class="flow-row">
-                        <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                            <div style="font-size: 0.65rem; color: #8b5cf6; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">Pydantic AI 管线 · 分段执行</div>
-                            <div id="pydantic_init" class="node pending">
-                                <div class="node-title"><i class="fas fa-server"></i> <span>环境初始化</span></div>
-                                <div class="node-log" id="log-pydantic_init"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="pydantic_flatten" class="node pending">
-                                <div class="node-title"><i class="fas fa-layer-group"></i> <span>数据展平</span></div>
-                                <div class="node-log" id="log-pydantic_flatten"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="pydantic_mapping" class="node pending">
-                                <div class="node-title"><i class="fas fa-tags"></i> <span>语义映射</span></div>
-                                <div class="node-log" id="log-pydantic_mapping"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="pydantic_sql" class="node pending">
-                                <div class="node-title"><i class="fas fa-calculator"></i> <span>指标计算 (SQL)</span></div>
-                                <div class="node-log" id="log-pydantic_sql"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="agent" class="node pending">
-                                <div class="node-title"><i class="fas fa-file-medical"></i> <span>报告生成</span></div>
-                                <div class="node-log" id="log-agent"></div>
-                            </div>
-                        </div>
+                <div class="workflow-node pending" id="custom_plan">
+                    <div class="node-header">
+                        <span class="step-badge">2</span>
+                        <i class="fas fa-clipboard-list fa-icon"></i>
+                        <span>制定分析计划</span>
                     </div>
-
+                    <div class="node-log" id="log-custom_plan"></div>
                 </div>
+                <div class="workflow-connector"></div>
 
-                <!-- ========== Smolagent 管线 ========== -->
-                <div class="pipeline-view" id="pipeline-smol" style="display:none;">
+                <div class="group-label">🤖 Agent 执行阶段</div>
 
-                    <div class="flow-row">
-                        <div class="subgraph" style="flex-direction: column; padding: 1.5rem 1rem;">
-                            <div style="font-size: 0.65rem; color: #059669; position: absolute; top: 4px; width: 100%; text-align: center; font-weight: 600;">Smolagent 管线 · CodeAgent 编排</div>
-                            <div id="smol_init" class="node pending">
-                                <div class="node-title"><i class="fas fa-server"></i> <span>环境初始化</span></div>
-                                <div class="node-log" id="log-smol_init"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="smol_plan" class="node pending">
-                                <div class="node-title"><i class="fas fa-list-check"></i> <span>制定计划</span></div>
-                                <div class="node-log" id="log-smol_plan"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="smol_agent" class="node pending">
-                                <div class="node-title"><i class="fas fa-robot"></i> <span>Agent 执行</span></div>
-                                <div class="node-log" id="log-smol_agent"></div>
-                            </div>
-                            <div class="v-connector"></div>
-                            <div id="agent" class="node pending">
-                                <div class="node-title"><i class="fas fa-file-medical"></i> <span>报告生成</span></div>
-                                <div class="node-log" id="log-agent"></div>
-                            </div>
-                        </div>
+                <div class="workflow-node pending" id="custom_step0">
+                    <div class="node-header">
+                        <span class="step-badge">3</span>
+                        <i class="fas fa-layer-group fa-icon"></i>
+                        <span>步骤一：数据展平</span>
                     </div>
+                    <div class="node-log" id="log-custom_step0"></div>
+                </div>
+                <div class="workflow-connector"></div>
 
+                <div class="workflow-node pending" id="custom_step1">
+                    <div class="node-header">
+                        <span class="step-badge">4</span>
+                        <i class="fas fa-calculator fa-icon"></i>
+                        <span>步骤二：指标计算</span>
+                    </div>
+                    <div class="node-log" id="log-custom_step1"></div>
+                </div>
+                <div class="workflow-connector"></div>
+
+                <div class="workflow-node pending" id="custom_step2">
+                    <div class="node-header">
+                        <span class="step-badge">5</span>
+                        <i class="fas fa-file-medical fa-icon"></i>
+                        <span>步骤三：深度报告</span>
+                    </div>
+                    <div class="node-log" id="log-custom_step2"></div>
+                </div>
+                <div class="workflow-connector"></div>
+
+                <div class="workflow-node pending" id="custom_step3">
+                    <div class="node-header">
+                        <span class="step-badge">6</span>
+                        <i class="fas fa-check-double fa-icon"></i>
+                        <span>步骤四：卡片校验</span>
+                    </div>
+                    <div class="node-log" id="log-custom_step3"></div>
+                </div>
+                <div class="workflow-connector"></div>
+
+                <div class="group-label">📦 输出阶段</div>
+
+                <div class="workflow-node pending" id="custom_output">
+                    <div class="node-header">
+                        <span class="step-badge">7</span>
+                        <i class="fas fa-flag-checkered fa-icon"></i>
+                        <span>收尾与产物输出</span>
+                    </div>
+                    <div class="node-log" id="log-custom_output"></div>
                 </div>
 
             </div>
-            <div class="flow-status">
+
+            <div class="flow-status" style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 1rem;border-top:1px solid var(--border);font-size:0.78rem;color:#64748b;">
                 <span>SSE: <span id="connStatus" style="color: var(--success)">已连接</span></span>
-                <span>管线: <span id="currentPipeline">-</span></span>
+                <span>管线: <span id="currentPipeline">Custom Agent</span></span>
                 <span id="currentTime">等待任务...</span>
             </div>
+        </div>
+
+        <!-- 全局日志面板 -->
+        <div class="card" style="margin-bottom: 1.5rem;">
+            <div style="padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); display:flex; align-items:center; justify-content:space-between;">
+                <span style="font-weight:600; font-size:0.88rem;"><i class="fas fa-terminal"></i> 全局日志流</span>
+                <span style="font-size:0.72rem; color:#94a3b8;">debug 级别已过滤 · error 高亮显示</span>
+            </div>
+            <div class="monitor-log-panel" id="globalLogContent"></div>
         </div>
     </div>
 
@@ -244,32 +308,18 @@
             } catch(e) { window.location.href = '/login.html'; }
         })();
 
-        const PIPELINE_NAMES = {
-            traditional: '传统', pydantic: 'Pydantic Agent', smol: 'Smolagent'
-        };
-
         const connStatus = document.getElementById('connStatus');
         const timeDisplay = document.getElementById('currentTime');
-        const pipelineLabel = document.getElementById('currentPipeline');
+        const statusBannerText = document.getElementById('statusBannerText');
+        const globalLogContent = document.getElementById('globalLogContent');
         const key = localStorage.getItem('X-FZT-Key') || '';
-        let currentPipeline = 'traditional';
 
-        function switchPipeline(pipeline) {
-            currentPipeline = pipeline;
-            document.querySelectorAll('.pipeline-view').forEach(el => el.style.display = 'none');
-            const target = document.getElementById('pipeline-' + pipeline);
-            if (target) target.style.display = '';
-            document.querySelectorAll('.pipeline-badge').forEach(el => el.classList.remove('active'));
-            const badge = document.querySelector('.pipeline-badge.' + pipeline);
-            if (badge) badge.classList.add('active');
-            pipelineLabel.textContent = PIPELINE_NAMES[pipeline] || pipeline;
-        }
-
-        // 页面加载时读取当前管线
-        fetch('/api/admin/pipeline')
-            .then(r => r.json())
-            .then(data => { if (data.pipeline) switchPipeline(data.pipeline); })
-            .catch(() => {});
+        // 所有节点 ID（按顺序）
+        const NODE_IDS = [
+            'custom_init', 'custom_plan',
+            'custom_step0', 'custom_step1', 'custom_step2', 'custom_step3',
+            'custom_output'
+        ];
 
         const eventSource = new EventSource('/api/stream?x-fzt-key=' + encodeURIComponent(key));
 
@@ -284,86 +334,85 @@
 
         eventSource.onmessage = (event) => {
             const data = JSON.parse(event.data);
+
             if (data.type === 'pipeline') {
-                if (data.pipeline) switchPipeline(data.pipeline);
+                // 忽略，只有 custom 管线
             } else if (data.type === 'status') {
                 updateNode(data.nodeId, data.status, data.time);
             } else if (data.type === 'log') {
-                appendLog(data.nodeId, data.message, data.time);
+                handleLog(data);
             } else if (data.type === 'progress') {
-                updateProgress(data.nodeId, data.current, data.total);
-            } else if (data.type === 'tally') {
-                updateTally(data.nodeId, data.tally);
+                // 暂留扩展
             } else if (data.type === 'reset') {
                 resetAllNodes();
             }
         };
 
         function resetAllNodes() {
-            const nodes = document.querySelectorAll('.node');
-            nodes.forEach(node => {
-                node.className = 'node pending';
-                const logEl = node.querySelector('.node-log');
-                if (logEl) logEl.innerHTML = '';
+            NODE_IDS.forEach(id => {
+                const node = document.getElementById(id);
+                if (node) {
+                    node.className = 'workflow-node pending';
+                    const logEl = node.querySelector('.node-log');
+                    if (logEl) logEl.innerHTML = '';
+                }
             });
-            ['engine-progress', 'alg2-progress'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) { el.style.display = 'none'; el.textContent = '0/0'; }
-            });
-            ['threshold-tally', 'alg3-tally'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) { el.style.display = 'none'; el.innerHTML = ''; }
-            });
+            // 同时清理 custom_agent 的节点日志（它没有可视化节点，但有全局日志）
+            globalLogContent.innerHTML = '';
+            statusBannerText.textContent = '等待任务启动...';
             timeDisplay.innerText = '等待任务...';
         }
 
         function updateNode(nodeId, status, time) {
             const node = document.getElementById(nodeId);
             if (node) {
-                node.classList.remove('pending', 'active', 'success', 'error', 'simulated', 'uncountable');
+                node.classList.remove('pending', 'active', 'success', 'error');
                 node.classList.add(status);
             }
             if (status === 'pending') {
                 const logEl = document.getElementById('log-' + nodeId);
                 if (logEl) logEl.innerHTML = '';
-                const progEl = document.getElementById(nodeId + '-progress');
-                if (progEl) { progEl.style.display = 'none'; progEl.textContent = '0/0'; }
-                const tallyEl = document.getElementById(nodeId + '-tally');
-                if (tallyEl) { tallyEl.style.display = 'none'; tallyEl.innerHTML = ''; }
             }
             timeDisplay.innerText = '最后更新: ' + time;
         }
 
-        function appendLog(nodeId, message, time) {
+        function handleLog(data) {
+            const level = data.level || 'info';
+
+            // debug: 完全不显示
+            if (level === 'debug') return;
+
+            // status: 更新常驻状态栏（不追加日志行，但在节点内追加）
+            if (level === 'status') {
+                statusBannerText.textContent = data.message || '';
+                // 也在对应节点内展示
+                appendNodeLog(data.nodeId, data.message, data.time, false);
+                return;
+            }
+
+            const isError = level === 'error';
+
+            // 在节点日志区域追加
+            appendNodeLog(data.nodeId, data.message, data.time, isError);
+
+            // 在全局日志面板追加
+            const div = document.createElement('div');
+            div.className = 'log-line' + (isError ? ' error-line' : '');
+            div.innerHTML = '<span class="log-time">' + escapeHtml(data.time || '') + '</span> ' + escapeHtml(data.message || '');
+            globalLogContent.appendChild(div);
+            globalLogContent.scrollTop = globalLogContent.scrollHeight;
+
+            timeDisplay.innerText = '最后更新: ' + (data.time || '');
+        }
+
+        function appendNodeLog(nodeId, message, time, isError) {
             const logEl = document.getElementById('log-' + nodeId);
             if (!logEl) return;
             const line = document.createElement('div');
-            line.className = 'log-line';
-            line.innerHTML = '<span class="log-time">' + time + '</span> ' + escapeHtml(message);
+            line.className = 'log-line' + (isError ? ' error-line' : '');
+            line.innerHTML = '<span class="log-time">' + escapeHtml(time || '') + '</span> ' + escapeHtml(message || '');
             logEl.appendChild(line);
             logEl.scrollTop = logEl.scrollHeight;
-        }
-
-        function updateProgress(nodeId, current, total) {
-            const el = document.getElementById(nodeId + '-progress');
-            if (!el) return;
-            el.style.display = 'inline';
-            el.textContent = current + '/' + total;
-            if (current === total) {
-                el.style.background = 'var(--success)';
-            } else {
-                el.style.background = 'var(--primary)';
-            }
-        }
-
-        function updateTally(nodeId, tally) {
-            const el = document.getElementById(nodeId + '-tally');
-            if (!el) return;
-            el.style.display = 'inline-flex';
-            el.innerHTML = '<span class="tally-badge pass">🟢' + tally.pass + '</span>'
-                + '<span class="tally-badge attention">🟡' + tally.attention + '</span>'
-                + '<span class="tally-badge warning">🔴' + tally.warning + '</span>'
-                + (tally.uncountable ? '<span class="tally-badge uncountable">⚪' + tally.uncountable + '</span>' : '');
         }
 
         function escapeHtml(text) {

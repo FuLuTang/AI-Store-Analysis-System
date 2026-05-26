@@ -2,13 +2,13 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from .models import DatasetBundle, AgentResult
 
 
 StatusCallback = Callable[[str, str], None]
-LogCallback = Callable[[str, str], None]
+LogCallback = Callable[[str, Union[str, dict]], None]
 ProgressCallback = Callable[[str, int, int], None]
 TallyCallback = Callable[[str, dict], None]
 

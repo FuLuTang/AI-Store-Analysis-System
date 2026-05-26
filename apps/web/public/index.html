@@ -132,6 +132,7 @@
                 <div class="progress-track">
                     <div class="progress-bar" id="progressBar"></div>
                 </div>
+                <div id="currentStepText" style="margin-top:0.5rem;font-size:0.85rem;color:#6366f1;font-weight:500;min-height:1.2em;transition:opacity 0.2s;"></div>
             </div>
 
             <div class="log-container" id="globalLogContainer">
@@ -184,36 +185,25 @@
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
         const progressText = document.getElementById('progressText');
-        
-        const nodeWeights = {
-            input: 1, profile: 2, scene: 3, mapping: 3, canonical: 2,
-            registry: 2, engine: 15, threshold: 2, evidence: 2,
-            report: 25, review: 10, fusion: 1, rep1: 15, rep2: 15,
-            clean: 1, api: 25, output: 1, alg1: 2, alg2: 8, alg3: 1
-        };
-        let nodeProgress = {};
-        let aiWaitCounters = {};
+        const currentStepText = document.getElementById('currentStepText');
+
+        let currentProgress = 0;
+
+        function setProgress(pct) {
+            if (pct > currentProgress) {
+                currentProgress = pct;
+                if (currentProgress > 100) currentProgress = 100;
+                progressBar.style.width = currentProgress + '%';
+                progressText.innerText = currentProgress + '%';
+            }
+        }
 
         function resetProgressState() {
-            for (let key in nodeWeights) nodeProgress[key] = 0;
-            aiWaitCounters = { api: 0, report: 0, review: 0, rep1: 0, rep2: 0 };
-            updateOverallProgress();
+            currentProgress = 0;
+            progressBar.style.width = '0%';
+            progressText.innerText = '0%';
+            currentStepText.innerText = '';
         }
-
-        function updateOverallProgress() {
-            let total = 0;
-            for (let key in nodeProgress) {
-                if (nodeWeights[key] !== undefined) {
-                    total += nodeProgress[key] * (nodeWeights[key] / 100);
-                }
-            }
-            let percentage = Math.round(total);
-            if (percentage > 100) percentage = 100;
-            progressBar.style.width = `${percentage}%`;
-            progressText.innerText = `${percentage}%`;
-        }
-        
-        resetProgressState();
 
         function connectSSE() {
             if (sseSource) return;
@@ -221,49 +211,32 @@
             sseSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'log') {
+                    const level = data.level || 'info';
+
+                    // 读取 progress 字段，直接设进度条
+                    if (data.progress !== undefined && data.progress !== null) {
+                        setProgress(Math.round(data.progress));
+                    }
+
+                    // debug 级别：完全过滤
+                    if (level === 'debug') return;
+
+                    // status 级别：更新常驻"当前进度"文字（不追加日志行）
+                    if (level === 'status') {
+                        currentStepText.innerText = data.message || '';
+                        return;
+                    }
+
+                    // info / error 级别：追加到日志列表
                     const div = document.createElement('div');
                     div.style.marginBottom = '2px';
+                    if (level === 'error') {
+                        div.style.color = '#ef4444';
+                        div.style.fontWeight = '600';
+                    }
                     div.innerText = `[${data.time}] ${data.message}`;
                     globalLogContent.appendChild(div);
                     globalLogContainer.scrollTop = globalLogContainer.scrollHeight;
-                    
-                    // 针对长期等待的 AI 节点，根据输出的 log 估算非线性内部进度
-                    if (['api', 'report', 'review', 'rep1', 'rep2'].includes(data.nodeId)) {
-                        if (data.message.includes('正在思考中') || data.message.includes('模型:') || data.message.includes('请求')) {
-                            if (aiWaitCounters[data.nodeId] === undefined) aiWaitCounters[data.nodeId] = 0;
-                            aiWaitCounters[data.nodeId] += 1;
-                            let count = aiWaitCounters[data.nodeId];
-                            
-                            // 优化算法：前期按每跳（约5秒）8%匀速增长，避免一上来跑得太快
-                            // 当超过 10 跳（50秒）时，转为指数逼近 99%
-                            let p = 0;
-                            if (count <= 10) {
-                                p = count * 8; // 8, 16, 24 ... 80
-                            } else {
-                                p = 80 + 19 * (1 - Math.exp(-0.2 * (count - 10)));
-                            }
-                            if (p > 99) p = 99;
-                            
-                            if (nodeProgress[data.nodeId] !== 100) {
-                                nodeProgress[data.nodeId] = p;
-                                updateOverallProgress();
-                            }
-                        }
-                    }
-                } else if (data.type === 'progress') {
-                    if (data.nodeId === 'alg2' || data.nodeId === 'engine') {
-                        let p = (data.current / data.total) * 100;
-                        if (p > 99 && data.current !== data.total) p = 99;
-                        if (nodeProgress[data.nodeId] !== 100) {
-                            nodeProgress[data.nodeId] = p;
-                            updateOverallProgress();
-                        }
-                    }
-                } else if (data.type === 'status') {
-                    if (data.status === 'success' || data.status === 'simulated' || data.status === 'error') {
-                        nodeProgress[data.nodeId] = 100;
-                        updateOverallProgress();
-                    }
                 } else if (data.type === 'reset') {
                     globalLogContent.innerHTML = '';
                     resetProgressState();

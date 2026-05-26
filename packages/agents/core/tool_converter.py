@@ -143,8 +143,15 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
     ]
 
 
-def build_tool_map(ws: Workspace) -> dict:
-    """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。"""
+def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
+    """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
+
+    emit_log(node_id, message)  —— 日志回调，message 可为 str 或 dict
+    emit_status(node_id, status) —— 节点状态回调
+    """
+    _emit_log = emit_log or (lambda nid, msg: None)
+    _emit_status = emit_status or (lambda nid, st: None)
+
     from .tools.impl.doc_impl import read_document_impl
     from .tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
     from .tools.impl.python_impl import run_python_impl
@@ -208,12 +215,48 @@ def build_tool_map(ws: Workspace) -> dict:
         ok, errors = run_step_check(ws, step)
         step["errors"] = errors
         step["status"] = "success" if ok else "failed"
-        # 推进下一步
+
+        # 节点 ID 映射: step_index 0→custom_step0, 1→custom_step1 ...
+        node_id = f"custom_step{step_index}"
+        total_steps = len(plan)
+
+        # 每个步骤完成对应的进度里程碑 (15% 之后开始)
+        _step_progress = {0: 35, 1: 60, 2: 82, 3: 90}
+
         if ok:
-            for i in range(step_index + 1, len(plan)):
+            done_pct = _step_progress.get(step_index, 90)
+            _emit_status(node_id, "success")
+            # 推进下一步
+            next_idx = None
+            for i in range(step_index + 1, total_steps):
                 if plan[i]["status"] == "pending":
                     plan[i]["status"] = "in_progress"
+                    next_idx = i
                     break
+            if next_idx is not None:
+                next_node = f"custom_step{next_idx}"
+                _emit_status(next_node, "active")
+                _emit_log(next_node, {
+                    "level": "status",
+                    "message": f"[步骤 {next_idx + 1}/{total_steps}] {plan[next_idx].get('title', '')} 开始执行...",
+                    "step": {"index": next_idx, "title": plan[next_idx].get("title", "")},
+                    "progress": done_pct
+                })
+            else:
+                # 所有步骤完成
+                _emit_log(node_id, {
+                    "level": "status",
+                    "message": f"[步骤 {step_index + 1}/{total_steps}] 全部步骤已完成 ✅",
+                    "progress": done_pct
+                })
+        else:
+            _emit_status(node_id, "error")
+            _emit_log(node_id, {
+                "level": "error",
+                "message": f"[步骤 {step_index + 1}/{total_steps}] {step.get('title', '')} 验证失败",
+                "error_details": "; ".join(errors) if errors else "未知错误"
+            })
+
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
         result = {"step_index": step_index, "ok": ok, "errors": errors}
         if ok:

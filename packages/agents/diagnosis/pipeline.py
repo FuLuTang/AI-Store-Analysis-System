@@ -32,7 +32,7 @@ class CustomPipeline(AgentPipeline):
 
         try:
             # ── 初始化 workspace ──
-            self._emit_log("custom_init", f"启动 Custom 管线，{len(bundle.tables)} 张表, {len(bundle.raw_files)} 个原始文件")
+            self._emit_log("custom_init", {"level": "info", "message": f"🚀 启动 Custom 管线，{len(bundle.tables)} 张表, {len(bundle.raw_files)} 个原始文件", "progress": 3})
             self._emit_status("custom_init", "active")
 
             # 保存原始文件
@@ -46,13 +46,13 @@ class CustomPipeline(AgentPipeline):
             # 预写 parquet（不做 DuckDB 注册，由 Agent 自行注册）
             ws.write_raw_parquet(bundle.tables)
             self._stage_context(ws)
-            self._emit_log("custom_init", "环境初始化完毕")
+            self._emit_log("custom_init", {"level": "info", "message": "✅ 环境初始化完毕", "progress": 8})
             self._emit_status("custom_init", "success")
 
             # ── 写入 plan ──
             self._emit_status("custom_plan", "active")
             self._write_plan(ws)
-            self._emit_log("custom_plan", "计划已写入")
+            self._emit_log("custom_plan", {"level": "info", "message": "📋 计划已写入", "progress": 12})
             self._emit_status("custom_plan", "success")
 
             # ── 构建 client ──
@@ -71,13 +71,31 @@ class CustomPipeline(AgentPipeline):
                 emit_status=self._emit_status,
                 check_aborted=self._check_aborted,
             )
+
+            # 标记第一个步骤节点为 active
+            self._emit_status("custom_step0", "active")
+            self._emit_log("custom_step0", {
+                "level": "status",
+                "message": "[步骤 1/4] 数据展平 开始执行...",
+                "step": {"index": 0, "title": "数据展平"},
+                "progress": 15
+            })
+
             output = await asyncio.to_thread(loop.run)
+
+            # ── 收尾与产物输出 ──
+            self._emit_status("custom_output", "active")
+            self._emit_log("custom_output", {"level": "status", "message": "📦 正在整理产物...", "progress": 95})
 
             elapsed_ms = (time.time() - t0) * 1000
 
             # ── Agent 已将产物写入 workspace，API 直接读文件 ──
             token_usage = output.get("_token_usage", {})
             cards, full_report, metrics = self._read_agent_outputs(ws, token_usage)
+
+            self._emit_log("custom_output", {"level": "info", "message": f"✅ 产物输出完毕，耗时 {elapsed_ms/1000:.1f}s", "progress": 100})
+            self._emit_status("custom_output", "success")
+
             return AgentResult(
                 report_id=ws.report_id,
                 pipeline=self.name,

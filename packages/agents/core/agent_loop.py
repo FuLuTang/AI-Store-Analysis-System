@@ -60,10 +60,11 @@ class AgentLoop:
         self._total_cache_miss = 0
         self.messages: list[dict] = []
         self.tools = available_tool_call_for_agent(ws)
-        self.tool_map = build_tool_map(ws)
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
+        self.tool_map = build_tool_map(ws, emit_log=self._emit_log, emit_status=self._emit_status)
         self._round = 0
+        self._progress = 15  # 进度起点（pipeline 已推到 15%）
 
     def run(self) -> dict:
         """主循环：构建初始 messages → 发请求 → 处理 tool_calls → 循环直到收到最终回答。"""
@@ -73,7 +74,7 @@ class AgentLoop:
         ]
 
         self._emit_status("custom_agent", "active")
-        self._emit_log("custom_agent", f"启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个")
+        self._emit_log("custom_agent", {"level": "info", "message": f"🚀 启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个"})
         logger.info("[agent] start model=%s tools=%d", self.model, len(self.tools))
 
         max_rounds = 50
@@ -86,7 +87,7 @@ class AgentLoop:
                     try:
                         self._check_aborted()
                     except Exception:
-                        self._emit_log("custom_agent", "⛔ 用户已强制停止")
+                        self._emit_log("custom_agent", {"level": "error", "message": "⛔ 用户已强制停止"})
                         raise
 
                 # ── 保存 assistant message ──
@@ -118,7 +119,7 @@ class AgentLoop:
 
                 # ── 没有 tool_calls → 最终回答 ──
                 if not sr.tool_calls and sr.finish_reason != "tool_calls":
-                    self._emit_log("custom_agent", f"✅ 分析完成，最终回答 {len(sr.content)} 字")
+                    self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
                     self._emit_status("custom_agent", "success")
                     return self._with_usage(self._parse_final_output(sr.content))
 
@@ -126,8 +127,37 @@ class AgentLoop:
                 if sr.tool_calls:
                     for tc in sr.tool_calls:
                         target = _tool_target(tc["name"], tc["arguments"])
-                        self._emit_log("custom_agent", f"🔧 {target}")
+
+                        # ── 进度平滑逻辑 ──
+                        # 里程碑分布（pipeline.py 管首尾，这里管中间）:
+                        #   0~15%  : init + plan       (pipeline.py 发 3→8→12→15)
+                        #   15~35% : step0 数据展平     (工具调用 +2%，check_plan(0) 跳到 35)
+                        #   35~60% : step1 指标计算     (工具调用 +2%，check_plan(1) 跳到 60)
+                        #   60~82% : step2 深度报告     (工具调用 +2%，check_plan(2) 跳到 82)
+                        #   82~90% : step3 卡片校验     (工具调用 +2%，check_plan(3) 跳到 90)
+                        #   90~100%: output 收尾        (pipeline.py 发 95→100)
+                        # 每次工具调用推进 +2%，不超过 92（给 output 留空间）
+                        self._progress = min(self._progress + 2, 92)
+                        self._emit_log("custom_agent", {
+                            "level": "info",
+                            "message": f"🔧 {target}",
+                            "progress": self._progress
+                        })
+
                         result = self._execute_tool(tc)
+
+                        # check_plan 成功时：将 _progress 对齐到里程碑，
+                        # 这样后续工具调用从里程碑值继续 +2，不会倒退
+                        if tc["name"] == "check_plan":
+                            try:
+                                r = json.loads(result)
+                                if r.get("ok"):
+                                    _milestones = {0: 35, 1: 60, 2: 82, 3: 90}
+                                    self._progress = max(self._progress,
+                                                         _milestones.get(r.get("step_index", -1), self._progress))
+                            except Exception:
+                                pass
+
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
@@ -136,7 +166,7 @@ class AgentLoop:
 
                     # plan 全部完成后，注入收尾请求，不继续普通循环
                     if _is_plan_done(self.ws):
-                        self._emit_log("custom_agent", "📋 所有步骤已完成，生成最终总结")
+                        self._emit_log("custom_agent", {"level": "status", "message": "📋 所有步骤已完成，生成最终总结..."})
                         self.messages.append({
                             "role": "user",
                             "content": "所有计划步骤已全部完成。请提供一份简洁的最终总结（约200字），包含健康状态、核心结论和交付物清单。不要调用任何工具。"
@@ -144,7 +174,7 @@ class AgentLoop:
                         self._round += 1
                         sr = self._call_api()
                         self.messages.append(self._normalize_assistant_message(sr))
-                        self._emit_log("custom_agent", f"✅ 分析完成，最终回答 {len(sr.content)} 字")
+                        self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
                         self._emit_status("custom_agent", "success")
                         return self._with_usage(self._parse_final_output(sr.content))
 
@@ -153,12 +183,12 @@ class AgentLoop:
             if "aborted" in type(e).__name__.lower() or "强制" in str(e):
                 raise
             logger.exception("[agent] 循环异常")
-            self._emit_log("custom_agent", f"❌ Agent 循环异常: {str(e)[:300]}")
+            self._emit_log("custom_agent", {"level": "error", "message": f"❌ Agent 循环异常: {str(e)[:300]}", "error_details": str(e)})
             self._emit_status("custom_agent", "error")
             return self._with_usage({"full_report": f"Agent 执行异常: {e}", "cards": [], "metrics": [],
                                       "mapping": [], "warnings": [str(e)]})
 
-        self._emit_log("custom_agent", f"达到最大轮次 {max_rounds}")
+        self._emit_log("custom_agent", {"level": "error", "message": f"⚠️ 达到最大轮次 {max_rounds}"})
         self._emit_status("custom_agent", "max_rounds")
         return self._with_usage(self._parse_final_output(""))
 
@@ -207,17 +237,17 @@ class AgentLoop:
                 last_exc = e
                 logger.error("[round_%d] API 调用失败 (attempt %d/3): %s", self._round, attempt + 1, str(e))
                 if attempt < 2 and _is_retryable(e):
-                    self._emit_log("custom_agent", f"⏳ API 调用失败: {str(e)[:100]}，15 秒后重试 ({attempt + 1}/2)，可点强制停止中断...")
+                    self._emit_log("custom_agent", {"level": "info", "message": f"⏳ API 调用失败: {str(e)[:100]}，15 秒后重试 ({attempt + 1}/2)，可点强制停止中断..."})
                     for _ in range(15):
                         if self._check_aborted:
                             try:
                                 self._check_aborted()
                             except Exception:
-                                self._emit_log("custom_agent", "⛔ 用户已强制停止")
+                                self._emit_log("custom_agent", {"level": "error", "message": "⛔ 用户已强制停止"})
                                 raise
                         time.sleep(1)
                 else:
-                    self._emit_log("custom_agent", f"❌ API 调用失败: {str(e)[:300]}")
+                    self._emit_log("custom_agent", {"level": "error", "message": f"❌ API 调用失败: {str(e)[:300]}", "error_details": str(e)})
                     raise
 
         if last_exc:
@@ -308,7 +338,7 @@ class AgentLoop:
         # 推送汇总到前端 (仅在有内容时)
         if content and content.strip():
             tag = _plan_step_tag(self.ws)
-            self._emit_log("custom_agent", f"\n{tag}🤖: {content[:500]}")
+            self._emit_log("custom_agent", {"level": "debug", "message": f"{tag}🤖: {content[:500]}"})
 
         return _StreamResult(
             content=content,

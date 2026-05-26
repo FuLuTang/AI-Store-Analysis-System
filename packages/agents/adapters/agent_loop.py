@@ -159,6 +159,25 @@ class AgentLoop:
         if "deepseek" in self.model.lower():
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
 
+        # ── 详细日志：打印发送给 LLM 的完整消息列表 ──
+        logger.info("[round_%d] → 发送 LLM 请求 (messages 共 %d 条):", self._round, len(self.messages))
+        for idx, msg in enumerate(self.messages):
+            role = msg.get("role", "")
+            text = msg.get("content") or ""
+            if not isinstance(text, str):
+                text = str(text)
+            preview = text.strip().replace("\n", " ")
+            if len(preview) > 150:
+                preview = preview[:150] + "..."
+            tc_info = ""
+            if "tool_calls" in msg and msg["tool_calls"]:
+                tc_info = f" [tool_calls={len(msg['tool_calls'])}]"
+            if role == "tool":
+                tc_id = msg.get("tool_call_id", "")[:8]
+                logger.info("  [%d] role=%s (id=%s): %s", idx, role, tc_id, preview)
+            else:
+                logger.info("  [%d] role=%s%s: %s", idx, role, tc_info, preview)
+
         t0 = time.time()
         last_exc = None
         for attempt in range(3):  # 首次 + 最多 2 次重试
@@ -236,11 +255,14 @@ class AgentLoop:
         content = "".join(content_parts)
         tool_calls = [tool_call_buffers[i] for i in sorted(tool_call_buffers.keys())] if tool_call_buffers else None
 
-        # 文件日志：content 保留 \n
+        # 文件/控制台日志：打印详细回复
+        logger.info("[round_%d] ← LLM 响应:", self._round)
         if reasoning:
-            logger.info("[round_%d] 🧠 思考:\n%s", self._round, reasoning)
+            logger.info("  🧠 思考:\n%s", reasoning)
         if content:
-            logger.info("[round_%d] ← 回复:\n%s", self._round, content)
+            logger.info("  🤖 回复:\n%s", content)
+        if tool_calls:
+            logger.info("  🔧 工具调用: %s", json.dumps(tool_calls, ensure_ascii=False))
 
         u = usage
         logger.info("api_json %s", json.dumps({
@@ -265,9 +287,10 @@ class AgentLoop:
             } if u else {},
         }, ensure_ascii=False, default=str))
 
-        # 推送汇总
-        tag = _plan_step_tag(self.ws)
-        self._emit_log("custom_agent", f"\n{tag}🤖: {content[:500]}")
+        # 推送汇总到前端 (仅在有内容时)
+        if content and content.strip():
+            tag = _plan_step_tag(self.ws)
+            self._emit_log("custom_agent", f"\n{tag}🤖: {content[:500]}")
 
         return _StreamResult(
             content=content,

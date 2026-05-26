@@ -38,6 +38,7 @@ class CustomPipeline(AgentPipeline):
             # 保存原始文件
             for rf in bundle.raw_files:
                 ws.write_input(rf.name, rf.data)
+            ws.unpack_archives()
             # 原始 JSON 写到 input/
             for t in bundle.tables:
                 file_stem = t.name.replace(" ", "_").replace("/", "_")

@@ -84,6 +84,52 @@ class Workspace:
         p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
         return p
 
+    def unpack_archives(self) -> None:
+        """扫描并自动解压 input/ 目录下的所有 zip, rar, 7z 压缩包到 input/ 目录下，解压后删除原压缩包。"""
+        import zipfile
+        
+        has_rar = False
+        try:
+            import rarfile
+            has_rar = True
+        except ImportError:
+            pass
+            
+        has_7z = False
+        try:
+            import py7zr
+            has_7z = True
+        except ImportError:
+            pass
+
+        for p in list(self._input_dir.iterdir()):
+            if not p.is_file():
+                continue
+            suffix = p.suffix.lower()
+            if suffix == ".zip":
+                try:
+                    with zipfile.ZipFile(p, 'r') as zip_ref:
+                        zip_ref.extractall(self._input_dir)
+                    p.unlink()
+                except Exception:
+                    pass
+            elif suffix == ".rar":
+                if has_rar:
+                    try:
+                        with rarfile.RarFile(p) as rar_ref:
+                            rar_ref.extractall(self._input_dir)
+                        p.unlink()
+                    except Exception:
+                        pass
+            elif suffix == ".7z":
+                if has_7z:
+                    try:
+                        with py7zr.SevenZipFile(p, mode='r') as sz_ref:
+                            sz_ref.extractall(self._input_dir)
+                        p.unlink()
+                    except Exception:
+                        pass
+
     def write_context(self, name: str, text: str) -> Path:
         p = self._context_dir / name
         p.write_text(text, encoding="utf-8")

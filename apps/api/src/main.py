@@ -826,7 +826,7 @@ async def analyze(
         session.run_id = None
         session.run_dir = None
 
-    SUPPORTED_EXTENSIONS = {".json", ".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc", ".txt", ".md"}
+    SUPPORTED_EXTENSIONS = {".json", ".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc", ".txt", ".md", ".zip", ".rar", ".7z"}
     decoded_files: list[dict] = []
     for uploaded_file in files:
         filename = uploaded_file.filename or "unnamed"

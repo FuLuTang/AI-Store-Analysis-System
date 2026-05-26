@@ -131,6 +131,7 @@ class SmolPipeline(AgentPipeline):
             # 保存原始上传文件到 input/，供 Agent 用文档解析工具处理
             for rf in bundle.raw_files:
                 ws.write_input(rf.name, rf.data)
+            ws.unpack_archives()
             # 原始 JSON 写到 input/ 让 Agent 能看到原始结构
             for t in bundle.tables:
                 file_stem = t.name.replace(" ", "_").replace("/", "_")

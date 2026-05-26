@@ -100,6 +100,8 @@ def _unwrap_agent_json(data):
     """如果 LLM 输出被包裹在单 key dict 中（如 {"FlattenPlan": {...}}），解包返回内层值。"""
     if isinstance(data, dict) and len(data) == 1:
         k, v = next(iter(data.items()))
+        if k in ("tables", "metrics"):
+            return data
         if isinstance(v, (dict, list)):
             return v
     return data

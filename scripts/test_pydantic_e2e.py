@@ -56,7 +56,7 @@ def mock_sql_fn(messages, info):
 
 # ── 测试子类，注入 mock model ──
 class MockPydanticPipeline(PydanticPipeline):
-    def _build_phase_agent(self, ws, output_type, phase):
+    def _build_phase_agent(self, ws, phase):
         from pydantic_ai import Agent
         from pydantic_ai.settings import ModelSettings
 
@@ -70,10 +70,7 @@ class MockPydanticPipeline(PydanticPipeline):
         agent = Agent(
             model,
             deps_type=type(ws),
-            output_type=output_type,
             model_settings=ModelSettings(temperature=0.0),
-            tool_retries=3,
-            output_retries=3,
         )
         return agent
 
@@ -110,6 +107,9 @@ async def main():
     print(f"  warnings:  {len(result.warnings)}")
     for w in result.warnings:
         print(f"    ⚠ {w}")
+    print(f"  phases:    {len(result.phases)}")
+    for p in result.phases:
+        print(f"    - {p.phase}: status={p.status}, errors={p.errors}")
 
     errors = []
     if not result.tables: errors.append("tables 为空")

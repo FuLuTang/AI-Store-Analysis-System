@@ -768,11 +768,23 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         result = await pipe.run(bundle)
         full_text = result.full_report or f"# {pipeline_name} 管线报告\n\npipeline: {result.pipeline}\n耗时: {result.elapsed_ms:.0f}ms"
         session.full_result = full_text
+        def _serialize_card(c) -> dict:
+            if isinstance(c, dict):
+                return {
+                    "title": c.get("title", ""),
+                    "explanation": c.get("explanation", ""),
+                    "suggestion": c.get("suggestion", ""),
+                    "evidence": c.get("evidence", ""),
+                    "color": c.get("color", "green"),
+                }
+            return {"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "evidence": c.evidence, "color": c.color}
+
         session.result = json.dumps({
             "health_status": "分析完成",
             "overview_text": f"共 {len(result.cards)} 项待关注",
-            "cards": [{"title": c.title, "explanation": c.explanation, "suggestion": c.suggestion, "evidence": c.evidence, "color": c.color} for c in result.cards]
+            "cards": [_serialize_card(c) for c in result.cards]
         }, ensure_ascii=False)
+
         add_log(session, "system", "✅ 分析完成")
         with session.runtime_lock:
             if session.force_stop or session.status == "aborted":

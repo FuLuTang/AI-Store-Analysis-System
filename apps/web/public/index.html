@@ -286,8 +286,11 @@
             try {
                 const res = await fetch('/api/status', { headers: authHeaders() });
                 const data = await res.json();
-                
-                if (data.status === 'running') {
+
+                // ── 第一段：状态 UI（spinner / 按钮 / polling） ──
+                const isTerminal = data.status !== 'running' && data.status !== 'queued';
+
+                if (data.status === 'running' || data.status === 'queued') {
                     startBtn.disabled = true;
                     stopBtn.style.display = 'inline-flex';
                     loading.style.display = 'flex';
@@ -295,51 +298,49 @@
                     progressContainer.style.display = 'block';
                     globalLogContainer.style.display = 'block';
                     connectSSE();
-                    resultSection.classList.remove('visible');
-                    
                     if (!pollingInterval) {
                         pollingInterval = setInterval(checkStatus, 2000);
                     }
-                } else if (data.status === 'completed') {
+                } else {
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-                    // 刷新后重连 SSE 以回放历史日志
-                    if (!sseSource) connectSSE();
                     startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
-                    progressContainer.style.display = 'block';
-                    globalLogContainer.style.display = 'block';
-                    
-                    if (data.result && data.fullResult) {
-                        currentReport = data.result;
-                        currentFullReport = data.fullResult;
-                        renderReport();
-                        resultSection.classList.add('visible');
+                    if (data.status === 'completed') {
+                        if (!sseSource) connectSSE(); // 回放历史日志
+                        progressContainer.style.display = 'block';
+                        globalLogContainer.style.display = 'block';
+                    } else if (data.status === 'error' || data.status === 'aborted') {
+                        disconnectSSE();
+                        progressContainer.style.display = 'block';
+                        globalLogContainer.style.display = 'block';
                     }
-                } else if (data.status === 'error' || data.status === 'aborted') {
-                    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-                    disconnectSSE();
-                    startBtn.disabled = filesData.length === 0;
-                    stopBtn.style.display = 'none';
-                    loading.style.display = 'none';
-                    progressContainer.style.display = 'block';
-                    globalLogContainer.style.display = 'block';
-                    
+                    // idle: 不展示进度/日志区域
+                }
+
+                // ── 第二段：结果渲染（完全独立于 status） ──
+                // 只要 API 回传了结果内容（无论 status 是什么），就渲染
+                if (data.result && data.fullResult) {
+                    // 清除上次的警告 banner（如果有）
+                    const oldBanner = document.getElementById('pipelineWarnBanner');
+                    if (oldBanner) oldBanner.remove();
+
+                    currentReport = data.result;
+                    currentFullReport = data.fullResult;
+                    renderReport();
+                    resultSection.classList.add('visible');
+                } else if (isTerminal && data.status !== 'idle' && data.status !== 'completed') {
+                    // 终止且没有结果内容，且之前也没有结果 → 弹提示
                     if (data.errorMessage && data.errorMessage.length > 0 && currentReport == null) {
                         alert('运行结束: ' + (data.errorMessage || data.status));
                     }
-                } else {
-                    // idle
-                    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-                    disconnectSSE();
-                    startBtn.disabled = filesData.length === 0;
-                    stopBtn.style.display = 'none';
-                    loading.style.display = 'none';
                 }
+
             } catch (e) {
                 console.error("Status fetch error", e);
             }
         }
+
 
         reportToggle.addEventListener('change', () => {
             if (reportToggle.checked) {

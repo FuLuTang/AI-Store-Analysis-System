@@ -11,7 +11,7 @@ from openai import OpenAI
 from .base import AgentPipeline
 from .models import AgentResult, DatasetBundle
 from .workspace import Workspace
-from .agent_loop import AgentLoop
+from .adapters.agent_loop import AgentLoop
 
 logger = logging.getLogger("agent.custom")
 

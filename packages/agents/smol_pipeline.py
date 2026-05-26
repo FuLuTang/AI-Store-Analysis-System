@@ -23,7 +23,7 @@ from pathlib import Path
 from .base import AgentPipeline
 from .models import AgentResult, DatasetBundle
 from .workspace import Workspace
-from .tool_adapters import build_smol_tools
+from .adapters import build_smol_tools
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -190,7 +190,7 @@ class SmolPipeline(AgentPipeline):
     # ── tools ──
 
     def _make_tools(self, ws: Workspace) -> list:
-        from .tool_adapters.smol_tools import build_smol_tools
+        from .adapters.smol_tools import build_smol_tools
         return build_smol_tools(ws, emit_log=self._emit_log)
 
     # ── agent ──

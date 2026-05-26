@@ -14,7 +14,7 @@ import sys
 import time
 from openai import OpenAI
 
-from .workspace import Workspace
+from ..workspace import Workspace
 from .prompt_builder import build_system_content, build_user_content
 from .tool_converter import available_tool_call_for_agent, build_tool_map
 

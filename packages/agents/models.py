@@ -169,18 +169,21 @@ class PhaseResult(BaseModel):
 
 
 class AgentResult(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
     report_id: str
-    tables: list[TableMeta] = Field(default_factory=list)
-    mapping: list[SemanticMapping] = Field(default_factory=list)
-    metrics: list[MetricResult] = Field(default_factory=list)
+    tables: list[Any] = Field(default_factory=list)
+    mapping: list[Any] = Field(default_factory=list)
+    metrics: list[Any] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-    scene: SceneContext | None = None
-    cards: list[ReportCard] = Field(default_factory=list)
+    scene: Any | None = None
+    cards: list[Any] = Field(default_factory=list)
     full_report: str = ""
     pipeline: str = ""
     elapsed_ms: float = 0.0
     total_tokens: int = 0
     input_tokens: int = 0
     cache_hit_tokens: int = 0
-    phases: list[PhaseResult] = Field(default_factory=list)
+    cache_miss_tokens: int = 0
+    phases: list[Any] = Field(default_factory=list)
     raw_output: str = ""

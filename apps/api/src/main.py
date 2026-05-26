@@ -317,7 +317,7 @@ def _make_run_id() -> str:
 def _ensure_run_dir(session: "SessionState") -> Path:
     if not session.run_id:
         session.run_id = _make_run_id()
-        session.run_dir = session.account_dir / "runs" / session.run_id
+        session.run_dir = session.account_dir / "runs" / session.task_type / session.run_id
     session.run_dir.mkdir(parents=True, exist_ok=True)
     (session.run_dir / "workspace").mkdir(parents=True, exist_ok=True)
     return session.run_dir
@@ -329,6 +329,7 @@ def _save_session_json(session: "SessionState"):
         return
     run_dir.mkdir(parents=True, exist_ok=True)
     data = {
+        "taskType": session.task_type,
         "status": session.status,
         "errorMessage": session.error_message,
         "result": session.result,
@@ -392,6 +393,7 @@ class SessionState:
         self.runtime_lock = Lock()
         self.event_lock = Lock()
         self._pipeline_task: Optional[asyncio.Task] = None
+        self.task_type = "diagnosis"
 
     @property
     def logs_path(self) -> Path:
@@ -437,32 +439,63 @@ class SessionManager:
         slug = _make_account_slug(user_key, key_hash)
         return key_hash, slug, self.base_dir / slug
 
-    def _try_load_session(self, account_dir: Path) -> dict | None:
-        latest = account_dir / "latest_run.json"
-        if not latest.exists():
-            return None
-        try:
-            meta = json.loads(latest.read_text(encoding="utf-8"))
-            run_id = meta.get("runId")
-            if not run_id:
-                return None
-            run_dir = account_dir / "runs" / run_id
-            session_path = run_dir / "session.json"
-            if not session_path.exists():
-                return None
-            state = json.loads(session_path.read_text(encoding="utf-8"))
-            if state.get("status") in ("running", "queued"):
-                state["status"] = "interrupted"
-                state["errorMessage"] = "服务重启导致任务中断，请重新提交分析。"
+    def _try_load_session(self, account_dir: Path, task_type: str = "diagnosis") -> dict | None:
+        target_dir = account_dir / "runs" / task_type
+        state = None
+        run_id = None
+        run_dir = None
+
+        # 1. 尝试通过扫描 runs/{task_type}/ 下的最新子目录
+        if target_dir.exists() and target_dir.is_dir():
+            try:
+                subdirs = sorted(
+                    [d for d in target_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
+                    key=lambda x: x.name,
+                    reverse=True
+                )
+                for subdir in subdirs:
+                    session_path = subdir / "session.json"
+                    if session_path.exists():
+                        try:
+                            state = json.loads(session_path.read_text(encoding="utf-8"))
+                            run_id = subdir.name
+                            run_dir = subdir
+                            break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        # 2. 向后兼容：如果在子目录下未找到，且为诊断分析任务，则退化到读取 latest_run.json 并在根目录 runs 下查找
+        if not state and task_type == "diagnosis":
+            latest = account_dir / "latest_run.json"
+            if latest.exists():
                 try:
-                    session_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+                    meta = json.loads(latest.read_text(encoding="utf-8"))
+                    run_id = meta.get("runId")
+                    if run_id:
+                        run_dir = account_dir / "runs" / run_id
+                        session_path = run_dir / "session.json"
+                        if session_path.exists():
+                            state = json.loads(session_path.read_text(encoding="utf-8"))
                 except Exception:
                     pass
-            state["_runId"] = run_id
-            state["_runDir"] = str(run_dir)
-            return state
-        except Exception:
+
+        if not state or not run_id or not run_dir:
             return None
+
+        # 3. 校验并修复被中断的未决任务状态
+        if state.get("status") in ("running", "queued"):
+            state["status"] = "interrupted"
+            state["errorMessage"] = "服务重启导致任务中断，请重新提交分析。"
+            try:
+                (run_dir / "session.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+        state["_runId"] = run_id
+        state["_runDir"] = str(run_dir)
+        return state
 
     def get_session(self, user_key: str, create_if_missing: bool = True) -> SessionState:
         key_hash, slug, account_dir = self._account_dir(user_key)
@@ -580,6 +613,8 @@ def add_log(session: SessionState, node_id: str, message):
             payload["step"] = message["step"]
         if "error_details" in message:
             payload["error_details"] = _mask_sensitive_text(str(message["error_details"]))
+        if "progress" in message:
+            payload["progress"] = message["progress"]
     else:
         level = "info"
         safe_msg = _mask_sensitive_text(str(message))

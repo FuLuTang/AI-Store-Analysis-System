@@ -33,12 +33,31 @@ class AgentPipeline:
 
 ```
 packages/agents/
-  ├── models.py              # AgentResult, DatasetBundle, SceneContext, Manifest...
-  ├── base.py                # AgentPipeline 抽象接口
-  ├── workspace.py           # Workspace (持久化 storage/artifacts/{id}/, 含 duckdb/manifest/trace)
-  ├── tools/                 # 共享工具层 + tools/impl/ 纯函数实现层
-  │   └── impl/              # file_impl / duckdb_impl / context_impl / setup_impl ...
-  ├── adapters/              # smol_tools.py (smolagents @tool) / pydantic_tools.py
+  ├── __init__.py            # 统一包入口，对外暴露通用接口
+  ├── registry.py            # Pipeline 注册表
+  ├── smol_pipeline.py       # [LEGACY] Smol 兼容管线
+  ├── pydantic_pipeline.py   # [LEGACY] Pydantic 兼容管线
+  ├── traditional_pipeline.py# [LEGACY] 传统兼容管线
+  │
+  ├── core/                  # 基础引擎核心包（通用）
+  │     ├── __init__.py      # 核心模块入口
+  │     ├── base.py          # Pipeline 基类
+  │     ├── workspace.py     # 工作区生命周期
+  │     ├── agent_loop.py    # Agent 运行主循环
+  │     ├── tool_converter.py# OpenAI 工具格式转换
+  │     ├── models.py        # 数据核心模型
+  │     ├── logging_utils.py # 日志工具
+  │     └── tools/           # 工具子包
+  │           ├── __init__.py
+  │           ├── impl/      # 纯函数底层实现层（file, python, sql...）
+  │           └── adapters/  # 框架适配层（smol, pydantic 适配）
+  │
+  └── diagnosis/             # 业务服务：门店诊断（专属）
+        ├── __init__.py      # 诊断服务入口
+        ├── pipeline.py      # 诊断管线
+        ├── prompt_builder.py# 诊断专属提示词拼装
+        └── plan_template.py # 诊断专属的任务计划模板
+  │
   ├── prompts/               # pydantic.md + smol.md 系统提示词
   └── tests/
 ```

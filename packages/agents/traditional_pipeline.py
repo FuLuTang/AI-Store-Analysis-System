@@ -11,8 +11,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .base import AgentPipeline
-from .models import AgentResult, DatasetBundle, MetricResult, SceneContext, SemanticMapping, ReportCard, TableMeta, Manifest
+from .core.base import AgentPipeline
+from .core.models import AgentResult, DatasetBundle, MetricResult, SceneContext, SemanticMapping, ReportCard, TableMeta, Manifest
 
 from packages.core.profiler import profile_dataset
 from packages.core.semantic_mapper import llm_map_profiles

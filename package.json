@@ -11,10 +11,5 @@
     "dev:api": "python3 -m uvicorn apps.api.src.main:app --host 0.0.0.0 --port 3000 --reload --reload-exclude storage",
     "dev": "npm run dev:api",
     "start": "npm run dev:api"
-  },
-  "dependencies": {
-    "cors": "^2.8.6",
-    "express": "^4.18.2",
-    "openai": "^4.20.1"
   }
 }

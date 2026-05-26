@@ -3,11 +3,11 @@
 from pathlib import Path
 from typing import Callable, Optional
 
-from .base import AgentPipeline
+from .core.base import AgentPipeline
 from .traditional_pipeline import TraditionalPipeline
 from .pydantic_pipeline import PydanticPipeline
 from .smol_pipeline import SmolPipeline
-from .custom_pipeline import CustomPipeline
+from .diagnosis.pipeline import CustomPipeline
 
 PIPELINE_MAP = {
     "traditional": TraditionalPipeline,

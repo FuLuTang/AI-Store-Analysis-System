@@ -228,7 +228,7 @@ from datetime import datetime
 
 def adapt_to_dataset_bundle(raw_bundle: dict):
     """将 parse_uploaded_files 输出的 dict 转为 DatasetBundle"""
-    from packages.agents.models import DatasetBundle, RawTable
+    from packages.agents.core.models import DatasetBundle, RawTable
 
     tables = [RawTable(name=t.get("name", "unnamed"), rows=t.get("rows", [])) for t in raw_bundle.get("tables", [])]
     return DatasetBundle(

@@ -68,7 +68,7 @@ def current_time() -> str:
 def plan_progress(ws) -> str:
     """注入当前 plan 进度（简洁版，只显示当前 in_progress 步骤）。"""
     try:
-        from ..tools.impl.setup_impl import read_plan_short_impl
+        from ..core.tools.impl.setup_impl import read_plan_short_impl
         text = read_plan_short_impl(ws)
         return text if text else ""
     except Exception:

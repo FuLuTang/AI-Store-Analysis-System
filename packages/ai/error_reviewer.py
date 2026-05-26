@@ -44,9 +44,14 @@ def _format_evidence_for_review(evidence_bundle: dict) -> str:
     return "\n".join(lines)
 
 
-async def review_error(settings: dict, report: str, cleaned_data_texts: list = None) -> dict | str:
+async def review_error(settings: dict, report: str, cleaned_data_texts: list = None, model_type: str = "call") -> dict | str:
     """错误评审 (兼容旧管线)"""
-    if not settings or not settings.get("apiKey"):
+    if not settings:
+        return "审核通过：未配置 API Key，已跳过。"
+
+    from .ai_caller import _get_model_settings
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
+    if not api_key:
         return "审核通过：未配置 API Key，已跳过。"
 
     now = datetime.now()
@@ -54,16 +59,9 @@ async def review_error(settings: dict, report: str, cleaned_data_texts: list = N
     raw_str = "\n\n---\n\n".join(cleaned_data_texts) if cleaned_data_texts else "暂无底层数据"
     user_content = context + "\n\n【初级分析报告】\n" + (report or "") + "\n\n【底层数据】\n" + raw_str
 
-    reasoning_effort = "medium"
-    if isinstance(settings, dict):
-        raw = settings.get("reasoningEffort") or settings.get("reasoning_effort") or ""
-        r = str(raw).strip().lower()
-        if r in {"low", "medium", "high"}:
-            reasoning_effort = r
-
     try:
-        return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-            "model": settings["model"],
+        return await shared_stream_fetch(base_url, api_key, {
+            "model": model,
             "messages": [
                 {"role": "system", "content": _build_review_prompt()},
                 {"role": "user", "content": user_content},
@@ -74,17 +72,15 @@ async def review_error(settings: dict, report: str, cleaned_data_texts: list = N
         return f"错误审核失败。原因：{str(e)}"
 
 
-async def review_error_new(settings: dict, scene: dict, report: str, evidence: dict, analysis_params: str = "") -> dict | str:
+async def review_error_new(settings: dict, scene: dict, report: str, evidence: dict, analysis_params: str = "", model_type: str = "call") -> dict | str:
     """错误评审 (新管线 — 格式化输入)"""
-    if not settings or not settings.get("apiKey"):
+    if not settings:
         return "审核通过：未配置 API Key，已跳过。"
 
-    reasoning_effort = "medium"
-    if isinstance(settings, dict):
-        raw = settings.get("reasoningEffort") or settings.get("reasoning_effort") or ""
-        r = str(raw).strip().lower()
-        if r in {"low", "medium", "high"}:
-            reasoning_effort = r
+    from .ai_caller import _get_model_settings
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
+    if not api_key:
+        return "审核通过：未配置 API Key，已跳过。"
 
     now = datetime.now()
     parts = [
@@ -102,8 +98,8 @@ async def review_error_new(settings: dict, scene: dict, report: str, evidence: d
     user_content = "\n".join(parts)
 
     try:
-        return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-            "model": settings["model"],
+        return await shared_stream_fetch(base_url, api_key, {
+            "model": model,
             "messages": [
                 {"role": "system", "content": _build_review_prompt(scene)},
                 {"role": "user", "content": user_content},

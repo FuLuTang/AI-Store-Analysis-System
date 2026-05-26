@@ -24,7 +24,7 @@ ROOT_DIR = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(ROOT_DIR))
 
 from packages.core.input_adapter import parse_uploaded_files, adapt_to_dataset_bundle
-from packages.agents.models import RawFile
+from packages.agents.core.models import RawFile
 from packages.agents.registry import create_pipeline
 from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
@@ -110,10 +110,19 @@ def _default_llm_presets() -> dict:
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini").strip()
+    
+    def _sub_config(effort):
+        return {
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "model": model,
+            "reasoningEffort": effort
+        }
+        
     return {
-        "low": {"baseUrl": base_url, "apiKey": api_key, "model": model, "reasoningEffort": "low"},
-        "medium": {"baseUrl": base_url, "apiKey": api_key, "model": model, "reasoningEffort": "medium"},
-        "high": {"baseUrl": base_url, "apiKey": api_key, "model": model, "reasoningEffort": "high"}
+        "low": {"call": _sub_config("low"), "fastcall": _sub_config("low")},
+        "medium": {"call": _sub_config("medium"), "fastcall": _sub_config("medium")},
+        "high": {"call": _sub_config("high"), "fastcall": _sub_config("high")}
     }
 
 
@@ -155,21 +164,38 @@ def _decrypt_text(raw: str) -> str:
         return ""
 
 
-def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
-    data = raw if isinstance(raw, dict) else {}
-    base_url = data.get("baseUrl", fallback.get("baseUrl", ""))
+def _sanitize_sub_item(raw_sub: Optional[dict], fallback_sub: dict) -> dict:
+    data = raw_sub if isinstance(raw_sub, dict) else {}
+    base_url = data.get("baseUrl", fallback_sub.get("baseUrl", ""))
     encoded_key = data.get("apiKeyEnc")
     if isinstance(encoded_key, str):
         api_key = _decrypt_text(encoded_key)
     else:
-        api_key = data.get("apiKey", fallback.get("apiKey", ""))
-    model = data.get("model", fallback.get("model", ""))
+        api_key = data.get("apiKey", fallback_sub.get("apiKey", ""))
+    model = data.get("model", fallback_sub.get("model", ""))
+    reasoning_effort = data.get("reasoningEffort", fallback_sub.get("reasoningEffort", ""))
     return {
-        "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback.get("baseUrl", "")),
-        "apiKey": api_key.strip() if isinstance(api_key, str) else str(fallback.get("apiKey", "")),
-        "model": model.strip() if isinstance(model, str) else str(fallback.get("model", "")),
-        "reasoningEffort": data.get("reasoningEffort", fallback.get("reasoningEffort", ""))
+        "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback_sub.get("baseUrl", "")),
+        "apiKey": api_key.strip() if isinstance(api_key, str) else str(fallback_sub.get("apiKey", "")),
+        "model": model.strip() if isinstance(model, str) else str(fallback_sub.get("model", "")),
+        "reasoningEffort": reasoning_effort.strip() if isinstance(reasoning_effort, str) else str(fallback_sub.get("reasoningEffort", ""))
     }
+
+
+def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    if "call" in data or "fastcall" in data:
+        return {
+            "call": _sanitize_sub_item(data.get("call"), fallback.get("call", fallback)),
+            "fastcall": _sanitize_sub_item(data.get("fastcall"), fallback.get("fastcall", fallback))
+        }
+    else:
+        # Legacy single-config format: copy to both call and fastcall
+        sanitized = _sanitize_sub_item(data, fallback.get("call", fallback))
+        return {
+            "call": sanitized,
+            "fastcall": sanitized.copy()
+        }
 
 
 def _load_llm_presets() -> dict:
@@ -195,14 +221,21 @@ class TaskAbortedError(Exception):
 
 def get_global_api_key() -> str:
     with LLM_PRESETS_LOCK:
-        return GLOBAL_LLM_PRESETS["medium"]["apiKey"]
+        medium_preset = GLOBAL_LLM_PRESETS["medium"]
+        if "call" in medium_preset:
+            return medium_preset["call"]["apiKey"]
+        return medium_preset.get("apiKey", "")
 
 
 def set_global_api_key(raw_key: str):
     key_value = (raw_key or "").strip()
     with LLM_PRESETS_LOCK:
         for effort in REASONING_EFFORT_OPTIONS:
-            GLOBAL_LLM_PRESETS[effort]["apiKey"] = key_value
+            preset = GLOBAL_LLM_PRESETS[effort]
+            if "call" in preset:
+                preset["call"]["apiKey"] = key_value
+            if "fastcall" in preset:
+                preset["fastcall"]["apiKey"] = key_value
         save_llm_presets_locked()
 
 
@@ -210,7 +243,13 @@ def get_llm_preset(reasoning_effort: Optional[str]) -> dict:
     effort = normalize_reasoning_effort(reasoning_effort)
     with LLM_PRESETS_LOCK:
         preset = GLOBAL_LLM_PRESETS.get(effort, GLOBAL_LLM_PRESETS[DEFAULT_REASONING_EFFORT]).copy()
-    preset["reasoningEffort"] = effort
+    
+    # Expose root-level fields mapping to 'call' for backward compatibility
+    call_config = preset.get("call", {})
+    preset["baseUrl"] = call_config.get("baseUrl", "")
+    preset["apiKey"] = call_config.get("apiKey", "")
+    preset["model"] = call_config.get("model", "")
+    preset["reasoningEffort"] = call_config.get("reasoningEffort", effort)
     return preset
 
 
@@ -223,11 +262,21 @@ def save_llm_presets_locked():
     LLM_PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
     safe_presets = {}
     for effort, preset in GLOBAL_LLM_PRESETS.items():
+        call_config = preset.get("call", {})
+        fast_config = preset.get("fastcall", {})
         safe_presets[effort] = {
-            "baseUrl": preset.get("baseUrl", ""),
-            "apiKeyEnc": _encrypt_text(preset.get("apiKey", "")),
-            "model": preset.get("model", ""),
-            "reasoningEffort": preset.get("reasoningEffort", effort)
+            "call": {
+                "baseUrl": call_config.get("baseUrl", ""),
+                "apiKeyEnc": _encrypt_text(call_config.get("apiKey", "")),
+                "model": call_config.get("model", ""),
+                "reasoningEffort": call_config.get("reasoningEffort", effort)
+            },
+            "fastcall": {
+                "baseUrl": fast_config.get("baseUrl", ""),
+                "apiKeyEnc": _encrypt_text(fast_config.get("apiKey", "")),
+                "model": fast_config.get("model", ""),
+                "reasoningEffort": fast_config.get("reasoningEffort", effort)
+            }
         }
     LLM_PRESETS_FILE.write_text(
         json.dumps({"presets": safe_presets}, ensure_ascii=False, indent=2),
@@ -609,7 +658,17 @@ def get_config(x_fzt_key: Optional[str] = Header(default=None)):
         "availableReasoningEfforts": sorted(REASONING_EFFORT_OPTIONS),
         "baseUrl": preset.get("baseUrl", ""),
         "model": preset.get("model", ""),
-        "hasKey": bool(preset.get("apiKey"))
+        "hasKey": bool(preset.get("apiKey")),
+        "call": {
+            "baseUrl": preset.get("call", {}).get("baseUrl", ""),
+            "model": preset.get("call", {}).get("model", ""),
+            "hasKey": bool(preset.get("call", {}).get("apiKey"))
+        },
+        "fastcall": {
+            "baseUrl": preset.get("fastcall", {}).get("baseUrl", ""),
+            "model": preset.get("fastcall", {}).get("model", ""),
+            "hasKey": bool(preset.get("fastcall", {}).get("apiKey"))
+        }
     }
 
 

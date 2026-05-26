@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pydantic_ai.models.function import FunctionModel, AgentInfo
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 
-from packages.agents.models import (
+from packages.agents.core.models import (
     DatasetBundle, RawTable,
     FlattenPlan, FlattenTablePlan,
     SemanticMapping, SqlPlan, MetricSql,

@@ -20,10 +20,10 @@ import sys
 import time
 from pathlib import Path
 
-from .base import AgentPipeline
-from .models import AgentResult, DatasetBundle
-from .workspace import Workspace
-from .adapters import build_smol_tools
+from .core.base import AgentPipeline
+from .core.models import AgentResult, DatasetBundle
+from .core.workspace import Workspace
+from .core.tools.adapters import build_smol_tools
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -37,7 +37,7 @@ AUTHORIZED_IMPORTS = [
     "openpyxl", "pdfplumber", "docx",
 ]
 
-from .plan_template import PLAN_TEMPLATE  # noqa: F401 — 向下兼容，旧 import 路径仍可用
+from .diagnosis.plan_template import PLAN_TEMPLATE  # noqa: F401 — 向下兼容，旧 import 路径仍可用
 
 
 class SmolPipeline(AgentPipeline):
@@ -62,7 +62,7 @@ class SmolPipeline(AgentPipeline):
             if self._check_aborted:
                 self._check_aborted()
 
-            from .tools.impl.setup_impl import read_plan_short_impl
+            from .core.tools.impl.setup_impl import read_plan_short_impl
             from smolagents.models import ChatMessage, MessageRole
             plan_text = read_plan_short_impl(self._ws)
             messages = list(messages)
@@ -179,7 +179,7 @@ class SmolPipeline(AgentPipeline):
                 ws.write_context(name, doc.read_text(encoding="utf-8"))
 
     def _write_plan(self, ws: Workspace):
-        from .tools.impl.setup_impl import design_plan_impl
+        from .core.tools.impl.setup_impl import design_plan_impl
         import json as _json
         design_plan_impl(ws, _json.dumps(PLAN_TEMPLATE, ensure_ascii=False))
         plan_path = ws.resolve("output/plan.json")
@@ -191,7 +191,7 @@ class SmolPipeline(AgentPipeline):
     # ── tools ──
 
     def _make_tools(self, ws: Workspace) -> list:
-        from .adapters.smol_tools import build_smol_tools
+        from .core.tools.adapters.smol_tools import build_smol_tools
         return build_smol_tools(ws, emit_log=self._emit_log)
 
     # ── agent ──

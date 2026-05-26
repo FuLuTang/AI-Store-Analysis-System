@@ -100,15 +100,16 @@ sequenceDiagram
 ### 3.4 管理员接口 (需 Header: x-admin-token)
 
 #### [GET] /api/admin/llm-presets
-- **说明**: 读取 low/medium/high 三档全局 LLM 预设。
-- **响应 (200)**: `{"status": "ok", "presets": {"low": {"baseUrl":"...","apiKey":"...","model":"..."}, "medium": {...}, "high": {...}}}`
+- **说明**: 读取 low/medium/high 三档全局 LLM 预设（包含独立的 `call` 与 `fastcall` 配置，并且在根级平铺挂载 `call` 的参数以向下兼容旧有调用）。
+- **响应 (200)**: `{"status": "ok", "presets": {"low": {"call": {"baseUrl": "...", "apiKey": "...", "model": "...", "reasoningEffort": "..."}, "fastcall": {...}, "baseUrl": "...", "apiKey": "...", "model": "..."}, "medium": {...}, "high": {...}}}`
 
 #### [POST] /api/admin/llm-presets
 - **说明**: 更新全局 LLM 预设。
 - **Body (JSON)**:
-  - 推荐方式 A: `{"presets": {"low": {...}, "medium": {...}, "high": {...}}}`（结构稳定，便于后续扩展额外字段）
-  - 兼容方式 B: `{"low": {...}, "medium": {...}, "high": {...}}`（仅用于兼容历史调用方）
-  - 单档对象字段：`baseUrl` (string), `apiKey` (string, 可选), `apiKeyEnc` (string, 可选), `model` (string)
+  - 推荐方式 A: `{"presets": {"low": {"call": {...}, "fastcall": {...}}, "medium": {...}, "high": {...}}}`
+  - 兼容方式 B: `{"low": {"call": {...}, "fastcall": {...}}, "medium": {...}, "high": {...}}`
+  - 旧版平铺兼容方式: 若单层直接传入 `baseUrl`, `apiKey`, `model` 等字段，后端会自动转换并同时应用于 `call` 与 `fastcall`。
+  - 子对象字段（`call` 与 `fastcall`）：`baseUrl` (string), `apiKey` (string, 可选), `apiKeyEnc` (string, 可选), `model` (string), `reasoningEffort` (string)
 - **响应 (200)**: `{"status": "ok", "presets": {"low": {...}, "medium": {...}, "high": {...}}}`
 
 ### 3.5 其他接口

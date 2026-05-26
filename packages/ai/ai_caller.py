@@ -236,12 +236,23 @@ def _build_context_header(scene: dict = None) -> str:
     return header
 
 
-def _resolve_reasoning_effort(settings: dict) -> str:
+def _get_model_settings(settings: dict, model_type: str = "call") -> tuple[str, str, str, str]:
     if not isinstance(settings, dict):
-        return "medium"
-    raw = settings.get("reasoningEffort") or settings.get("reasoning_effort") or ""
-    value = str(raw).strip().lower()
-    return value if value in {"low", "medium", "high"} else "medium"
+        return "", "", "", "medium"
+    
+    config = settings.get(model_type)
+    if not isinstance(config, dict) or not config:
+        config = settings
+        
+    base_url = config.get("baseUrl") or settings.get("baseUrl", "")
+    api_key = config.get("apiKey") or settings.get("apiKey", "")
+    model = config.get("model") or settings.get("model", "")
+    
+    raw_effort = config.get("reasoningEffort") or config.get("reasoning_effort") or settings.get("reasoningEffort") or ""
+    value = str(raw_effort).strip().lower()
+    reasoning_effort = value if value in {"low", "medium", "high"} else "medium"
+    
+    return base_url, api_key, model, reasoning_effort
 
 
 # ── AI-1: 初级报告 ──
@@ -279,10 +290,10 @@ def _build_data_context_text(profiles: list, mappings: list = None, scene: dict 
     return "\n".join(lines)
 
 
-async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = None) -> dict:
+async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = None, model_type: str = "call") -> dict:
     """AI-1: 初级报告 (兼容旧管线，有指标传指标，无指标传raw data)"""
     context = _build_context_header()
-    reasoning_effort = _resolve_reasoning_effort(settings)
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
 
     algo_text = "【算法引擎预诊结果】\n暂无算法诊断结果。"
     if algo_data and algo_data.get("anomalies"):
@@ -294,8 +305,8 @@ async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = No
 
     user_content = context + "\n" + algo_text + "\n\n【底层数据】\n" + "\n\n---\n\n".join(cleaned_data_texts)
 
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": _build_system_prompt(None)},
             {"role": "user", "content": user_content},
@@ -304,9 +315,9 @@ async def call_ai(settings: dict, cleaned_data_texts: list, algo_data: dict = No
     })
 
 
-async def call_ai_early(settings: dict, data_context_text: str, scene: dict, analysis_params: str = "") -> dict:
+async def call_ai_early(settings: dict, data_context_text: str, scene: dict, analysis_params: str = "", model_type: str = "call") -> dict:
     """AI-1 早期调用：在指标算出前先用数据上下文生成初诊"""
-    reasoning_effort = _resolve_reasoning_effort(settings)
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
     context = _build_context_header(scene)
 
     user_content = context
@@ -336,11 +347,11 @@ async def call_ai_early(settings: dict, data_context_text: str, scene: dict, ana
 
 输出要求：
 - Markdown 格式，简约
-- 指出关键发现和数据缺口
+- 指出关键发现 and 数据缺口
 - 不要编造没有数据的数值"""
 
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -349,9 +360,9 @@ async def call_ai_early(settings: dict, data_context_text: str, scene: dict, ana
     })
 
 
-async def call_ai_new(settings: dict, scene: dict, metric_results: list, evidence: dict, mappings: list) -> dict:
+async def call_ai_new(settings: dict, scene: dict, metric_results: list, evidence: dict, mappings: list, model_type: str = "call") -> dict:
     """AI-1: 初级报告 (新管线 — 格式化输入)"""
-    reasoning_effort = _resolve_reasoning_effort(settings)
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
 
     parts = [
         _build_context_header(scene),
@@ -363,8 +374,8 @@ async def call_ai_new(settings: dict, scene: dict, metric_results: list, evidenc
     ]
     user_content = "\n".join(parts)
 
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": _build_system_prompt(scene)},
             {"role": "user", "content": user_content},
@@ -375,12 +386,12 @@ async def call_ai_new(settings: dict, scene: dict, metric_results: list, evidenc
 
 # ── AI-3: 深度报告 ──
 
-async def call_detailed_ai(settings: dict, fused_report_text: str) -> dict:
+async def call_detailed_ai(settings: dict, fused_report_text: str, model_type: str = "call") -> dict:
     """AI-3: 详细报告 (兼容旧管线)"""
     user_content = _build_context_header() + "\n" + fused_report_text
-    reasoning_effort = _resolve_reasoning_effort(settings)
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": _build_detail_prompt(None)},
             {"role": "user", "content": user_content},
@@ -389,15 +400,15 @@ async def call_detailed_ai(settings: dict, fused_report_text: str) -> dict:
     })
 
 
-async def call_detailed_ai_new(settings: dict, scene: dict, fused_report_text: str, analysis_params: str = "") -> dict:
+async def call_detailed_ai_new(settings: dict, scene: dict, fused_report_text: str, analysis_params: str = "", model_type: str = "call") -> dict:
     """AI-3: 深度报告 (新管线)"""
     user_content = _build_context_header(scene)
     if analysis_params:
         user_content += f"\n\n【用户分析参数】\n{analysis_params}"
     user_content += "\n" + fused_report_text
-    reasoning_effort = _resolve_reasoning_effort(settings)
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": _build_detail_prompt(scene)},
             {"role": "user", "content": user_content},
@@ -408,15 +419,15 @@ async def call_detailed_ai_new(settings: dict, scene: dict, fused_report_text: s
 
 # ── AI-4: 精简报告 ──
 
-async def call_simplified_ai(settings: dict, detailed_report_text: str, analysis_params: str = "") -> dict:
+async def call_simplified_ai(settings: dict, detailed_report_text: str, analysis_params: str = "", model_type: str = "fastcall") -> dict:
     """AI-4: 老板视图"""
     user_content = _build_context_header()
     if analysis_params:
         user_content += f"\n\n【用户分析参数】\n{analysis_params}"
     user_content += "\n\n【详细报告内容】\n" + detailed_report_text
-    reasoning_effort = _resolve_reasoning_effort(settings)
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": _build_simplified_prompt()},
             {"role": "user", "content": user_content},
@@ -446,7 +457,7 @@ _INDUSTRY_CLASSIFY_SYSTEM_PROMPT = """你是一位数据分类专家。根据上
 }"""
 
 
-async def call_industry_classifier(settings: dict, profiles: list, analysis_params: str = "") -> dict:
+async def call_industry_classifier(settings: dict, profiles: list, analysis_params: str = "", model_type: str = "fastcall") -> dict:
     """AI-5: 行业分类"""
     lines = ["请判断以下字段属于哪个行业：\n"]
     if analysis_params:
@@ -459,9 +470,9 @@ async def call_industry_classifier(settings: dict, profiles: list, analysis_para
         lines.append(f"  表: {table} | 字段: {col} | 类型: {dtype} | 样本: {samples}")
     user_content = "\n".join(lines)
 
-    reasoning_effort = _resolve_reasoning_effort(settings)
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": _INDUSTRY_CLASSIFY_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -545,7 +556,7 @@ def _build_field_map_standard_fields() -> str:
     return "\n".join(lines)
 
 
-async def call_field_mapper(settings: dict, profiles: list, industry: str, analysis_params: str = "") -> dict:
+async def call_field_mapper(settings: dict, profiles: list, industry: str, analysis_params: str = "", model_type: str = "fastcall") -> dict:
     """AI-6: 字段映射"""
     lines = ["请将以下原始字段映射到标准语义字段：\n"]
     lines.append(f"已识别行业: {industry}\n")
@@ -561,9 +572,9 @@ async def call_field_mapper(settings: dict, profiles: list, industry: str, analy
     lines.append(_build_field_map_standard_fields())
     user_content = "\n".join(lines)
 
-    reasoning_effort = _resolve_reasoning_effort(settings)
-    return await shared_stream_fetch(settings["baseUrl"], settings["apiKey"], {
-        "model": settings["model"],
+    base_url, api_key, model, reasoning_effort = _get_model_settings(settings, model_type)
+    return await shared_stream_fetch(base_url, api_key, {
+        "model": model,
         "messages": [
             {"role": "system", "content": _FIELD_MAP_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},

@@ -8,10 +8,10 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from .base import AgentPipeline
-from .models import AgentResult, DatasetBundle
-from .workspace import Workspace
-from .adapters.agent_loop import AgentLoop
+from ..core.base import AgentPipeline
+from ..core.models import AgentResult, DatasetBundle
+from ..core.workspace import Workspace
+from ..core.agent_loop import AgentLoop
 
 logger = logging.getLogger("agent.custom")
 
@@ -97,7 +97,7 @@ class CustomPipeline(AgentPipeline):
     # ── staging ──
 
     def _stage_context(self, ws: Workspace):
-        ROOT = Path(__file__).parent.parent.parent
+        ROOT = Path(__file__).parent.parent.parent.parent
         docs_dir = ROOT / "docs"
         for name in ["指标计算文档.md"]:
             doc = docs_dir / name
@@ -105,7 +105,7 @@ class CustomPipeline(AgentPipeline):
                 ws.write_context(name, doc.read_text(encoding="utf-8"))
 
     def _write_plan(self, ws: Workspace):
-        from .tools.impl.setup_impl import design_plan_impl
+        from ..core.tools.impl.setup_impl import design_plan_impl
         from .plan_template import PLAN_TEMPLATE
         design_plan_impl(ws, json.dumps(PLAN_TEMPLATE, ensure_ascii=False))
         plan_path = ws.resolve("output/plan.json")

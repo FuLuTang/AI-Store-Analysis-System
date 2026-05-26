@@ -14,8 +14,8 @@ import sys
 import time
 from openai import OpenAI
 
-from ..workspace import Workspace
-from .prompt_builder import build_system_content, build_user_content
+from .workspace import Workspace
+from ..diagnosis.prompt_builder import build_system_content, build_user_content
 from .tool_converter import available_tool_call_for_agent, build_tool_map
 
 logger = logging.getLogger("agent.custom")
@@ -30,12 +30,30 @@ class AgentLoop:
     """薄封装：OpenAI SDK 客户端 + messages 管理 + tool 执行。"""
 
     def __init__(self, client: OpenAI, ws: Workspace, llm_preset: dict, emit_log=None, emit_status=None, analysis_params: str = "", check_aborted=None):
-        self.client = client
         self.ws = ws
-        self.model = llm_preset.get("model", "deepseek-chat")
-        self.reasoning_effort = llm_preset.get("reasoningEffort", "medium")
         self.analysis_params = analysis_params
         self._check_aborted = check_aborted
+        
+        # Resolve 'call' settings (智能模型)
+        call_cfg = llm_preset.get("call", {}) if isinstance(llm_preset, dict) else {}
+        self.model = call_cfg.get("model") or llm_preset.get("model", "deepseek-chat")
+        self.reasoning_effort = call_cfg.get("reasoningEffort") or llm_preset.get("reasoningEffort", "medium")
+        
+        # Resolve 'fastcall' settings (高速模型)
+        fast_cfg = llm_preset.get("fastcall", {}) if isinstance(llm_preset, dict) else {}
+        self.fastcall_model = fast_cfg.get("model") or self.model
+        self.fastcall_reasoning_effort = fast_cfg.get("reasoningEffort") or self.reasoning_effort
+        
+        # Build clients
+        call_base = call_cfg.get("baseUrl") or llm_preset.get("baseUrl", "https://api.deepseek.com")
+        call_key = call_cfg.get("apiKey") or llm_preset.get("apiKey", "")
+        
+        fast_base = fast_cfg.get("baseUrl") or call_base
+        fast_key = fast_cfg.get("apiKey") or call_key
+        
+        self.client = client or OpenAI(api_key=call_key, base_url=call_base, max_retries=0)
+        self.fastcall_client = OpenAI(api_key=fast_key, base_url=fast_base, max_retries=0) if fast_key else self.client
+
         self._total_input = 0
         self._total_output = 0
         self._total_cache_hit = 0

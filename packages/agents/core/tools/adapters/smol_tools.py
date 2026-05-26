@@ -1,14 +1,14 @@
 """Smolagents adapter：@tool + 闭包捕获 workspace"""
 import json
-from ..workspace import Workspace
-from ..tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
-from ..tools.impl.python_impl import run_python_impl
-from ..tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
-from ..tools.impl.context_impl import read_context_impl
-from ..tools.impl.profile_impl import profile_table_impl
-from ..tools.impl.validate_impl import validate_result_impl
-from ..tools.impl.setup_impl import setup_workspace_impl, cleanup_workspace_impl, list_tables_impl
-from ..tools.impl.doc_impl import read_document_impl
+from ...workspace import Workspace
+from ..impl.file_impl import read_file_impl, write_file_impl, list_files_impl
+from ..impl.python_impl import run_python_impl
+from ..impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
+from ..impl.context_impl import read_context_impl
+from ..impl.profile_impl import profile_table_impl
+from ..impl.validate_impl import validate_result_impl
+from ..impl.setup_impl import setup_workspace_impl, cleanup_workspace_impl, list_tables_impl
+from ..impl.doc_impl import read_document_impl
 
 
 def build_smol_tools(ws: Workspace, emit_log=None):
@@ -142,7 +142,7 @@ def build_smol_tools(ws: Workspace, emit_log=None):
         Args:
             step_index: plan 中步骤的 0-based 索引。
         """
-        from ..tools.impl.plan_check_impl import run_step_check
+        from ..impl.plan_check_impl import run_step_check
 
         plan_path = ws.resolve("output/plan.json")
         if not plan_path.exists():

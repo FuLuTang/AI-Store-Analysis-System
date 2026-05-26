@@ -4,7 +4,7 @@
 """
 
 import json
-from ..workspace import Workspace
+from .workspace import Workspace
 
 
 def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
@@ -145,13 +145,13 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
 
 def build_tool_map(ws: Workspace) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。"""
-    from ..tools.impl.doc_impl import read_document_impl
-    from ..tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
-    from ..tools.impl.python_impl import run_python_impl
-    from ..tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
-    from ..tools.impl.context_impl import read_context_impl
-    from ..tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
-    from ..tools.impl.plan_check_impl import run_step_check
+    from .tools.impl.doc_impl import read_document_impl
+    from .tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
+    from .tools.impl.python_impl import run_python_impl
+    from .tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
+    from .tools.impl.context_impl import read_context_impl
+    from .tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
+    from .tools.impl.plan_check_impl import run_step_check
     def _read_document(path: str) -> str:
         return read_document_impl(ws, path)
 
@@ -179,7 +179,7 @@ def build_tool_map(ws: Workspace) -> dict:
 
     def _read_context(topic: str) -> str:
         from pathlib import Path
-        root = Path(__file__).resolve().parent.parent.parent
+        root = Path(__file__).resolve().parent.parent.parent.parent
         doc_map = {
             "指标计算文档": root / "docs" / "指标计算文档.md",
         }

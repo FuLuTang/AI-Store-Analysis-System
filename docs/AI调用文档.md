@@ -32,8 +32,8 @@ evidence 构建完成
 └─────────────────┘
 ```
 
-**基础配置**（从 LLM Preset 读取）:
-- `model`: 模型名（如 `deepseek-v4-flash`）
+**基础配置**（从 LLM Preset 读取，各调用基于 `model_type` 选择 `call` 智能推理或 `fastcall` 高速执行配置，若未单独配置则向下兼容读取根级字段）:
+- `model`: 模型名（如 `deepseek-reasoner` / `gpt-4o-mini`）
 - `baseUrl`: API 基础地址
 - `apiKey`: API 密钥
 - `reasoning_effort`: low / medium / high

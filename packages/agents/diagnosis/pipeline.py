@@ -125,7 +125,17 @@ class CustomPipeline(AgentPipeline):
     def _write_plan(self, ws: Workspace):
         from ..core.tools.impl.setup_impl import design_plan_impl
         from .plan_template import PLAN_TEMPLATE
-        design_plan_impl(ws, json.dumps(PLAN_TEMPLATE, ensure_ascii=False))
+        import copy
+        
+        plan = copy.deepcopy(PLAN_TEMPLATE)
+        params_str = self._analysis_params
+        
+        for step in plan:
+            if "get_param" in step["detail"]:
+                params_str = (self._analysis_params or "").strip() or "none"
+                step["detail"] = step["detail"].replace("get_param", params_str)
+                    
+        design_plan_impl(ws, json.dumps(plan, ensure_ascii=False))
         plan_path = ws.resolve("output/plan.json")
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         if plan and plan[0]["status"] == "pending":

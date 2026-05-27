@@ -13,10 +13,22 @@ CST = timezone(timedelta(hours=8))
 # system content 拼合
 # ─────────────────────────────────────────────
 
-def build_system_content() -> str:
+def build_system_content(analysis_params: str = "") -> str:
     return join_parts(
         identity(),
         security_rules(),
+        system_analysis_params(analysis_params),
+    )
+
+
+def system_analysis_params(analysis_params: str) -> str:
+    """系统级分析参数限制，使大模型全局遵守对比维度、语气和词藻风格限制。"""
+    if not analysis_params or not analysis_params.strip():
+        return ""
+    return (
+        "【分析约束与参数限制】\n"
+        "本次数据分析中，你必须始终严格遵守以下用户自定义的参数设定和报告要求：\n"
+        f"{analysis_params}"
     )
 
 

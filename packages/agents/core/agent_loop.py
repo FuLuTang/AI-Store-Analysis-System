@@ -70,7 +70,7 @@ class AgentLoop:
         """主循环：构建初始 messages → 发请求 → 处理 tool_calls → 循环直到收到最终回答。"""
         try:
             self.messages = [
-                {"role": "system", "content": build_system_content()},
+                {"role": "system", "content": build_system_content(self.analysis_params)},
                 {"role": "user", "content": build_user_content(self.ws, self.analysis_params)},
             ]
 

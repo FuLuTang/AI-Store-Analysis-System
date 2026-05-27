@@ -106,6 +106,7 @@ EOF
 server {
     listen 80;
     server_name _;
+    client_max_body_size 128M;
     location / {
         proxy_pass http://127.0.0.1:$PORT;
         proxy_http_version 1.1;

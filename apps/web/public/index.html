@@ -4,11 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>福州门店 AI 分析系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        (function initTheme() {
+            const theme = localStorage.getItem('theme') || 'dark';
+            if (theme === 'light') {
+                document.documentElement.classList.add('light-theme');
+            }
+        })();
+    </script>
 </head>
 <body>
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
     <div class="container">
         <nav>
             <a href="index.html" class="active">用户工作台</a>
@@ -20,6 +33,9 @@
                     <option value="low">low（快速）</option>
                     <option value="high">high（深度）</option>
                 </select>
+                <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
                 <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
                     <i class="fas fa-sign-out-alt"></i> 退出
                 </button>
@@ -31,116 +47,149 @@
             <p class="subtitle">拖入门店经营 JSON 数据，一键获取深度归因与优化策略。</p>
         </header>
 
-        <div class="card">
-            <div id="dropZone" class="drop-zone">
-                <i class="fas fa-file-upload"></i>
-                <p id="fileName">拖放文件到此处（支持 Excel / CSV / JSON / PDF / Word / 文本 / 压缩包）</p>
-                <div id="fileList" class="file-list"></div>
-                <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.md,.zip,.rar,.7z">
-            </div>
+        <div class="dashboard-grid">
+            <!-- 左侧：参数与操作 -->
+            <div class="dashboard-sidebar">
+                <div class="card sidebar-card">
+                    <h3><i class="fas fa-file-import"></i> 数据导入</h3>
+                    <div id="dropZone" class="drop-zone">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p id="fileName">拖放数据文件到此处</p>
+                        <span class="upload-hint">支持 Excel / CSV / JSON / PDF / Word / TXT / 压缩包</span>
+                        <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.md,.zip,.rar,.7z">
+                    </div>
+                    <div id="fileList" class="file-list"></div>
 
-            <details class="analysis-params-details" id="paramsDetails">
-                <summary>
-                    <i class="fas fa-sliders-h"></i> 分析参数（可选）
-                </summary>
-                <div class="params-body">
-                    <div id="paramsFormContainer"></div>
-                    <div class="param-actions">
-                        <select id="presetSelect" style="background:#f1f5f9;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;cursor:pointer;">
-                            <option value="">📋 预设...</option>
-                        </select>
-                        <button id="addParamBtn" class="btn-secondary btn-sm">
-                            <i class="fas fa-plus"></i> 添加参数
+                    <div class="action-bar flex-column" style="gap: 0.75rem; margin-bottom: 0;">
+                        <button id="exampleBtn" class="btn-secondary w-full">
+                            <i class="fas fa-vial"></i> 载入案例数据
                         </button>
-                        <button id="saveParamsBtn" class="btn btn-sm">
-                            <i class="fas fa-save"></i> 保存
+                        <button id="startBtn" class="btn w-full" disabled>
+                            <i class="fas fa-magic"></i> 开始多维 AI 诊断
                         </button>
-                        <span id="paramsSavedHint" class="saved-hint">✓ 已保存</span>
+                        <button id="stopBtn" class="btn-danger w-full" style="display:none;">
+                            <i class="fas fa-stop-circle"></i> 强制停止任务
+                        </button>
+                    </div>
+
+                    <hr>
+
+                    <details class="analysis-params-details" id="paramsDetails">
+                        <summary>
+                            <i class="fas fa-sliders-h"></i> 诊断参数（可选）
+                        </summary>
+                        <div class="params-body">
+                            <div id="paramsFormContainer"></div>
+                            <div class="param-actions">
+                                <select id="presetSelect" class="nav-select">
+                                    <option value="">📋 预设...</option>
+                                </select>
+                                <button id="addParamBtn" class="btn-secondary btn-sm">
+                                    <i class="fas fa-plus"></i> 添加参数
+                                </button>
+                                <button id="saveParamsBtn" class="btn btn-sm">
+                                    <i class="fas fa-save"></i> 保存
+                                </button>
+                                <span id="paramsSavedHint" class="saved-hint">✓ 已保存</span>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
+            <!-- 右侧：执行进度、控制台日志与诊断报告 -->
+            <div class="dashboard-main">
+                <!-- 空闲时的引导提示 -->
+                <div id="dashboardPlaceholder" class="card placeholder-card">
+                    <div class="placeholder-content">
+                        <i class="fas fa-robot placeholder-icon"></i>
+                        <h2>门店 AI 智能诊断</h2>
+                        <p>请在左侧载入您的药店经营数据文件（支持销售流水、库存清单、财务数据等），点击“开始诊断”按钮即可通过 AI 引擎一键获取深度归因与策略优化报告。</p>
                     </div>
                 </div>
-            </details>
 
-            <!-- 参数编辑弹窗 -->
-            <div id="paramEditorModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center;">
-                <div style="background:#fff;border-radius:var(--radius);padding:2rem;max-width:440px;width:90%;box-shadow:var(--shadow-lg);max-height:90vh;overflow-y:auto;">
-                    <h3 style="margin-bottom:1.25rem;font-size:1.15rem;"><i class="fas fa-plus-circle"></i> 新建参数</h3>
-                    <div class="form-group">
-                        <label>控件类型</label>
-                        <select id="peType" class="form-select" onchange="window.updateParamEditor()">
-                            <option value="text">文本</option>
-                            <option value="number">数字</option>
-                            <option value="toggle">开关</option>
-                            <option value="slider">滑块</option>
-                            <option value="select">下拉选择</option>
-                            <option value="date">日期选择</option>
-                        </select>
+                <!-- 运行状态与进度卡片 -->
+                <div class="card execution-card" id="executionCard" style="display:none; padding: 1.8rem 2rem;">
+                    <div class="progress-section" id="progressContainer" style="display:block; border-top:none; padding:0; margin:0; max-width:100%;">
+                        <div class="progress-header">
+                            <span class="progress-header-title"><i class="fas fa-tasks"></i> 系统处理进度 <span class="progress-header-hint">(预计 3-5 分钟)</span></span>
+                            <span class="progress-text" id="progressText">0%</span>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-bar" id="progressBar"></div>
+                        </div>
+                        <div id="currentStepText" style="margin-top:0.75rem; min-height:1.2em;"></div>
                     </div>
-                    <div class="form-group">
-                        <label>参数名称</label>
-                        <input id="peKey" class="form-input" placeholder="例如：分析时间颗粒度">
-                    </div>
-                    <div class="form-group" id="peValueGroup">
-                        <label id="peValueLabel">默认值</label>
-                        <div id="peValueInner"></div>
-                    </div>
-                    <div id="peExtras"></div>
-                    <div class="modal-actions">
-                        <button class="btn-secondary" onclick="window.closeParamEditor()">取消</button>
-                        <button class="btn" onclick="window.confirmAddParam()"><i class="fas fa-check"></i> 确认添加</button>
+
+                    <div id="loading" class="loading">
+                        <div class="spinner"></div>
+                        <span id="statusText">任务正在后台运行，请等待...</span>
                     </div>
                 </div>
-            </div>
 
-            <div class="action-bar">
-                <button id="exampleBtn" class="btn-secondary">
-                    <i class="fas fa-vial"></i> 使用案例 JSON 文件
-                </button>
-                <button id="startBtn" class="btn" disabled>
-                    <i class="fas fa-magic"></i> 开始多维 AI 诊断
-                </button>
-                <button id="stopBtn" class="btn-danger" hidden>
-                    <i class="fas fa-stop-circle"></i> 强制停止
-                </button>
-            </div>
+                <!-- 终端日志卡片 -->
+                <div class="card" id="logCard" style="display:none; padding: 1.5rem 1.8rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <h3 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fas fa-terminal" style="color: var(--primary);"></i> 诊断控制台日志
+                        </h3>
+                        <a href="monitor.html" target="_blank" style="color: var(--text-muted); text-decoration: none; font-size: 0.8rem; transition: color 0.2s;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--text-muted)'">
+                            <i class="fas fa-external-link-alt"></i> 详细监控视图
+                        </a>
+                    </div>
+                    <div class="log-container" id="globalLogContainer" style="display:block; max-width:100%; margin:0; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--log-bg); padding: 0.8rem 1rem; height: 180px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; text-align: left; box-shadow: inset 0 2px 8px rgba(0,0,0,0.15);">
+                        <div id="globalLogContent"></div>
+                    </div>
+                </div>
 
-            <div id="loading" class="loading">
-                <div class="spinner"></div>
-                <span id="statusText">任务正在后台运行，请等待...</span>
-            </div>
-
-            <div class="report-toggle" id="reportToggleBar">
-                <span id="labelSimple">精简</span>
-                <label class="switch">
-                    <input type="checkbox" id="reportToggle">
-                    <span class="slider round"></span>
-                </label>
-                <span id="labelFull">完整</span>
-            </div>
-
-            <div id="result" class="report-section">
-                <div class="report-card">
-                    <div id="reportContent" class="markdown-body"></div>
+                <!-- 报告展现卡片 -->
+                <div id="result" class="report-section" style="margin:0;">
+                    <div class="report-header-bar" id="reportHeaderBar" style="display:none;">
+                        <h3><i class="fas fa-poll-h"></i> 药店经营 AI 智能诊断报告</h3>
+                        <div class="report-toggle" id="reportToggleBar" style="margin:0;">
+                            <span id="labelSimple">精简</span>
+                            <label class="switch">
+                                <input type="checkbox" id="reportToggle">
+                                <span class="slider round"></span>
+                            </label>
+                            <span id="labelFull">完整</span>
+                        </div>
+                    </div>
+                    <div class="report-card" style="display:none;">
+                        <div id="reportContent" class="markdown-body"></div>
+                    </div>
                 </div>
             </div>
+        </div>
 
-            <!-- 底部日志与进度 -->
-            <div class="progress-section" id="progressContainer">
-                <div class="progress-header">
-                    <span class="progress-header-title"><i class="fas fa-tasks"></i> 系统处理进度 <span class="progress-header-hint">(预计 3-5 分钟)</span></span>
-                    <span class="progress-text" id="progressText">0%</span>
+        <!-- 参数编辑弹窗 (放置在 grid 外部) -->
+        <div id="paramEditorModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
+            <div style="background:#161c2d;border-radius:var(--radius);padding:2rem;max-width:440px;width:90%;box-shadow:var(--shadow-lg);max-height:90vh;overflow-y:auto; border: 1px solid rgba(255,255,255,0.1);">
+                <h3 style="margin-bottom:1.25rem;font-size:1.15rem; color: white;"><i class="fas fa-plus-circle"></i> 新建参数</h3>
+                <div class="form-group">
+                    <label>控件类型</label>
+                    <select id="peType" class="form-select" onchange="window.updateParamEditor()">
+                        <option value="text">文本</option>
+                        <option value="number">数字</option>
+                        <option value="toggle">开关</option>
+                        <option value="slider">滑块</option>
+                        <option value="select">下拉选择</option>
+                        <option value="date">日期选择</option>
+                    </select>
                 </div>
-                <div class="progress-track">
-                    <div class="progress-bar" id="progressBar"></div>
+                <div class="form-group">
+                    <label>参数名称</label>
+                    <input id="peKey" class="form-input" placeholder="例如：分析时间颗粒度">
                 </div>
-                <div id="currentStepText" style="margin-top:0.5rem;font-size:0.85rem;color:#6366f1;font-weight:500;min-height:1.2em;transition:opacity 0.2s;"></div>
-            </div>
-
-            <div class="log-container" id="globalLogContainer">
-                <div class="log-header">
-                    <span><i class="fas fa-terminal"></i> 总后台运行日志</span>
-                    <a href="monitor.html" target="_blank"><i class="fas fa-external-link-alt"></i> 详细监控视图</a>
+                <div class="form-group" id="peValueGroup">
+                    <label id="peValueLabel">默认值</label>
+                    <div id="peValueInner"></div>
                 </div>
-                <div id="globalLogContent"></div>
+                <div id="peExtras"></div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="window.closeParamEditor()">取消</button>
+                    <button class="btn" onclick="window.confirmAddParam()"><i class="fas fa-check"></i> 确认添加</button>
+                </div>
             </div>
         </div>
     </div>
@@ -254,8 +303,54 @@
         }
 
         window.onload = async () => {
+            updateThemeIcon();
             await checkStatus();
         };
+
+        window.toggleTheme = function() {
+            const isDark = document.documentElement.classList.toggle('dark-theme');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateThemeIcon();
+        };
+
+        function updateThemeIcon() {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                const isDark = document.documentElement.classList.contains('dark-theme');
+                icon.className = isDark ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+
+        function updateDashboardVisibility(status, hasResult) {
+            const placeholder = document.getElementById('dashboardPlaceholder');
+            const executionCard = document.getElementById('executionCard');
+            const logCard = document.getElementById('logCard');
+            const reportHeaderBar = document.getElementById('reportHeaderBar');
+
+            if (status === 'idle' && !hasResult) {
+                placeholder.style.display = 'block';
+                executionCard.style.display = 'none';
+                logCard.style.display = 'none';
+                if (reportHeaderBar) reportHeaderBar.style.display = 'none';
+            } else {
+                placeholder.style.display = 'none';
+                if (status === 'running' || status === 'queued') {
+                    executionCard.style.display = 'block';
+                    logCard.style.display = 'block';
+                } else if (status === 'completed') {
+                    executionCard.style.display = 'block';
+                    logCard.style.display = 'block';
+                } else if (status === 'error' || status === 'aborted' || status === 'interrupted') {
+                    executionCard.style.display = 'block';
+                    logCard.style.display = 'block';
+                }
+                if (hasResult) {
+                    if (reportHeaderBar) reportHeaderBar.style.display = 'flex';
+                } else {
+                    if (reportHeaderBar) reportHeaderBar.style.display = 'none';
+                }
+            }
+        }
 
         async function checkStatus() {
             try {
@@ -264,6 +359,9 @@
 
                 // ── 第一段：状态 UI（spinner / 按钮 / polling） ──
                 const isTerminal = data.status !== 'running' && data.status !== 'queued';
+                const hasResult = !!(data.result && data.fullResult);
+
+                updateDashboardVisibility(data.status, hasResult);
 
                 if (data.status === 'running' || data.status === 'queued') {
                     startBtn.disabled = true;
@@ -295,7 +393,7 @@
 
                 // ── 第二段：结果渲染（完全独立于 status） ──
                 // 只要 API 回传了结果内容（无论 status 是什么），就渲染
-                if (data.result && data.fullResult) {
+                if (hasResult) {
                     // 清除上次的警告 banner（如果有）
                     const oldBanner = document.getElementById('pipelineWarnBanner');
                     if (oldBanner) oldBanner.remove();
@@ -377,25 +475,34 @@
                             let icon = 'fa-info-circle';
                             let iconColor = 'var(--primary)';
                             if (c.color === 'red') { icon = 'fa-exclamation-triangle'; iconColor = 'var(--error)'; }
-                            if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = '#f59e0b'; }
+                            if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = 'var(--warning)'; }
                             if (c.color === 'green') { icon = 'fa-check-circle'; iconColor = 'var(--success)'; }
                             if (c.color === 'pink') { icon = 'fa-question-circle'; iconColor = '#ff6b9d'; }
+
+                            // Accordion Evidence panel instead of hover tooltip
+                            const evidenceHtml = c.evidence ? `
+                                <div class="evidence-section">
+                                    <button class="evidence-toggle-btn" onclick="toggleEvidence(this)">
+                                        <i class="fas fa-chart-line"></i> 查看数据证据 <i class="fas fa-chevron-down toggle-arrow"></i>
+                                    </button>
+                                    <div class="evidence-content markdown-body" style="display:none;">
+                                        ${marked.parse(c.evidence || '')}
+                                    </div>
+                                </div>
+                            ` : '';
 
                             return `
                                 <div class="issue-card" data-color="${c.color || 'blue'}">
                                     <div class="issue-title">
                                         <i class="fas ${icon}" style="color: ${iconColor};"></i>
-                                        ${c.title}
+                                        <span>${c.title}</span>
                                     </div>
                                     <div class="issue-explanation">${c.explanation}</div>
                                     <div class="issue-suggestion">
                                         <i class="fas fa-lightbulb"></i>
                                         <span>${c.suggestion}</span>
                                     </div>
-                                    <div class="evidence-wrapper">
-                                        <i class="fas fa-chart-line evidence-icon"></i>
-                                        <div class="evidence-tooltip markdown-body">${marked.parse(c.evidence || '')}</div>
-                                    </div>
+                                    ${evidenceHtml}
                                 </div>
                             `;
                         }).join('');
@@ -413,6 +520,19 @@
                 }
             }
         }
+
+        window.toggleEvidence = function(btn) {
+            const content = btn.nextElementSibling;
+            const arrow = btn.querySelector('.toggle-arrow');
+            if (content.style.display === 'none' || !content.style.display) {
+                content.style.display = 'block';
+                content.style.animation = 'slideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+                arrow.style.transform = 'rotate(180deg)';
+            } else {
+                content.style.display = 'none';
+                arrow.style.transform = 'rotate(0deg)';
+            }
+        };
 
         // === 文件上传 ===
         dropZone.onclick = () => fileInput.click();
@@ -432,11 +552,110 @@
         };
 
         const ALLOWED_EXTENSIONS = ['.json', '.xlsx', '.xls', '.csv', '.pdf', '.docx', '.doc', '.txt', '.md', '.zip', '.rar', '.7z'];
+        
+        function getFileIconClass(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            switch (ext) {
+                case 'xlsx':
+                case 'xls':
+                    return 'fa-file-excel';
+                case 'pdf':
+                    return 'fa-file-pdf';
+                case 'docx':
+                case 'doc':
+                    return 'fa-file-word';
+                case 'zip':
+                case 'rar':
+                case '7z':
+                    return 'fa-file-archive';
+                case 'csv':
+                    return 'fa-file-csv';
+                case 'json':
+                case 'txt':
+                case 'md':
+                    return 'fa-file-code';
+                default:
+                    return 'fa-file-alt';
+            }
+        }
+
+        function getFileIconStyle(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            switch (ext) {
+                case 'xlsx':
+                case 'xls':
+                    return 'color: #10b981;';
+                case 'pdf':
+                    return 'color: #ef4444;';
+                case 'docx':
+                case 'doc':
+                    return 'color: #3b82f6;';
+                case 'zip':
+                case 'rar':
+                case '7z':
+                    return 'color: #f59e0b;';
+                case 'csv':
+                case 'json':
+                    return 'color: #6366f1;';
+                default:
+                    return 'color: var(--text-muted);';
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0 || !bytes) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        window.removeFile = function(idx, event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            filesData.splice(idx, 1);
+            renderFileList();
+        };
+
+        function renderFileList() {
+            fileListDisplay.innerHTML = '';
+            
+            if (filesData.length > 0) {
+                dropZone.classList.add('has-files');
+                document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
+                
+                filesData.forEach((file, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    
+                    const iconClass = getFileIconClass(file.name);
+                    const iconStyle = getFileIconStyle(file.name);
+                    const sizeStr = formatFileSize(file.size);
+                    
+                    item.innerHTML = `
+                        <span class="file-info" title="${file.name}">
+                            <i class="fas ${iconClass}" style="${iconStyle}"></i>
+                            <span class="file-name">${file.name}</span>
+                        </span>
+                        <span class="file-size">${sizeStr}</span>
+                        <button class="file-remove-btn" onclick="window.removeFile(${idx}, event)" title="删除文件">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    `;
+                    fileListDisplay.appendChild(item);
+                });
+                
+                startBtn.disabled = false;
+            } else {
+                dropZone.classList.remove('has-files');
+                document.getElementById('fileName').innerText = '拖放数据文件到此处';
+                startBtn.disabled = true;
+            }
+        }
+
         function handleFiles(files) {
             if (files.length === 0) return;
-
-            filesData = [];
-            fileListDisplay.innerHTML = '';
 
             Array.from(files).forEach(file => {
                 const ext = '.' + file.name.split('.').pop().toLowerCase();
@@ -444,16 +663,13 @@
                     alert(`不支持的文件: ${file.name}\n支持的格式: ${ALLOWED_EXTENSIONS.join(', ')}`);
                     return;
                 }
-                filesData.push(file);
-
-                const item = document.createElement('div');
-                item.className = 'file-item';
-                item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
-                fileListDisplay.appendChild(item);
+                const isDuplicate = filesData.some(f => f.name === file.name && f.size === file.size);
+                if (!isDuplicate) {
+                    filesData.push(file);
+                }
             });
 
-            startBtn.disabled = false;
-            document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
+            renderFileList();
         }
 
         // === 开始分析 ===
@@ -478,6 +694,7 @@
             resetProgressState();
             progressContainer.style.display = 'block';
             globalLogContainer.style.display = 'block';
+            updateDashboardVisibility('running', false);
             connectSSE();
             resultSection.classList.remove('visible');
             statusText.innerText = '正在提交分析任务...';
@@ -528,22 +745,15 @@
                 if (data.error) throw new Error(data.error);
 
                 filesData = [];
-                fileListDisplay.innerHTML = '';
                 data.files.forEach((f) => {
                     const byteStr = atob(f.base64);
                     const bytes = new Uint8Array(byteStr.length);
                     for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
                     const file = new File([bytes], f.name, { type: 'application/octet-stream' });
                     filesData.push(file);
-
-                    const item = document.createElement('div');
-                    item.className = 'file-item';
-                    item.innerHTML = `<i class="fas fa-file-code"></i> ${f.name || '案例文件'}`;
-                    fileListDisplay.appendChild(item);
                 });
 
-                startBtn.disabled = false;
-                document.getElementById('fileName').innerText = `已加载 ${filesData.length} 个案例文件`;
+                renderFileList();
             } catch (err) {
                 alert('加载案例失败: ' + err.message);
             } finally {

@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>系统后台监控 - AI 分析系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -18,12 +21,14 @@
         .workflow-node {
             width: 100%;
             max-width: 520px;
-            border: 2px solid #e2e8f0;
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 12px;
             padding: 0.75rem 1rem;
-            background: #fff;
+            background: rgba(22, 28, 45, 0.45);
             transition: all 0.35s cubic-bezier(.4,0,.2,1);
             position: relative;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
         }
         .workflow-node .node-header {
             display: flex;
@@ -31,7 +36,7 @@
             gap: 8px;
             font-weight: 600;
             font-size: 0.92rem;
-            color: #334155;
+            color: var(--text);
         }
         .workflow-node .node-header .step-badge {
             display: inline-flex;
@@ -39,16 +44,17 @@
             justify-content: center;
             width: 26px; height: 26px;
             border-radius: 50%;
-            background: #e2e8f0;
-            color: #64748b;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
             font-size: 0.72rem;
             font-weight: 700;
             flex-shrink: 0;
-            transition: background 0.3s, color 0.3s;
+            transition: all 0.3s;
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
         .workflow-node .node-header i.fa-icon {
             font-size: 1rem;
-            color: #94a3b8;
+            color: var(--text-muted);
             transition: color 0.3s;
         }
         .workflow-node .node-log {
@@ -56,9 +62,11 @@
             overflow: hidden;
             transition: max-height 0.4s ease;
             font-size: 0.78rem;
-            color: #64748b;
+            color: var(--text-muted);
             margin-top: 0;
             line-height: 1.5;
+            font-family: 'JetBrains Mono', monospace;
+            border-radius: 6px;
         }
         .workflow-node.active .node-log,
         .workflow-node.success .node-log,
@@ -66,40 +74,46 @@
             max-height: 300px;
             overflow-y: auto;
             margin-top: 0.5rem;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            padding: 0.5rem;
         }
 
         /* 状态色 */
-        .workflow-node.pending { border-color: #e2e8f0; }
+        .workflow-node.pending { border-color: rgba(255, 255, 255, 0.06); }
         .workflow-node.active {
             border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
             animation: pulse-border 2s infinite;
+            background: rgba(99, 102, 241, 0.05);
         }
         .workflow-node.success {
             border-color: var(--success);
-            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, rgba(5, 150, 105, 0.02) 100%);
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.05);
         }
         .workflow-node.error {
             border-color: var(--error);
-            background: linear-gradient(135deg, #fef2f2 0%, #fff1f2 100%);
+            background: linear-gradient(135deg, rgba(244, 63, 94, 0.06) 0%, rgba(225, 29, 72, 0.02) 100%);
+            box-shadow: 0 0 15px rgba(244, 63, 94, 0.05);
         }
-        .workflow-node.active .step-badge { background: var(--primary); color: #fff; }
-        .workflow-node.success .step-badge { background: var(--success); color: #fff; }
-        .workflow-node.error .step-badge { background: var(--error); color: #fff; }
+        .workflow-node.active .step-badge { background: var(--primary); color: #fff; border-color: transparent; }
+        .workflow-node.success .step-badge { background: var(--success); color: #fff; border-color: transparent; }
+        .workflow-node.error .step-badge { background: var(--error); color: #fff; border-color: transparent; }
         .workflow-node.active .node-header i.fa-icon { color: var(--primary); }
         .workflow-node.success .node-header i.fa-icon { color: var(--success); }
         .workflow-node.error .node-header i.fa-icon { color: var(--error); }
 
         @keyframes pulse-border {
-            0%, 100% { box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
-            50% { box-shadow: 0 0 0 6px rgba(99,102,241,0.08); }
+            0%, 100% { box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
+            50% { box-shadow: 0 0 0 5px rgba(99,102,241,0.25); }
         }
 
         /* 连接线 */
         .workflow-connector {
             width: 2px;
             height: 24px;
-            background: #cbd5e1;
+            background: rgba(255, 255, 255, 0.15);
             position: relative;
         }
         .workflow-connector::after {
@@ -108,15 +122,15 @@
             bottom: -3px;
             left: -3px;
             width: 8px; height: 8px;
-            border-left: 2px solid #cbd5e1;
-            border-bottom: 2px solid #cbd5e1;
+            border-left: 2px solid rgba(255, 255, 255, 0.15);
+            border-bottom: 2px solid rgba(255, 255, 255, 0.15);
             transform: rotate(-45deg);
         }
 
         /* 分组标签 */
         .group-label {
             font-size: 0.68rem;
-            color: #94a3b8;
+            color: var(--text-muted);
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -127,16 +141,16 @@
 
         /* 日志行 */
         .log-line {
-            padding: 1px 0;
+            padding: 2px 0;
             word-break: break-all;
         }
         .log-line .log-time {
-            color: #94a3b8;
+            color: var(--text-muted);
             font-size: 0.72rem;
-            margin-right: 4px;
+            margin-right: 6px;
         }
         .log-line.error-line {
-            color: #ef4444;
+            color: var(--error);
             font-weight: 600;
         }
 
@@ -144,44 +158,76 @@
         .status-banner {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 0.6rem 1rem;
-            background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
-            border: 1px solid #c7d2fe;
+            gap: 10px;
+            padding: 0.7rem 1.2rem;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.05) 100%);
+            border: 1px solid rgba(99, 102, 241, 0.2);
             border-radius: 10px;
-            margin-bottom: 1rem;
-            font-size: 0.88rem;
-            color: #4338ca;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+            color: #818cf8;
             font-weight: 500;
-            min-height: 38px;
+            min-height: 42px;
             transition: all 0.3s;
         }
-        .status-banner i { font-size: 1rem; }
+        .status-banner i { font-size: 1.1rem; color: #a78bfa; }
+
+        /* Flowing text shimmer effect for thinking status text */
+        #statusBannerText {
+            background: linear-gradient(
+                90deg,
+                rgba(129, 140, 248, 0.7) 0%,
+                rgba(168, 85, 247, 0.7) 25%,
+                rgba(255, 255, 255, 1) 50%,
+                rgba(168, 85, 247, 0.7) 75%,
+                rgba(129, 140, 248, 0.7) 100%
+            );
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: textShimmer 2.5s infinite linear;
+            font-weight: 600;
+            display: inline-block;
+        }
 
         /* 底部全局日志面板 */
         .monitor-log-panel {
-            background: #f8fafc;
-            border: 1px solid var(--border);
+            background: #0f141c;
+            border: 1px solid rgba(255, 255, 255, 0.06);
             border-radius: 10px;
             padding: 0.75rem 1rem;
             max-height: 360px;
             overflow-y: auto;
-            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.78rem;
             line-height: 1.6;
-            color: #475569;
+            color: #cbd5e1;
         }
         .monitor-log-panel::-webkit-scrollbar { width: 6px; }
-        .monitor-log-panel::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .monitor-log-panel::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
     </style>
+    <script>
+        (function initTheme() {
+            const theme = localStorage.getItem('theme') || 'light';
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
+            }
+        })();
+    </script>
 </head>
 <body>
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
     <div class="container" style="max-width:1200px;">
         <nav>
             <a href="index.html">用户工作台</a>
             <a href="monitor.html" class="active">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
+                <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm); margin-right: 4px;">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
                 <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
                     <i class="fas fa-sign-out-alt"></i> 退出
                 </button>
@@ -307,6 +353,22 @@
                 if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
             } catch(e) { window.location.href = '/login.html'; }
         })();
+
+        // ========== 主题切换 ==========
+        window.toggleTheme = function() {
+            const isDark = document.documentElement.classList.toggle('dark-theme');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateThemeIcon();
+        };
+
+        function updateThemeIcon() {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                const isDark = document.documentElement.classList.contains('dark-theme');
+                icon.className = isDark ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+        setTimeout(updateThemeIcon, 0);
 
         const connStatus = document.getElementById('connStatus');
         const timeDisplay = document.getElementById('currentTime');

@@ -49,7 +49,7 @@ graph TD
 - **Header**: `x-fzt-key`（必填）
 - **Content-Type**: `multipart/form-data`
 - **Body (Multipart)**:
-  - `files`: 一个或多个文件。每文件最大 **5MB**。
+  - `files`: 一个或多个文件。每文件最大 **100MB**。
   - `productName`: 商品名称，必填。
   - `reasoningEffort`: 可选，默认 `low`。预检阶段原则上使用低成本模型。
 - **支持格式**: `.json` / `.xlsx` / `.xls` / `.csv`，后续可复用现有上传解析能力扩展更多格式。
@@ -105,7 +105,7 @@ graph TD
 | 状态码 | 含义 |
 | :--- | :--- |
 | `400` | 缺少 `productName` |
-| `400` | 文件超过 5MB |
+| `400` | 文件超过 100MB |
 | `400` | 不支持的文件格式 |
 | `400` | 文件解析失败 |
 | `401` | Key 无效或缺失 |
@@ -118,7 +118,7 @@ graph TD
 - **Header**: `x-fzt-key`（必填）
 - **Content-Type**: `multipart/form-data`
 - **Body (Multipart)**:
-  - `files`: 一个或多个文件。每文件最大 **5MB**。
+  - `files`: 一个或多个文件。每文件最大 **100MB**。
   - `productName`: 商品名称，必填。
   - `reasoningEffort`: 可选，`low` / `medium` / `high`，默认 `high`。
   - `candidateCount`: 可选，返回推荐价格数量，默认 `2`。
@@ -139,7 +139,7 @@ graph TD
 | :--- | :--- |
 | `400` | 任务正在运行中 |
 | `400` | 缺少 `productName` |
-| `400` | 文件超过 5MB |
+| `400` | 文件超过 100MB |
 | `400` | 文件解析失败 |
 | `401` | Key 无效或缺失 |
 

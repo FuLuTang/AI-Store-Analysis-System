@@ -28,30 +28,33 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
         # ── 文件读写 ──
         _make_tool(
             name="read_file",
-            description="读取 workspace 内的文本文件内容。",
+            description="分页读取 workspace 内的文本文件内容。默认最多读取 2000 行，返回内容、行号、大小和 next_offset；大文件请分页读取，二进制文件请用 read_document 或 run_python。",
             parameters={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "workspace 内的相对路径"},
+                    "offset": {"type": "integer", "description": "从第几行开始读取，0 表示文件开头"},
+                    "limit": {"type": "integer", "description": "最多读取多少行，最大 2000，默认 2000"},
                 },
                 "required": ["path"],
             },
         ),
         _make_tool(
             name="write_file",
-            description="将文本内容写入 workspace 文件。父目录自动创建。",
+            description="将文本内容写入 workspace 文件。父目录自动创建；默认原子覆盖，可用 mode='append' 追加。",
             parameters={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "workspace 内的相对路径"},
                     "content": {"type": "string", "description": "要写入的文本内容"},
+                    "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "写入模式，默认 overwrite；追加写入用 append"},
                 },
                 "required": ["path", "content"],
             },
         ),
         _make_tool(
             name="list_files",
-            description="列出 workspace 子目录下的文件。",
+            description="列出 workspace 子目录下的文件，返回路径、文件名、字节大小和可读大小。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -162,11 +165,11 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
     def _read_document(path: str) -> str:
         return read_document_impl(ws, path)
 
-    def _read_file(path: str) -> str:
-        return read_file_impl(ws, path)
+    def _read_file(path: str, offset: int = 0, limit: int = 2000) -> str:
+        return read_file_impl(ws, path, offset=offset, limit=limit)
 
-    def _write_file(path: str, content: str) -> str:
-        return write_file_impl(ws, path, content)
+    def _write_file(path: str, content: str, mode: str = "overwrite") -> str:
+        return write_file_impl(ws, path, content, mode=mode)
 
     def _list_files(subdir: str = "") -> str:
         files = list_files_impl(ws, subdir)

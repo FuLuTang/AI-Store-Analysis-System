@@ -65,9 +65,9 @@ sequenceDiagram
 #### [POST] /api/analyze
 - **说明**: Multipart 上传入口，提交文件并启动分析。
 - **Header**: `x-fzt-key`（必填）
-- **Body (Multipart)**: `files` 字段，一个或多个文件。每文件最大 **5MB**，支持 `.json` / `.xlsx` / `.csv` 格式。可选字段 `reasoningEffort` (`low` / `medium` / `high`，默认 `medium`)。
+- **Body (Multipart)**: `files` 字段，一个或多个文件。每文件最大 **100MB**，支持 `.json` / `.xlsx` / `.csv` 格式。可选字段 `reasoningEffort` (`low` / `medium` / `high`，默认 `medium`)。
 - **响应 (200)**: `{"status": "started", "pipeline": "multifile"}`
-- **错误 (400)**: 任务正在运行中 / 文件过大(>5MB) / JSON 解析失败 / 文件读取失败
+- **错误 (400)**: 任务正在运行中 / 文件过大(>100MB) / JSON 解析失败 / 文件读取失败
 
 #### [GET] /api/status
 - **说明**: 获取该账户最近一次任务的状态与结果。

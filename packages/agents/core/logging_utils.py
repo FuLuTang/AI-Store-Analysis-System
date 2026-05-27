@@ -1,4 +1,4 @@
-"""统一 LLM usage logging — Pydantic / Smol 线共用。
+"""统一 LLM usage logging — Pydantic / Custom 线共用。
 
 每次 LLM 调用后打一条 JSON 日志，记录 token / cache / reasoning 数据。
 兼容 OpenAI / GPT 和 DeepSeek 的 usage 字段差异。

@@ -25,6 +25,7 @@ sys.path.append(str(ROOT_DIR))
 
 from packages.core.input_adapter import parse_uploaded_files, adapt_to_dataset_bundle
 from packages.agents.core.models import RawFile
+from packages.agents.core.errors import PipelineAbortedError
 from packages.agents.registry import create_pipeline
 from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
@@ -63,7 +64,7 @@ STORAGE_DIR = ROOT_DIR / "storage"
 _ensure_file_log()
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
 LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
-MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024
+MAX_UPLOAD_FILE_SIZE = 100 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
 DEFAULT_REASONING_EFFORT = "medium"
 REASONING_EFFORT_OPTIONS = {"low", "medium", "high"}
@@ -72,31 +73,7 @@ LLM_PRESETS_LOCK = Lock()
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 PRESET_SECRET = os.getenv("LLM_PRESET_SECRET", "").strip()
 
-# 全局分析处理管线 — traditional / pydantic / smol
-GLOBAL_AGENT_PIPELINE = "traditional"
-AGENT_PIPELINE_FILE = STORAGE_DIR / "agent_pipeline.json"
-AGENT_PIPELINE_LOCK = Lock()
-AGENT_PIPELINE_OPTIONS = {"traditional", "pydantic", "smol", "custom"}
-
-def _load_agent_pipeline() -> str:
-    if AGENT_PIPELINE_FILE.exists():
-        try:
-            payload = json.loads(AGENT_PIPELINE_FILE.read_text(encoding="utf-8"))
-            val = payload.get("pipeline", "traditional")
-            if val in AGENT_PIPELINE_OPTIONS:
-                return val
-        except Exception:
-            pass
-    return "traditional"
-
-def _save_agent_pipeline(val: str):
-    AGENT_PIPELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    AGENT_PIPELINE_FILE.write_text(
-        json.dumps({"pipeline": val}, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
-
-GLOBAL_AGENT_PIPELINE = _load_agent_pipeline()
+GLOBAL_AGENT_PIPELINE = "custom"
 
 
 def normalize_reasoning_effort(value: Optional[str]) -> str:
@@ -746,27 +723,6 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
         "presets": get_all_llm_presets()
     }
 
-@app.get("/api/admin/pipeline")
-def get_admin_pipeline(x_admin_token: Optional[str] = Header(default=None)):
-    require_admin_authorization(x_admin_token)
-    with AGENT_PIPELINE_LOCK:
-        return {"status": "ok", "pipeline": GLOBAL_AGENT_PIPELINE, "options": sorted(AGENT_PIPELINE_OPTIONS)}
-
-
-@app.post("/api/admin/pipeline")
-async def save_admin_pipeline(request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    require_admin_authorization(x_admin_token)
-    payload = await request.json()
-    val = (payload.get("pipeline") or "").strip().lower()
-    if val not in AGENT_PIPELINE_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"无效管线: {val}，可选 {sorted(AGENT_PIPELINE_OPTIONS)}")
-    with AGENT_PIPELINE_LOCK:
-        global GLOBAL_AGENT_PIPELINE
-        GLOBAL_AGENT_PIPELINE = val
-        _save_agent_pipeline(val)
-    return {"status": "ok", "pipeline": GLOBAL_AGENT_PIPELINE}
-
-
 @app.get("/api/status")
 def get_status(x_fzt_key: Optional[str] = Header(default=None)):
     session = resolve_session(x_fzt_key)
@@ -842,7 +798,7 @@ async def stream(
 
 
 async def run_pipeline_task(session: SessionState, pipeline_name: str, active_preset: dict, bundle):
-    """统一管线执行入口：triaditional / pydantic / smol 均走此路径"""
+    """统一管线执行入口：当前固定为 custom 管线。"""
     with session.runtime_lock:
         if session.force_stop or session.status == "aborted":
             return
@@ -854,7 +810,6 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         try:
             ensure_not_stopped(session)
         except TaskAbortedError as e:
-            from packages.agents.traditional_pipeline import PipelineAbortedError
             raise PipelineAbortedError(str(e))
 
     ws_dir = session.run_dir / "workspace" if session.run_dir else None
@@ -876,8 +831,6 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
     )
 
     try:
-        from packages.agents.traditional_pipeline import PipelineAbortedError
-
         result = await pipe.run(bundle)
         full_text = result.full_report or f"# {pipeline_name} 管线报告\n\npipeline: {result.pipeline}\n耗时: {result.elapsed_ms:.0f}ms"
         session.full_result = full_text
@@ -962,8 +915,7 @@ async def analyze(
             session.error_message = str(e)
         raise HTTPException(status_code=400, detail=f"文件解析失败: {e}")
 
-    with AGENT_PIPELINE_LOCK:
-        pipeline_name = GLOBAL_AGENT_PIPELINE
+    pipeline_name = GLOBAL_AGENT_PIPELINE
     active_preset = get_llm_preset(session.config.get("reasoningEffort", "medium"))
 
     # 创建 run 目录

@@ -1,9 +1,9 @@
-"""共享的任务计划模板，custom / smol 管线共用。"""
+"""共享的任务计划模板，供 custom 管线使用。"""
 PLAN_TEMPLATE = [
     {"title": "扫描并解析上传文件",
      "detail": (
-         "扫描 input/ 目录，用 read_document 看各文件内容，大概想想每个文件怎么处理。"
-         "对数据文件用 read_file 读原始内容后用 run_python 清洗并保存为 parquet/JSON 到 tables/，"
+         "扫描 input/ 目录，先用 list_files 查看文件类型和大小，再用 read_document 看内容摘要。"
+         "只对小型文本文件用 read_file 分页查看；大文件、压缩包、数据库或二进制文件要用 run_python 分块读取和清洗，"
          "存为 parquet/JSON 到 tables/ 再 duckdb_register_parquet 注册。"
          "如果已有注册好的表，直接验证后跳过。"
          "确认每张表行数差不多，数据量基本完整，数据链路通了再往下走。"

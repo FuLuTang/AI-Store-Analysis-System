@@ -48,14 +48,14 @@
 | **URL** | `/api/analyze` |
 | **Header** | `x-fzt-key: <key>`（必填） |
 | **Content-Type** | `multipart/form-data` |
-| **Body** | `files` 字段（一个或多个文件，每文件 ≤ **5MB**）；可选 `reasoningEffort` 字段 (`low` / `medium` / `high`，默认 `medium`) |
+| **Body** | `files` 字段（一个或多个文件，每文件 ≤ **100MB**）；可选 `reasoningEffort` 字段 (`low` / `medium` / `high`，默认 `medium`) |
 | **支持格式** | `.json` / `.xlsx` / `.csv` |
 | **成功返回** | `{"status": "started", "pipeline": "multifile"}` |
 
 | 状态码 | 含义 |
 | :--- | :--- |
 | `400` | 任务运行中 |
-| `400` | 文件超过 5MB |
+| `400` | 文件超过 100MB |
 | `400` | JSON 解析失败 |
 | `400` | 文件读取失败 |
 

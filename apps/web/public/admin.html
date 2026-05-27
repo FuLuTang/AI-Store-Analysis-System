@@ -28,22 +28,6 @@
                 <input type="password" id="adminToken" placeholder="请输入管理员令牌">
             </div>
 
-            <h3 style="margin-bottom: 0.8rem;">分析处理管线</h3>
-            <div class="form-group">
-                <label>选择分析管线</label>
-                <select id="pipelineSelect">
-                    <option value="traditional">传统</option>
-                    <option value="pydantic">Pydantic Agent</option>
-                    <option value="smol">Smolagent</option>
-                    <option value="custom">Custom Agent</option>
-                </select>
-            </div>
-            <div class="modal-actions" style="margin-bottom: 1.5rem;">
-                <button class="btn" id="savePipelineBtn"><i class="fas fa-check"></i> 保存管线选择</button>
-            </div>
-
-            <hr style="border: none; border-top: 1px solid var(--border); margin: 1.5rem 0;">
-
             <h3 style="margin-bottom: 0.8rem;">LLM 预设管理</h3>
             <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
                 配置 low / medium / high 三档的 baseUrl、apiKey、model、reasoning_effort。
@@ -57,11 +41,8 @@
 
     <script>
         const EFFORTS = ['low', 'medium', 'high'];
-        const PIPELINE_KEYS = { traditional: '传统', pydantic: 'Pydantic Agent', smol: 'Smolagent', custom: 'Custom Agent' };
         const presetContainer = document.getElementById('presetContainer');
         const saveBtn = document.getElementById('saveBtn');
-        const savePipelineBtn = document.getElementById('savePipelineBtn');
-        const pipelineSelect = document.getElementById('pipelineSelect');
         const adminTokenInput = document.getElementById('adminToken');
         let currentPresets = {};
         adminTokenInput.value = localStorage.getItem('adminToken') || '';
@@ -71,29 +52,6 @@
             if (token) localStorage.setItem('adminToken', token);
             return token ? { 'X-Admin-Token': token } : {};
         }
-
-        async function loadPipeline() {
-            const resp = await fetch('/api/admin/pipeline', { headers: adminHeaders() });
-            if (!resp.ok) throw new Error(`加载管线失败(${resp.status})`);
-            const data = await resp.json();
-            pipelineSelect.value = data.pipeline;
-        }
-
-        savePipelineBtn.onclick = async () => {
-            try {
-                const val = pipelineSelect.value;
-                const resp = await fetch('/api/admin/pipeline', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
-                    body: JSON.stringify({ pipeline: val })
-                });
-                if (!resp.ok) throw new Error(`保存管线失败(${resp.status})`);
-                alert(`管线已切换至: ${PIPELINE_KEYS[val] || val}`);
-            } catch (e) {
-                console.error(e);
-                alert('保存管线失败');
-            }
-        };
 
         function renderPresets() {
             presetContainer.innerHTML = EFFORTS.map(effort => {
@@ -208,10 +166,7 @@
             }
         };
 
-        Promise.all([
-            loadPresets().catch(err => { console.error(err); alert('加载预设失败'); }),
-            loadPipeline().catch(err => { console.error(err); alert('加载管线失败'); })
-        ]);
+        loadPresets().catch(err => { console.error(err); alert('加载预设失败'); });
     </script>
 </body>
 </html>

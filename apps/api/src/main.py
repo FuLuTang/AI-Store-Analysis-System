@@ -879,10 +879,17 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             
             res = await send_xiaotang_push_async(payload)
             retstatus = res.get("retstatus")
-            retvalue = res.get("retvalue", {})
-            msg = retvalue.get("msg", "无")
+            retvalue = res.get("retvalue")
             
-            if retstatus == 1 or retvalue.get("status") == 1:
+            # 兼容 retvalue 可能为字符串（如 "获取参数失败"）或者为 dict 的情况
+            if isinstance(retvalue, dict):
+                msg = retvalue.get("msg", "无")
+                status = retvalue.get("status")
+            else:
+                msg = str(retvalue) if retvalue is not None else "无"
+                status = None
+            
+            if retstatus == 1 or status == 1:
                 add_log(session, "system", f"✅ ERP 报告推送成功！服务器响应: {msg}")
             else:
                 add_log(session, "system", f"⚠️ ERP 报告推送未成功，业务响应: {msg}")

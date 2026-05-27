@@ -57,9 +57,14 @@ async def send_xiaotang_push_async(payload: dict) -> dict:
     :return: 接口返回的 JSON 响应
     """
     import httpx
+    import json
     url = "https://api.shangboshop.com/Other/OtherErpApi/index"
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30.0)
+        # 商搏 ERP 接口要求以 application/x-www-form-urlencoded 格式提交，并且参数 Key 必须为 "params"
+        # 对应的值是整条 Payload 字典序列化后的 JSON 字符串
+        data = {"params": json.dumps(payload, ensure_ascii=False)}
+        response = await client.post(url, data=data, timeout=30.0)
         response.raise_for_status()
         return response.json()
+
 

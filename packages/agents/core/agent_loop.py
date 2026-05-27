@@ -186,8 +186,7 @@ class AgentLoop:
                 logger.exception("[agent] 循环异常")
                 self._emit_log("custom_agent", {"level": "error", "message": f"❌ Agent 循环异常: {str(e)[:300]}", "error_details": str(e)})
                 self._emit_status("custom_agent", "error")
-                return self._with_usage({"full_report": f"Agent 执行异常: {e}", "cards": [], "metrics": [],
-                                          "mapping": [], "warnings": [str(e)]})
+                raise e
 
             self._emit_log("custom_agent", {"level": "error", "message": f"⚠️ 达到最大轮次 {max_rounds}"})
             self._emit_status("custom_agent", "max_rounds")

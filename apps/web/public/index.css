@@ -812,6 +812,7 @@ input:checked + .slider:before {
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
     border-color: var(--border-hover);
+    z-index: 20;
 }
 
 .issue-card[data-color="red"] { border-top-color: var(--error); }
@@ -873,6 +874,7 @@ input:checked + .slider:before {
     font-size: 1rem;
 }
 
+.issue-card:hover .evidence-icon,
 .evidence-wrapper:hover .evidence-icon {
     color: var(--primary);
 }
@@ -918,6 +920,7 @@ input:checked + .slider:before {
     margin-bottom: 0.4rem;
 }
 
+.issue-card:hover .evidence-tooltip,
 .evidence-wrapper:hover .evidence-tooltip {
     visibility: visible;
     opacity: 1;

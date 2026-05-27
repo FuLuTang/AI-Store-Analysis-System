@@ -13,7 +13,7 @@ from typing import List, Optional, Dict
 from threading import Lock
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from pathlib import Path
@@ -748,7 +748,8 @@ def get_status(x_fzt_key: Optional[str] = Header(default=None)):
         "status": session.status,
         "errorMessage": safe_error,
         "result": result_str,
-        "fullResult": full_str
+        "fullResult": full_str,
+        "runId": session.run_id
     }
 
 
@@ -980,6 +981,56 @@ def stop(x_fzt_key: Optional[str] = Header(default=None)):
             if task and not task.done():
                 task.cancel()
     return {"status": "ok"}
+
+
+@app.get("/api/reports/download")
+async def download_report_zip(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Query(None, alias="x-fzt-key"),
+    x_fzt_key_header: Optional[str] = Header(None, alias="X-FZT-Key")
+):
+    key = x_fzt_key or x_fzt_key_header
+    session = resolve_session(key)
+    
+    target_run_id = run_id or session.run_id
+    if not target_run_id:
+        raise HTTPException(status_code=404, detail="未找到任何运行记录")
+        
+    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
+    if not run_dir.exists():
+        # 退化/向后兼容路径
+        run_dir = session.account_dir / "runs" / target_run_id
+        
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"运行目录不存在: {target_run_id}")
+        
+    # 确保缓存目录存在
+    session.cache_dir.mkdir(parents=True, exist_ok=True)
+    zip_base_name = session.cache_dir / f"analysis_{target_run_id}"
+    zip_file_path = Path(str(zip_base_name) + ".zip")
+    
+    # 异步打包（避免阻塞）
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: shutil.make_archive(
+                base_name=str(zip_base_name),
+                format="zip",
+                root_dir=str(run_dir)
+            )
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成压缩包失败: {str(e)}")
+        
+    if not zip_file_path.exists():
+        raise HTTPException(status_code=500, detail="生成压缩包文件失败")
+        
+    return FileResponse(
+        path=zip_file_path,
+        filename=f"analysis_{target_run_id}.zip",
+        media_type="application/zip"
+    )
 
 
 @app.get("/api/examples")

@@ -125,6 +125,13 @@
                         <div class="spinner"></div>
                         <span id="statusText">任务正在后台运行，请等待...</span>
                     </div>
+
+                    <!-- 下载产物操作区 -->
+                    <div id="downloadArea" style="display:none; margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); text-align: center;">
+                        <button id="downloadBtn" class="btn" style="width: 100%; max-width: 340px; display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem; font-size: 0.95rem; padding: 0.8rem 1.5rem;">
+                            <i class="fas fa-file-archive" style="font-size: 1.1rem;"></i> <strong>下载完整分析产物压缩包 (ZIP)</strong>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- 终端日志卡片 -->
@@ -224,8 +231,11 @@
         const labelSimple = document.getElementById('labelSimple');
         const labelFull = document.getElementById('labelFull');
         const exampleBtn = document.getElementById('exampleBtn');
+        const downloadArea = document.getElementById('downloadArea');
+        const downloadBtn = document.getElementById('downloadBtn');
         
         let filesData = [];
+        let currentRunId = null;
         let currentReport = null;
         let currentFullReport = null;
         let pollingInterval = null;
@@ -356,6 +366,13 @@
             try {
                 const res = await fetch('/api/status', { headers: authHeaders() });
                 const data = await res.json();
+                
+                currentRunId = data.runId || null;
+                if (data.status === 'completed') {
+                    downloadArea.style.display = 'block';
+                } else {
+                    downloadArea.style.display = 'none';
+                }
 
                 // ── 第一段：状态 UI（spinner / 按钮 / polling） ──
                 const isTerminal = data.status !== 'running' && data.status !== 'queued';
@@ -718,6 +735,15 @@
             } catch(e) {
                 console.error(e);
             }
+        };
+
+        downloadBtn.onclick = () => {
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            let url = `/api/reports/download?x-fzt-key=${encodeURIComponent(key)}`;
+            if (currentRunId) {
+                url += `&run_id=${encodeURIComponent(currentRunId)}`;
+            }
+            window.open(url, '_blank');
         };
 
         exampleBtn.onclick = async () => {

@@ -854,65 +854,95 @@ input:checked + .slider:before {
     margin-top: 0.2rem;
 }
 
-/* Accordion evidence drawer */
-.evidence-section {
-    margin-top: 0.8rem;
-    border-top: 1px solid var(--border);
-    padding-top: 0.8rem;
+/* Evidence Tooltip Styles */
+.issue-title {
+    padding-right: 2rem; /* make room for evidence icon */
 }
 
-.evidence-toggle-btn {
-    width: 100%;
-    background: var(--accordion-btn-bg);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    padding: 0.55rem;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: 0.8rem;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    transition: all 0.2s ease;
-}
-
-.evidence-toggle-btn:hover {
-    background: var(--primary-glow);
-    border-color: var(--primary);
-    color: var(--text);
-}
-
-.evidence-content {
-    background: var(--placeholder-bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 1.2rem;
-    margin-top: 0.6rem;
-    font-size: 0.85rem;
-    max-height: 320px;
-    overflow-y: auto;
-}
-
-.toggle-arrow {
-    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes slideDown {
-    from {
-        opacity: 0;
-        transform: translateY(-4px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-/* Backward compatibility for legacy tooltip elements */
 .evidence-wrapper {
-    display: none;
+    position: absolute;
+    top: 1.25rem;
+    right: 1.25rem;
+    cursor: help;
+    display: block;
+}
+
+.evidence-icon {
+    color: var(--text-muted);
+    transition: color 0.2s;
+    font-size: 1rem;
+}
+
+.evidence-wrapper:hover .evidence-icon {
+    color: var(--primary);
+}
+
+.evidence-tooltip {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    bottom: 130%;
+    right: -10px;
+    width: 300px;
+    background: var(--log-bg);
+    color: var(--text);
+    text-align: left;
+    padding: 0.8rem;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border);
+    transition: opacity 0.22s ease, visibility 0.22s ease, transform 0.22s ease;
+    transform: translateY(5px);
+    z-index: 100;
+    pointer-events: none;
+    white-space: normal;
+}
+
+/* Allow text wrap and formatting inside tooltip */
+.evidence-tooltip.markdown-body {
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.evidence-tooltip.markdown-body p {
+    margin-bottom: 0.4rem;
+}
+
+.evidence-tooltip.markdown-body p:last-child {
+    margin-bottom: 0;
+}
+
+.evidence-tooltip.markdown-body ul, 
+.evidence-tooltip.markdown-body ol {
+    padding-left: 1.2rem;
+    margin-bottom: 0.4rem;
+}
+
+.evidence-wrapper:hover .evidence-tooltip {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Arrow pointer */
+.evidence-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    right: 14px;
+    border-width: 6px;
+    border-style: solid;
+    border-color: var(--log-bg) transparent transparent transparent;
+}
+
+.evidence-tooltip::before {
+    content: "";
+    position: absolute;
+    top: 100%;
+    right: 13px;
+    border-width: 7px;
+    border-style: solid;
+    border-color: var(--border) transparent transparent transparent;
 }
 
 /* Progress & Logs (Console theme) */

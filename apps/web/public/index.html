@@ -479,15 +479,11 @@
                             if (c.color === 'green') { icon = 'fa-check-circle'; iconColor = 'var(--success)'; }
                             if (c.color === 'pink') { icon = 'fa-question-circle'; iconColor = '#ff6b9d'; }
 
-                            // Accordion Evidence panel instead of hover tooltip
+                            // Hover tooltip for evidence details
                             const evidenceHtml = c.evidence ? `
-                                <div class="evidence-section">
-                                    <button class="evidence-toggle-btn" onclick="toggleEvidence(this)">
-                                        <i class="fas fa-chart-line"></i> 查看数据证据 <i class="fas fa-chevron-down toggle-arrow"></i>
-                                    </button>
-                                    <div class="evidence-content markdown-body" style="display:none;">
-                                        ${marked.parse(c.evidence || '')}
-                                    </div>
+                                <div class="evidence-wrapper">
+                                    <i class="fas fa-chart-line evidence-icon"></i>
+                                    <div class="evidence-tooltip markdown-body">${marked.parse(c.evidence || '')}</div>
                                 </div>
                             ` : '';
 
@@ -520,19 +516,6 @@
                 }
             }
         }
-
-        window.toggleEvidence = function(btn) {
-            const content = btn.nextElementSibling;
-            const arrow = btn.querySelector('.toggle-arrow');
-            if (content.style.display === 'none' || !content.style.display) {
-                content.style.display = 'block';
-                content.style.animation = 'slideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-                arrow.style.transform = 'rotate(180deg)';
-            } else {
-                content.style.display = 'none';
-                arrow.style.transform = 'rotate(0deg)';
-            }
-        };
 
         // === 文件上传 ===
         dropZone.onclick = () => fileInput.click();

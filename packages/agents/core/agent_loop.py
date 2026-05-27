@@ -348,10 +348,19 @@ class AgentLoop:
             } if u else {},
         }, ensure_ascii=False, default=str))
 
-        # 推送汇总到前端 (仅在有内容时)
+        # 推送汇总到前端 (仅在有内容时，通过 info 级别展示)
+        tag = _plan_step_tag(self.ws)
+        if reasoning and reasoning.strip():
+            r_preview = reasoning.strip().replace("\n", " ")
+            if len(r_preview) > 200:
+                r_preview = r_preview[:200] + "..."
+            self._emit_log("custom_agent", {"level": "info", "message": f"{tag}🧠 思考: {r_preview}"})
+
         if content and content.strip():
-            tag = _plan_step_tag(self.ws)
-            self._emit_log("custom_agent", {"level": "debug", "message": f"{tag}🤖: {content[:500]}"})
+            c_preview = content.strip().replace("\n", " ")
+            if len(c_preview) > 200:
+                c_preview = c_preview[:200] + "..."
+            self._emit_log("custom_agent", {"level": "info", "message": f"{tag}🤖 回复: {c_preview}"})
 
         return _StreamResult(
             content=content,

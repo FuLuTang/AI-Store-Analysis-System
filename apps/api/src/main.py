@@ -866,6 +866,29 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             session.status = "completed"
         save_latest_report(session)
         _save_session_json(session)
+
+        # ── 发送 XiaoTangPush ERP 推送 ──
+        try:
+            from packages.core.connectors import format_xiaotang_push_payload, send_xiaotang_push_async
+            add_log(session, "system", "⏳ 正在推送分析报告至商搏 ERP (XiaoTangPush)...")
+            
+            payload = format_xiaotang_push_payload(
+                full_report=session.full_result,
+                summary_short=session.result
+            )
+            
+            res = await send_xiaotang_push_async(payload)
+            retstatus = res.get("retstatus")
+            retvalue = res.get("retvalue", {})
+            msg = retvalue.get("msg", "无")
+            
+            if retstatus == 1 or retvalue.get("status") == 1:
+                add_log(session, "system", f"✅ ERP 报告推送成功！服务器响应: {msg}")
+            else:
+                add_log(session, "system", f"⚠️ ERP 报告推送未成功，业务响应: {msg}")
+        except Exception as e:
+            add_log(session, "system", f"❌ ERP 报告推送失败: {str(e)}")
+            
     except (PipelineAbortedError, asyncio.CancelledError):
         add_log(session, "system", "⚠️ 任务被用户强制终止。")
         with session.runtime_lock:

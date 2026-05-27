@@ -47,3 +47,19 @@ def save_xiaotang_push_to_file(payload: dict, file_path: str):
     """
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+async def send_xiaotang_push_async(payload: dict) -> dict:
+    """
+    异步发送 XiaoTangPush 消息到商搏 ERP。
+    
+    :param payload: 符合 XiaoTangPush 规范的字典对象
+    :return: 接口返回的 JSON 响应
+    """
+    import httpx
+    url = "https://api.shangboshop.com/Other/OtherErpApi/index"
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
+

@@ -785,7 +785,14 @@ async def sse_generator(session: SessionState):
                 yield f"data: {json.dumps(session.logs[i], ensure_ascii=False)}\n\n"
             last_idx = len(session.logs)
 
-        await asyncio.sleep(0.5)
+        if session.status in ("completed", "error", "aborted") and last_idx >= len(session.logs):
+            yield f"data: {json.dumps({'type': 'done', 'time': _now_time()})}\n\n"
+            break
+
+        try:
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            break
 
 
 @app.get("/api/stream")

@@ -16,7 +16,7 @@ from openai import OpenAI
 
 from .workspace import Workspace
 from ..diagnosis.prompt_builder import build_system_content, build_user_content
-from .tool_converter import available_tool_call_for_agent, build_tool_map
+from .tool_converter import available_tool_call_for_agent, build_tool_map, get_step_milestone, get_plan_progress_info
 
 logger = logging.getLogger("agent.custom")
 if not logger.handlers:
@@ -68,129 +68,140 @@ class AgentLoop:
 
     def run(self) -> dict:
         """主循环：构建初始 messages → 发请求 → 处理 tool_calls → 循环直到收到最终回答。"""
-        self.messages = [
-            {"role": "system", "content": build_system_content()},
-            {"role": "user", "content": build_user_content(self.ws, self.analysis_params)},
-        ]
-
-        self._emit_status("custom_agent", "active")
-        self._emit_log("custom_agent", {"level": "info", "message": f"🚀 启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个"})
-        logger.info("[agent] start model=%s tools=%d", self.model, len(self.tools))
-
-        max_rounds = 50
         try:
-            for self._round in range(max_rounds):
-                sr = self._call_api()
+            self.messages = [
+                {"role": "system", "content": build_system_content()},
+                {"role": "user", "content": build_user_content(self.ws, self.analysis_params)},
+            ]
 
-                # ── 流式返回后立即检查：用户可能在 API 调用期间点了强制停止 ──
-                if self._check_aborted:
-                    try:
-                        self._check_aborted()
-                    except Exception:
-                        self._emit_log("custom_agent", {"level": "error", "message": "⛔ 用户已强制停止"})
-                        raise
+            self._emit_status("custom_agent", "active")
+            self._emit_log("custom_agent", {"level": "info", "message": f"🚀 启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个"})
+            logger.info("[agent] start model=%s tools=%d", self.model, len(self.tools)) 
 
-                # ── 保存 assistant message ──
-                self.messages.append(self._normalize_assistant_message(sr))
+            max_rounds = 50
+            try:
+                for self._round in range(max_rounds):
+                    sr = self._call_api()
 
-                # ── 缓存 & token 日志（仅文件日志，不推 SSE）──
-                if sr.usage:
-                    u = sr.usage
-                    inp = getattr(u, "prompt_tokens", 0) or 0
-                    out = getattr(u, "completion_tokens", 0) or 0
-                    hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
-                    miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
-                    self._total_input += inp
-                    self._total_output += out
-                    self._total_cache_hit += hit
-                    self._total_cache_miss += miss
-                    logger.info("llm_usage %s",
-                        json.dumps({
-                            "report_id": self.ws.report_id, "pipeline": "custom",
-                            "phase": f"round_{self._round}", "model": self.model,
-                            "input_tokens": inp, "output_tokens": out,
-                            "cached_input_tokens": hit, "cache_miss_tokens": miss,
-                            "cache_hit_ratio": round(hit / max(inp, 1), 3),
-                            "reasoning_chars": len(sr.reasoning_content),
-                            "tool_calls": len(sr.tool_calls or []),
-                        }, ensure_ascii=False))
-                    self.ws.save_trace({"step": f"round_{self._round}", "input_tokens": inp,
-                                        "output_tokens": out, "cached_tokens": hit, "cache_miss_tokens": miss})
+                    # ── 流式返回后立即检查：用户可能在 API 调用期间点了强制停止 ──
+                    if self._check_aborted:
+                        try:
+                            self._check_aborted()
+                        except Exception:
+                            self._emit_log("custom_agent", {"level": "error", "message": "⛔ 用户已强制停止"})
+                            raise
 
-                # ── 没有 tool_calls → 最终回答 ──
-                if not sr.tool_calls and sr.finish_reason != "tool_calls":
-                    self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
-                    self._emit_status("custom_agent", "success")
-                    return self._with_usage(self._parse_final_output(sr.content))
+                    # ── 保存 assistant message ──
+                    self.messages.append(self._normalize_assistant_message(sr))
 
-                # ── 有 tool_calls → 执行工具 ──
-                if sr.tool_calls:
-                    for tc in sr.tool_calls:
-                        target = _tool_target(tc["name"], tc["arguments"])
+                    # ── 缓存 & token 日志（仅文件日志，不推 SSE）──
+                    if sr.usage:
+                        u = sr.usage
+                        inp = getattr(u, "prompt_tokens", 0) or 0
+                        out = getattr(u, "completion_tokens", 0) or 0
+                        hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
+                        miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
+                        self._total_input += inp
+                        self._total_output += out
+                        self._total_cache_hit += hit
+                        self._total_cache_miss += miss
+                        logger.info("llm_usage %s",
+                            json.dumps({
+                                "report_id": self.ws.report_id, "pipeline": "custom",
+                                "phase": f"round_{self._round}", "model": self.model,
+                                "input_tokens": inp, "output_tokens": out,
+                                "cached_input_tokens": hit, "cache_miss_tokens": miss,
+                                "cache_hit_ratio": round(hit / max(inp, 1), 3),
+                                "reasoning_chars": len(sr.reasoning_content),
+                                "tool_calls": len(sr.tool_calls or []),
+                            }, ensure_ascii=False))
+                        self.ws.save_trace({"step": f"round_{self._round}", "input_tokens": inp,
+                                            "output_tokens": out, "cached_tokens": hit, "cache_miss_tokens": miss})
 
-                        # ── 进度平滑逻辑 ──
-                        # 里程碑分布（pipeline.py 管首尾，这里管中间）:
-                        #   0~15%  : init + plan       (pipeline.py 发 3→8→12→15)
-                        #   15~35% : step0 数据展平     (工具调用 +2%，check_plan(0) 跳到 35)
-                        #   35~60% : step1 指标计算     (工具调用 +2%，check_plan(1) 跳到 60)
-                        #   60~82% : step2 深度报告     (工具调用 +2%，check_plan(2) 跳到 82)
-                        #   82~90% : step3 卡片校验     (工具调用 +2%，check_plan(3) 跳到 90)
-                        #   90~100%: output 收尾        (pipeline.py 发 95→100)
-                        # 每次工具调用推进 +2%，不超过 92（给 output 留空间）
-                        self._progress = min(self._progress + 2, 92)
-                        self._emit_log("custom_agent", {
-                            "level": "info",
-                            "message": f"🔧 {target}",
-                            "progress": self._progress
-                        })
-
-                        result = self._execute_tool(tc)
-
-                        # check_plan 成功时：将 _progress 对齐到里程碑，
-                        # 这样后续工具调用从里程碑值继续 +2，不会倒退
-                        if tc["name"] == "check_plan":
-                            try:
-                                r = json.loads(result)
-                                if r.get("ok"):
-                                    _milestones = {0: 35, 1: 60, 2: 82, 3: 90}
-                                    self._progress = max(self._progress,
-                                                         _milestones.get(r.get("step_index", -1), self._progress))
-                            except Exception:
-                                pass
-
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": result,
-                        })
-
-                    # plan 全部完成后，注入收尾请求，不继续普通循环
-                    if _is_plan_done(self.ws):
-                        self._emit_log("custom_agent", {"level": "status", "message": "📋 所有步骤已完成，生成最终总结..."})
-                        self.messages.append({
-                            "role": "user",
-                            "content": "所有计划步骤已全部完成。请提供一份简洁的最终总结（约200字），包含健康状态、核心结论和交付物清单。不要调用任何工具。"
-                        })
-                        self._round += 1
-                        sr = self._call_api()
-                        self.messages.append(self._normalize_assistant_message(sr))
+                    # ── 没有 tool_calls → 最终回答 ──
+                    if not sr.tool_calls and sr.finish_reason != "tool_calls":
                         self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
                         self._emit_status("custom_agent", "success")
                         return self._with_usage(self._parse_final_output(sr.content))
 
-        except Exception as e:
-            # 用户强制停止 → 让 PipelineAbortedError 透传
-            if "aborted" in type(e).__name__.lower() or "强制" in str(e):
-                raise
-            logger.exception("[agent] 循环异常")
-            self._emit_log("custom_agent", {"level": "error", "message": f"❌ Agent 循环异常: {str(e)[:300]}", "error_details": str(e)})
-            self._emit_status("custom_agent", "error")
-            return self._with_usage({"full_report": f"Agent 执行异常: {e}", "cards": [], "metrics": [],
-                                      "mapping": [], "warnings": [str(e)]})
+                    # ── 有 tool_calls → 执行工具 ──
+                    if sr.tool_calls:
+                        for tc in sr.tool_calls:
+                            target = _tool_target(tc["name"], tc["arguments"])
 
-        self._emit_log("custom_agent", {"level": "error", "message": f"⚠️ 达到最大轮次 {max_rounds}"})
-        self._emit_status("custom_agent", "max_rounds")
-        return self._with_usage(self._parse_final_output(""))
+                            # ── 进度平滑逻辑 ──
+                            # 动态从 plan.json 读取当前步骤索引及总步骤数，平滑递增进度
+                            curr_idx, total_steps = get_plan_progress_info(self.ws)
+                            if total_steps > 0 and curr_idx >= 0:
+                                next_milestone = get_step_milestone(curr_idx, total_steps)
+                                # 每次工具调用增加 2%，但不超过当前步骤的上限 (next_milestone - 2)
+                                self._progress = min(self._progress + 2, max(self._progress, next_milestone - 2))
+                            else:
+                                self._progress = min(self._progress + 2, 92)
+                            
+                            self._emit_log("custom_agent", {
+                                "level": "info",
+                                "message": f"🔧 {target}",
+                                "progress": self._progress
+                            })
+
+                            result = self._execute_tool(tc)
+
+                            # check_plan 成功时：将 _progress 对齐到当前已完成步骤的里程碑值
+                            if tc["name"] == "check_plan":
+                                try:
+                                    r = json.loads(result)
+                                    if r.get("ok"):
+                                        s_idx = r.get("step_index", -1)
+                                        if s_idx >= 0 and total_steps > 0:
+                                            done_milestone = get_step_milestone(s_idx, total_steps)
+                                            self._progress = max(self._progress, done_milestone)
+                                except Exception:
+                                    pass
+
+                            self.messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": result,
+                            })
+
+                        # plan 全部完成后，注入收尾请求，不继续普通循环
+                        if _is_plan_done(self.ws):
+                            self._emit_log("custom_agent", {"level": "status", "message": "📋 所有步骤已完成，生成最终总结..."})
+                            self.messages.append({
+                                "role": "user",
+                                "content": "所有计划步骤已全部完成。请提供一份简洁的最终总结（约200字），包含健康状态、核心结论和交付物清单。不要调用任何工具。"
+                            })
+                            self._round += 1
+                            sr = self._call_api()
+                            self.messages.append(self._normalize_assistant_message(sr))
+                            self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
+                            self._emit_status("custom_agent", "success")
+                            return self._with_usage(self._parse_final_output(sr.content))
+
+            except Exception as e:
+                # 用户强制停止 → 让 PipelineAbortedError 透传
+                if "aborted" in type(e).__name__.lower() or "强制" in str(e):
+                    raise
+                logger.exception("[agent] 循环异常")
+                self._emit_log("custom_agent", {"level": "error", "message": f"❌ Agent 循环异常: {str(e)[:300]}", "error_details": str(e)})
+                self._emit_status("custom_agent", "error")
+                return self._with_usage({"full_report": f"Agent 执行异常: {e}", "cards": [], "metrics": [],
+                                          "mapping": [], "warnings": [str(e)]})
+
+            self._emit_log("custom_agent", {"level": "error", "message": f"⚠️ 达到最大轮次 {max_rounds}"})
+            self._emit_status("custom_agent", "max_rounds")
+            return self._with_usage(self._parse_final_output(""))
+        finally:
+            try:
+                self.client.close()
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'fastcall_client') and self.fastcall_client is not self.client:
+                    self.fastcall_client.close()
+            except Exception:
+                pass
 
     # ── 内部 ──
 
@@ -209,6 +220,8 @@ class AgentLoop:
 
         # ── 详细日志：打印发送给 LLM 的完整消息列表 ──
         logger.info("[round_%d] → 发送 LLM 请求 (messages 共 %d 条):", self._round, len(self.messages))
+        if self._round == 0 and self.tools:
+            logger.info("[round_0] 发送的 Tools 列表 Schema:\n%s", json.dumps(self.tools, ensure_ascii=False, indent=2))
         for idx, msg in enumerate(self.messages):
             role = msg.get("role", "")
             text = msg.get("content") or ""
@@ -395,6 +408,13 @@ class AgentLoop:
             elapsed = (time.time() - t0) * 1000
             logger.info("tool_exec name=%s elapsed=%.0fms args=%s", name, elapsed,
                         json.dumps(args, ensure_ascii=False, default=str)[:200].replace('\n', ' '))
+            
+            # 记录工具执行返回结果的前 500 个字符预览
+            res_preview = str(result).strip().replace('\n', ' ')
+            if len(res_preview) > 500:
+                res_preview = res_preview[:500] + "..."
+            logger.info("  ↳ tool_result: %s", res_preview)
+
             if isinstance(result, (dict, list)):
                 return json.dumps(result, ensure_ascii=False, default=str)
             return str(result)
@@ -497,10 +517,13 @@ def _tool_target(name: str, args_json: str) -> str:
     # 按工具名返回可读的描述
     labels = {
         "read_document": lambda a: f"读取 {a.get('path', '?')}",
+        "read_document_structure": lambda a: f"读取 {a.get('path', '?')} 结构",
         "read_file": lambda a: f"读取 {a.get('path', '?')}",
         "write_file": lambda a: f"写入 {a.get('path', '?')}",
         "list_files": lambda a: f"列出 {a.get('subdir', '根目录')}/ 目录",
         "run_python": lambda a: f"执行 {a.get('script_path', '?')}",
+        "search_files": lambda a: f"检索关键词 {a.get('pattern', '?')}",
+        "query_sqlite": lambda a: f"查询 SQLite {a.get('path', '?')}",
         "duckdb_register_parquet": lambda a: f"注册表 {a.get('table_name', '?')}",
         "list_tables": lambda a: "列出所有表",
         "read_context": lambda a: f"读取上下文: {a.get('topic', '?')}",

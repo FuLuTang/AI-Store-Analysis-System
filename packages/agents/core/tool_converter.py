@@ -12,8 +12,8 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
     return [
         # ── 文档解析 ──
         _make_tool(
-            name="read_document",
-            description="读取任意文档内容（xlsx/csv/pdf/docx/txt/md/json），返回文本摘要（含 sheet 名、列名、行数和样本行）。",
+            name="read_document_structure",
+            description="对各类文档（Excel, CSV, Word, PDF, JSON, Markdown, Zip, SQLite）进行结构化结构侦察，不返回全文内容以保障上下文安全。返回包含大纲、列名、行数或表结构的 JSON 元数据。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -28,13 +28,15 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
         # ── 文件读写 ──
         _make_tool(
             name="read_file",
-            description="分页读取 workspace 内的文本文件内容。默认最多读取 2000 行，返回内容、行号、大小和 next_offset；大文件请分页读取，二进制文件请用 read_document 或 run_python。",
+            description="从 workspace 读取文本文件内容，支持分页(offset/limit)以及首尾快捷读取(head/tail)。对于大文件或二进制文件，请勿全文读取。",
             parameters={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "workspace 内的相对路径"},
-                    "offset": {"type": "integer", "description": "从第几行开始读取，0 表示文件开头"},
-                    "limit": {"type": "integer", "description": "最多读取多少行，最大 2000，默认 2000"},
+                    "offset": {"type": "integer", "description": "从第几行开始读取（0-based，使用 head/tail 时忽略）"},
+                    "limit": {"type": "integer", "description": "最多读取多少行，默认且最大 2000 行"},
+                    "head": {"type": "integer", "description": "从文件开头读取的行数"},
+                    "tail": {"type": "integer", "description": "从文件结尾读取的行数"},
                 },
                 "required": ["path"],
             },
@@ -54,7 +56,7 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
         ),
         _make_tool(
             name="list_files",
-            description="列出 workspace 子目录下的文件，返回路径、文件名、字节大小和可读大小。",
+            description="列出 workspace 子目录下的文件列表，返回包含路径、文件名、字节大小、可读大小、后缀、文件类型和推荐工具的 JSON 数组。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -63,6 +65,20 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
                         "description": "子目录名，如 'input', 'tables', 'output'。空字符串表示根目录",
                     }
                 },
+            },
+        ),
+        _make_tool(
+            name="search_files",
+            description="在指定文件或整个工作区内快速检索关键字（支持正则），返回匹配的行号及文本行，避免读取大文件全文。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "检索的文本子串或正则表达式"},
+                    "path": {"type": "string", "description": "指定检索的单个文件相对路径。若为空，全局检索所有文本文件"},
+                    "regex": {"type": "boolean", "description": "是否启用正则表达式匹配。默认 false"},
+                    "max_matches": {"type": "integer", "description": "返回的最大匹配项数量。默认 50，最大 200"},
+                },
+                "required": ["pattern"],
             },
         ),
         # ── Python 脚本执行 ──
@@ -80,16 +96,28 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
                 "required": ["script_path"],
             },
         ),
-        # ── DuckDB ──
+        # ── DuckDB 与 SQLite ──
         _make_tool(
             name="duckdb_query",
-            description="在 workspace 的 DuckDB 上执行只读 SELECT 查询，返回 JSON 结果。禁止 INSERT/DROP/DELETE/ALTER。注意 DuckDB 标识符需用双引号，如 SELECT \"毛利(元)\" FROM 表名，不要用反引号。",
+            description="在 workspace 的 DuckDB 上执行只读 SELECT 查询，返回 JSON 结果。禁止写操作。DuckDB 标识符需用双引号包裹，如 SELECT \"毛利\" FROM 表名。",
             parameters={
                 "type": "object",
                 "properties": {
                     "sql": {"type": "string", "description": "要执行的只读 SELECT SQL 语句"},
                 },
                 "required": ["sql"],
+            },
+        ),
+        _make_tool(
+            name="query_sqlite",
+            description="在工作区内的指定 SQLite 数据库文件（.sqlite, .db）上执行只读 SELECT 查询，返回数据行的 JSON 数组。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "SQLite 数据库文件在工作区的相对路径"},
+                    "sql": {"type": "string", "description": "待执行的只读 SELECT SQL 语句"},
+                },
+                "required": ["path", "sql"],
             },
         ),
         _make_tool(
@@ -109,7 +137,7 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
         ),
         _make_tool(
             name="list_tables",
-            description="列出 DuckDB 中所有已注册的表及其列名和行数。",
+            description="列出 DuckDB 中所有已注册的表及其列名 and 行数。",
             parameters={"type": "object", "properties": {}},
         ),
         # ── 上下文 / 计划 ──
@@ -146,6 +174,28 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
     ]
 
 
+def get_step_milestone(step_idx: int, total_steps: int) -> int:
+    if total_steps <= 0:
+        return 15
+    return min(15 + int((step_idx + 1) * 75 / total_steps), 90)
+
+
+def get_plan_progress_info(ws) -> tuple[int, int]:
+    """读取 plan.json，返回 (当前进行中/待执行步骤的索引, 总步骤数)。"""
+    try:
+        plan_path = ws.resolve("output/plan.json")
+        if not plan_path.exists():
+            return -1, 0
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        total = len(plan)
+        for idx, step in enumerate(plan):
+            if step.get("status") in ("in_progress", "pending"):
+                return idx, total
+        return total - 1, total
+    except Exception:
+        return -1, 0
+
+
 def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
 
@@ -155,18 +205,21 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
     _emit_log = emit_log or (lambda nid, msg: None)
     _emit_status = emit_status or (lambda nid, st: None)
 
-    from .tools.impl.doc_impl import read_document_impl
+    from .tools.impl.doc_impl import read_document_impl, read_document_structure_impl
     from .tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
     from .tools.impl.python_impl import run_python_impl
     from .tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
     from .tools.impl.context_impl import read_context_impl
     from .tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
     from .tools.impl.plan_check_impl import run_step_check
-    def _read_document(path: str) -> str:
-        return read_document_impl(ws, path)
+    from .tools.impl.search_impl import search_files_impl
+    from .tools.impl.sqlite_impl import query_sqlite_impl
 
-    def _read_file(path: str, offset: int = 0, limit: int = 2000) -> str:
-        return read_file_impl(ws, path, offset=offset, limit=limit)
+    def _read_document(path: str) -> str:
+        return read_document_structure_impl(ws, path)
+
+    def _read_file(path: str, offset: int = 0, limit: int = 2000, head: int = None, tail: int = None) -> str:
+        return read_file_impl(ws, path, offset=offset, limit=limit, head=head, tail=tail)
 
     def _write_file(path: str, content: str, mode: str = "overwrite") -> str:
         return write_file_impl(ws, path, content, mode=mode)
@@ -174,6 +227,12 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
     def _list_files(subdir: str = "") -> str:
         files = list_files_impl(ws, subdir)
         return json.dumps(files, ensure_ascii=False)
+
+    def _search_files(pattern: str, path: str = None, regex: bool = False, max_matches: int = 50) -> str:
+        return search_files_impl(ws, pattern, path=path, regex=regex, max_matches=max_matches)
+
+    def _query_sqlite(path: str, sql: str) -> str:
+        return query_sqlite_impl(ws, path, sql)
 
     def _run_python(script_path: str) -> str:
         return run_python_impl(ws, script_path)
@@ -223,11 +282,8 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
         node_id = f"custom_step{step_index}"
         total_steps = len(plan)
 
-        # 每个步骤完成对应的进度里程碑 (15% 之后开始)
-        _step_progress = {0: 35, 1: 60, 2: 82, 3: 90}
-
         if ok:
-            done_pct = _step_progress.get(step_index, 90)
+            done_pct = get_step_milestone(step_index, total_steps)
             _emit_status(node_id, "success")
             # 推进下一步
             next_idx = None
@@ -268,11 +324,14 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
 
     return {
         "read_document": _read_document,
+        "read_document_structure": _read_document,
         "read_file": _read_file,
         "write_file": _write_file,
         "list_files": _list_files,
+        "search_files": _search_files,
         "run_python": _run_python,
         "duckdb_query": _duckdb_query,
+        "query_sqlite": _query_sqlite,
         "duckdb_register_parquet": _duckdb_register_parquet,
         "list_tables": _list_tables,
         "read_context": _read_context,

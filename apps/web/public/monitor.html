@@ -345,6 +345,10 @@
                 // 暂留扩展
             } else if (data.type === 'reset') {
                 resetAllNodes();
+            } else if (data.type === 'done') {
+                eventSource.close();
+                connStatus.innerText = '已完成 (连接已关闭)';
+                connStatus.style.color = 'var(--success)';
             }
         };
 

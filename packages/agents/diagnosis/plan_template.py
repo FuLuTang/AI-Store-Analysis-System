@@ -2,7 +2,7 @@
 PLAN_TEMPLATE = [
     {"title": "扫描并解析上传文件",
      "detail": (
-         "扫描 input/ 目录，先用 list_files 查看文件类型和大小，再用 read_document 看内容摘要。"
+         "扫描 input/ 目录，先用 list_files 查看文件类型和大小，再用 read_document_structure 看内容摘要。"
          "只对小型文本文件用 read_file 分页查看；大文件、压缩包、数据库或二进制文件要用 run_python 分块读取和清洗，"
          "存为 parquet/JSON 到 tables/ 再 duckdb_register_parquet 注册。"
          "如果已有注册好的表，直接验证后跳过。"

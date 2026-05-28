@@ -205,17 +205,27 @@
 
     <script>
         // ========== marked 图片渲染自定义 ==========
-        const renderer = new marked.Renderer();
-        renderer.image = function(href, title, text) {
-            let newHref = href;
-            if (href && (href.startsWith('./') || !href.includes('://'))) {
+        const _rewriteImageSrc = function(href) {
+            if (href && (href.startsWith('./') || (!href.includes('://') && !href.startsWith('data:')))) {
                 const filename = href.replace(/^\.\//, '');
                 const key = localStorage.getItem('X-FZT-Key') || '';
-                newHref = `/api/reports/${currentRunId}/assets/${filename}?x-fzt-key=${encodeURIComponent(key)}`;
+                return `/api/reports/${currentRunId}/assets/${encodeURIComponent(filename)}?x-fzt-key=${encodeURIComponent(key)}`;
             }
-            return `<img src="${newHref}" alt="${text || ''}" title="${title || ''}" style="max-width:100%; height:auto; display:block; margin:1.5rem auto; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.12); border:1px solid var(--border-color);" />`;
+            return href;
         };
-        marked.use({ renderer });
+        marked.use({
+            renderer: {
+                image(token) {
+                    // marked v12+ 传入单个 token 对象 { href, title, text }
+                    // marked v4~v11 传入三个独立参数 (href, title, text)
+                    const href = (typeof token === 'object' && token !== null) ? token.href : token;
+                    const title = (typeof token === 'object' && token !== null) ? (token.title || '') : (arguments[1] || '');
+                    const text = (typeof token === 'object' && token !== null) ? (token.text || '') : (arguments[2] || '');
+                    const src = _rewriteImageSrc(href);
+                    return `<img src="${src}" alt="${text}" title="${title}" style="max-width:100%; height:auto; display:block; margin:1.5rem auto; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.12); border:1px solid var(--border-color);" />`;
+                }
+            }
+        });
 
         // ========== 鉴权守卫 ==========
         function authHeaders() {

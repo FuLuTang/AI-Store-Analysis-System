@@ -87,6 +87,7 @@
                 <span>门店 AI 智能诊断 · 报告预览</span>
             </div>
             <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
@@ -190,6 +191,10 @@
                 if (!res.ok) throw new Error(`请求出错(${res.status})`);
                 
                 const data = await res.json();
+                if (data.userKey) {
+                    const disp = document.getElementById('userKeyDisplay');
+                    if (disp) disp.innerText = `所属账号: ${data.userKey}`;
+                }
                 
                 if (data.status === 'running' || data.status === 'queued') {
                     // 分析生成中

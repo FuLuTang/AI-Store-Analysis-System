@@ -162,6 +162,7 @@
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
+                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm); margin-right: 4px;">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
@@ -212,7 +213,12 @@
             if (!key) { window.location.href = '/login.html'; return; }
             try {
                 const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
-                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
+                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; return; }
+                const data = await r.json();
+                if (data.status === 'ok' && data.userKey) {
+                    const disp = document.getElementById('userKeyDisplay');
+                    if (disp) disp.innerText = `密钥: ${data.userKey}`;
+                }
             } catch(e) { window.location.href = '/login.html'; }
         })();
 
@@ -323,6 +329,9 @@
                                 <button class="btn-icon copy-btn-${run.runId}" onclick="copyShareUrl('${run.shareUrl}')" title="复制免登录分享链接" ${copyBtnDisabled}>
                                     <i class="fas fa-share-alt"></i>
                                 </button>
+                                <button class="btn-icon copy-dl-btn-${run.runId}" onclick="copyDownloadUrl('${run.downloadUrl}')" title="复制免登录直链下载" ${copyBtnDisabled}>
+                                    <i class="fas fa-link"></i>
+                                </button>
                                 <button class="btn-icon" onclick="downloadArchive('${run.runId}')" title="下载产物 (ZIP)">
                                     <i class="fas fa-download"></i>
                                 </button>
@@ -340,6 +349,7 @@
         async function togglePublic(runId, checkbox) {
             const isPublic = checkbox.checked;
             const copyBtn = document.querySelector(`.copy-btn-${runId}`);
+            const copyDlBtn = document.querySelector(`.copy-dl-btn-${runId}`);
             
             try {
                 const res = await fetch(`/api/reports/${runId}/public`, {
@@ -355,12 +365,20 @@
                     copyBtn.removeAttribute('disabled');
                     copyBtn.style.opacity = '1';
                     copyBtn.style.cursor = 'pointer';
-                    // 重新绑定最新的 url
                     copyBtn.setAttribute('onclick', `copyShareUrl('${data.shareUrl}')`);
+
+                    copyDlBtn.removeAttribute('disabled');
+                    copyDlBtn.style.opacity = '1';
+                    copyDlBtn.style.cursor = 'pointer';
+                    copyDlBtn.setAttribute('onclick', `copyDownloadUrl('${data.downloadUrl}')`);
                 } else {
                     copyBtn.setAttribute('disabled', 'true');
                     copyBtn.style.opacity = '0.4';
                     copyBtn.style.cursor = 'not-allowed';
+
+                    copyDlBtn.setAttribute('disabled', 'true');
+                    copyDlBtn.style.opacity = '0.4';
+                    copyDlBtn.style.cursor = 'not-allowed';
                 }
             } catch (err) {
                 alert('设置公开状态失败: ' + err.message);
@@ -370,18 +388,32 @@
 
         // ========== 复制链接 ==========
         function copyShareUrl(url) {
+            const msg = '已成功复制免密公开分享链接，您可以直接通过微信/短信等方式发送给别人！';
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(url).then(() => {
-                    alert('已成功复制免密公开分享链接，您可以直接通过微信/短信等方式发送给别人！');
+                    alert(msg);
                 }).catch(err => {
-                    fallbackCopy(url);
+                    fallbackCopy(url, msg);
                 });
             } else {
-                fallbackCopy(url);
+                fallbackCopy(url, msg);
             }
         }
 
-        function fallbackCopy(text) {
+        function copyDownloadUrl(url) {
+            const msg = '已成功复制免密直链下载地址！其他人点击此链接可直接触发产物压缩包下载，无需加载预览页。';
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(url).then(() => {
+                    alert(msg);
+                }).catch(err => {
+                    fallbackCopy(url, msg);
+                });
+            } else {
+                fallbackCopy(url, msg);
+            }
+        }
+
+        function fallbackCopy(text, successMsg) {
             const textArea = document.createElement("textarea");
             textArea.value = text;
             textArea.style.top = "0";
@@ -393,7 +425,7 @@
             try {
                 const successful = document.execCommand('copy');
                 if (successful) {
-                    alert('已成功复制免密公开分享链接，您可以直接通过微信/短信等方式发送给别人！');
+                    alert(successMsg);
                 } else {
                     prompt('复制失败，请手动复制以下链接：', text);
                 }

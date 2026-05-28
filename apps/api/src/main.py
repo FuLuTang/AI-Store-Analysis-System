@@ -1149,6 +1149,7 @@ def get_reports_list(
         run_id = r["runId"]
         sign = generate_share_sign(run_id)
         r["shareUrl"] = f"{origin}/public.html?run_id={run_id}&sign={sign}"
+        r["downloadUrl"] = f"{origin}/api/reports/public/download?run_id={run_id}&sign={sign}"
         
     return {"status": "ok", "runs": runs}
 
@@ -1197,10 +1198,12 @@ async def toggle_report_public(
             except Exception:
                 pass
                 
+    download_url = f"{origin}/api/reports/public/download?run_id={run_id}&sign={sign}"
     return {
         "status": "ok",
         "isPublic": is_public,
-        "shareUrl": share_url
+        "shareUrl": share_url,
+        "downloadUrl": download_url
     }
 
 
@@ -1305,12 +1308,22 @@ def get_public_report_status(
     if full_path.exists():
         full_str = full_path.read_text(encoding="utf-8")
         
+    user_key = target_account_dir.name
+    account_json_path = target_account_dir / "account.json"
+    if account_json_path.exists():
+        try:
+            adata = json.loads(account_json_path.read_text(encoding="utf-8"))
+            user_key = adata.get("keyMask", user_key)
+        except Exception:
+            pass
+
     return {
         "status": sdata.get("status", "completed"),
         "errorMessage": sdata.get("errorMessage", ""),
         "result": result_str,
         "fullResult": full_str,
-        "runId": run_id
+        "runId": run_id,
+        "userKey": user_key
     }
 
 

@@ -67,14 +67,6 @@ do_deploy() {
     . venv/bin/activate
     pip install -r requirements.txt
 
-    # 询问是否安装完整依赖（pydantic-ai + smolagents）
-    echo ""
-    echo "==> 额外依赖（pydantic-ai + smolagents）仅在 pydantic/smol 管线需要。"
-    read -p "    是否安装完整依赖？[y/N]: " full_deps < /dev/tty
-    if [[ "$full_deps" =~ ^[Yy]$ ]]; then
-        pip install -r requirements-full.txt
-    fi
-
     echo "==> 3. 正在更新系统服务配置..."
     cat > "$SERVICE_FILE" <<EOF
 [Unit]

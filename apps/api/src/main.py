@@ -350,6 +350,59 @@ def _save_account_json(account_dir: Path, user_key: str, key_hash: str):
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+SERVER_SECRET_KEY = os.getenv("SERVER_SECRET_KEY", "fzt_default_secret_key_123456").strip()
+
+def generate_share_sign(run_id: str) -> str:
+    h = hashlib.sha256(f"{run_id}:{SERVER_SECRET_KEY}".encode("utf-8"))
+    return h.hexdigest()[:16]
+
+def _load_runs(account_dir: Path) -> list:
+    runs_file = account_dir / "runs.json"
+    if runs_file.exists():
+        try:
+            data = json.loads(runs_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    return []
+
+def _save_runs(account_dir: Path, runs: list):
+    runs_file = account_dir / "runs.json"
+    try:
+        runs_file.write_text(json.dumps(runs, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+def _add_run_to_meta(session: "SessionState", file_names: list[str]):
+    runs = _load_runs(session.account_dir)
+    if any(r.get("runId") == session.run_id for r in runs):
+        return
+    new_run = {
+        "runId": session.run_id,
+        "taskType": session.task_type,
+        "createdAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "status": session.status,
+        "fileNames": file_names,
+        "isPublic": False
+    }
+    runs.insert(0, new_run)
+    _save_runs(session.account_dir, runs)
+
+def _update_run_status_in_meta(session: "SessionState", status: str):
+    if not session.run_id:
+        return
+    runs = _load_runs(session.account_dir)
+    updated = False
+    for r in runs:
+        if r.get("runId") == session.run_id:
+            r["status"] = status
+            updated = True
+            break
+    if updated:
+        _save_runs(session.account_dir, runs)
+
+
 class SessionState:
     def __init__(self, user_key: str, key_hash: str, account_slug: str, account_dir: Path, config: dict):
         self.user_key = user_key
@@ -724,32 +777,64 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
     }
 
 @app.get("/api/status")
-def get_status(x_fzt_key: Optional[str] = Header(default=None)):
+def get_status(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
     session = resolve_session(x_fzt_key)
-    if session.status == "aborted":
-        safe_error = "任务被用户强行终止。"
-    elif session.status == "error":
-        safe_error = "任务执行失败，请在后台监控流查看 system 节点日志"
-    else:
-        safe_error = ""
-
-    result_str = session.result
-    full_str = session.full_result
-    if session.run_dir:
-        ws_dir = session.run_dir / "workspace"
+    
+    target_run_id = run_id or session.run_id
+    if not target_run_id:
+        return {
+            "status": "idle",
+            "errorMessage": "",
+            "result": None,
+            "fullResult": None,
+            "runId": None
+        }
+        
+    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
+    if not run_dir.exists():
+        run_dir = session.account_dir / "runs" / target_run_id
+        
+    status = session.status if target_run_id == session.run_id else "completed"
+    error_msg = session.error_message if target_run_id == session.run_id else ""
+    result_str = session.result if target_run_id == session.run_id else None
+    full_str = session.full_result if target_run_id == session.run_id else None
+    
+    if run_dir.exists():
+        session_json_path = run_dir / "session.json"
+        if session_json_path.exists():
+            try:
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                status = sdata.get("status", "completed")
+                error_msg = sdata.get("errorMessage", "")
+                result_str = sdata.get("result")
+                full_str = sdata.get("fullResult")
+            except Exception:
+                pass
+                
+        ws_dir = run_dir / "workspace"
         short_path = ws_dir / "summary_short.json"
         full_path = ws_dir / "summary.md"
         if short_path.exists():
             result_str = short_path.read_text(encoding="utf-8")
         if full_path.exists():
             full_str = full_path.read_text(encoding="utf-8")
-
+            
+    if status == "aborted":
+        safe_error = "任务被用户强行终止。"
+    elif status == "error":
+        safe_error = f"任务执行失败: {error_msg}" if error_msg else "任务执行失败，请在后台监控流查看 system 节点日志"
+    else:
+        safe_error = ""
+        
     return {
-        "status": session.status,
+        "status": status,
         "errorMessage": safe_error,
         "result": result_str,
         "fullResult": full_str,
-        "runId": session.run_id
+        "runId": target_run_id
     }
 
 
@@ -811,6 +896,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         if session.force_stop or session.status == "aborted":
             return
         session.status = "running"
+    _update_run_status_in_meta(session, "running")
     reset_events(session)
     emit_event(session, "pipeline", {"pipeline": pipeline_name})
 
@@ -865,6 +951,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
                 _save_session_json(session)
                 return
             session.status = "completed"
+        _update_run_status_in_meta(session, "completed")
         save_latest_report(session)
         _save_session_json(session)
 
@@ -902,12 +989,14 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         with session.runtime_lock:
             session.status = "aborted"
             session.error_message = "任务被用户强行终止。"
+        _update_run_status_in_meta(session, "aborted")
         _save_session_json(session)
     except Exception as e:
         add_log(session, "system", f"管线执行失败: {str(e)}")
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
+        _update_run_status_in_meta(session, "error")
         _save_session_json(session)
 
 
@@ -960,6 +1049,13 @@ async def analyze(
     _ensure_run_dir(session)
     _save_session_json(session)
     _save_latest_run_json(session)
+    
+    # 记录运行历史
+    file_names = [df["name"] for df in decoded_files]
+    try:
+        _add_run_to_meta(session, file_names)
+    except Exception as e:
+        logger.error("Failed to record run metadata: %s", str(e))
 
     session._pipeline_task = asyncio.create_task(
         run_pipeline_task(session, pipeline_name, active_preset, bundle)
@@ -977,6 +1073,7 @@ def stop(x_fzt_key: Optional[str] = Header(default=None)):
             session.error_message = "任务被用户强行终止。"
             add_log(session, "system", "⚠️ 用户强制终止了任务！")
             _save_session_json(session)
+            _update_run_status_in_meta(session, "aborted")
             task = getattr(session, "_pipeline_task", None)
             if task and not task.done():
                 task.cancel()
@@ -1004,32 +1101,285 @@ async def download_report_zip(
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"运行目录不存在: {target_run_id}")
         
-    # 确保缓存目录存在
-    session.cache_dir.mkdir(parents=True, exist_ok=True)
-    zip_base_name = session.cache_dir / f"analysis_{target_run_id}"
-    zip_file_path = Path(str(zip_base_name) + ".zip")
+    output_dir = run_dir / "workspace" / "output"
+    if not output_dir.exists() or not output_dir.is_dir():
+        raise HTTPException(status_code=404, detail="未找到分析产物目录 (workspace/output)")
+        
+    # 内存打包 ZIP
+    import io
+    import zipfile
     
-    # 异步打包（避免阻塞）
+    def generate_zip_bytes():
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in output_dir.rglob("*"):
+                if file_path.is_file():
+                    # 写入 zip 包，保持相对路径
+                    zf.write(file_path, file_path.relative_to(output_dir))
+        zip_buffer.seek(0)
+        return zip_buffer.getvalue()
+        
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(
-            None,
-            lambda: shutil.make_archive(
-                base_name=str(zip_base_name),
-                format="zip",
-                root_dir=str(run_dir)
-            )
-        )
+        zip_bytes = await loop.run_in_executor(None, generate_zip_bytes)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成压缩包失败: {str(e)}")
         
-    if not zip_file_path.exists():
-        raise HTTPException(status_code=500, detail="生成压缩包文件失败")
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=analysis_{target_run_id}.zip"}
+    )
+
+
+@app.get("/api/reports")
+def get_reports_list(
+    x_fzt_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    session = resolve_session(x_fzt_key)
+    runs = _load_runs(session.account_dir)
+    
+    # Calculate share URL and sign dynamically for each run
+    origin = str(request.base_url) if request else "http://localhost:3000"
+    if origin.endswith("/"):
+        origin = origin[:-1]
         
-    return FileResponse(
-        path=zip_file_path,
-        filename=f"analysis_{target_run_id}.zip",
-        media_type="application/zip"
+    for r in runs:
+        run_id = r["runId"]
+        sign = generate_share_sign(run_id)
+        r["shareUrl"] = f"{origin}/public.html?run_id={run_id}&sign={sign}"
+        
+    return {"status": "ok", "runs": runs}
+
+
+@app.post("/api/reports/{run_id}/public")
+async def toggle_report_public(
+    run_id: str,
+    request: Request,
+    x_fzt_key: Optional[str] = Header(default=None)
+):
+    session = resolve_session(x_fzt_key)
+    body = await request.json()
+    is_public = bool(body.get("public", False))
+    
+    runs = _load_runs(session.account_dir)
+    updated = False
+    for r in runs:
+        if r.get("runId") == run_id:
+            r["isPublic"] = is_public
+            updated = True
+            break
+            
+    if not updated:
+        raise HTTPException(status_code=404, detail="未找到该分析批次记录")
+        
+    _save_runs(session.account_dir, runs)
+    
+    sign = generate_share_sign(run_id)
+    origin = str(request.base_url)
+    if origin.endswith("/"):
+        origin = origin[:-1]
+        
+    share_url = f"{origin}/public.html?run_id={run_id}&sign={sign}"
+    
+    # Also update session.json if it exists inside the run_dir
+    run_dir = session.account_dir / "runs" / session.task_type / run_id
+    if not run_dir.exists():
+        run_dir = session.account_dir / "runs" / run_id
+    if run_dir.exists():
+        session_json_path = run_dir / "session.json"
+        if session_json_path.exists():
+            try:
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                sdata["isPublic"] = is_public
+                session_json_path.write_text(json.dumps(sdata, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+                
+    return {
+        "status": "ok",
+        "isPublic": is_public,
+        "shareUrl": share_url
+    }
+
+
+@app.delete("/api/reports/{run_id}")
+def delete_report(
+    run_id: str,
+    x_fzt_key: Optional[str] = Header(default=None)
+):
+    session = resolve_session(x_fzt_key)
+    runs = _load_runs(session.account_dir)
+    
+    # Find the run
+    target_run = None
+    for r in runs:
+        if r.get("runId") == run_id:
+            target_run = r
+            break
+            
+    if not target_run:
+        raise HTTPException(status_code=404, detail="未找到该分析批次记录")
+        
+    # Remove from metadata
+    runs.remove(target_run)
+    _save_runs(session.account_dir, runs)
+    
+    # Delete physically
+    run_dir = session.account_dir / "runs" / session.task_type / run_id
+    if not run_dir.exists():
+        run_dir = session.account_dir / "runs" / run_id
+        
+    if run_dir.exists() and run_dir.is_dir():
+        try:
+            shutil.rmtree(run_dir, ignore_errors=True)
+        except Exception as e:
+            logger.error("Failed to delete directory %s: %s", run_dir, e)
+            
+    # Also if this was the active session run, reset session state
+    if session.run_id == run_id:
+        session.run_id = None
+        session.run_dir = None
+        session.status = "idle"
+        session.result = None
+        session.full_result = None
+        
+    return {"status": "ok"}
+
+
+@app.get("/api/reports/public/status")
+def get_public_report_status(
+    run_id: str = Query(...),
+    sign: str = Query(...)
+):
+    # Verify signature
+    expected_sign = generate_share_sign(run_id)
+    if sign != expected_sign:
+        raise HTTPException(status_code=403, detail="签名不匹配，无权访问")
+        
+    # Find account and session
+    target_run = None
+    target_account_dir = None
+    
+    for account_dir in ACCOUNTS_DIR.iterdir():
+        if account_dir.is_dir():
+            runs = _load_runs(account_dir)
+            for r in runs:
+                if r.get("runId") == run_id:
+                    target_run = r
+                    target_account_dir = account_dir
+                    break
+            if target_run:
+                break
+                
+    if not target_run or not target_account_dir:
+        raise HTTPException(status_code=404, detail="未找到该运行批次")
+        
+    # Check if run is marked as public
+    if not target_run.get("isPublic", False):
+        raise HTTPException(status_code=403, detail="该分析报告未公开分享")
+        
+    task_type = target_run.get("taskType", "diagnosis")
+    run_dir = target_account_dir / "runs" / task_type / run_id
+    if not run_dir.exists():
+        run_dir = target_account_dir / "runs" / run_id
+        
+    session_json_path = run_dir / "session.json"
+    if not session_json_path.exists():
+        raise HTTPException(status_code=404, detail="未能读取运行结果数据")
+        
+    try:
+        sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"解析运行数据失败: {str(e)}")
+        
+    result_str = sdata.get("result")
+    full_str = sdata.get("fullResult")
+    
+    ws_dir = run_dir / "workspace"
+    short_path = ws_dir / "summary_short.json"
+    full_path = ws_dir / "summary.md"
+    if short_path.exists():
+        result_str = short_path.read_text(encoding="utf-8")
+    if full_path.exists():
+        full_str = full_path.read_text(encoding="utf-8")
+        
+    return {
+        "status": sdata.get("status", "completed"),
+        "errorMessage": sdata.get("errorMessage", ""),
+        "result": result_str,
+        "fullResult": full_str,
+        "runId": run_id
+    }
+
+
+@app.get("/api/reports/public/download")
+async def download_public_report_zip(
+    run_id: str = Query(...),
+    sign: str = Query(...)
+):
+    # Verify signature
+    expected_sign = generate_share_sign(run_id)
+    if sign != expected_sign:
+        raise HTTPException(status_code=403, detail="签名不匹配，无权访问")
+        
+    target_run = None
+    target_account_dir = None
+    
+    for account_dir in ACCOUNTS_DIR.iterdir():
+        if account_dir.is_dir():
+            runs = _load_runs(account_dir)
+            for r in runs:
+                if r.get("runId") == run_id:
+                    target_run = r
+                    target_account_dir = account_dir
+                    break
+            if target_run:
+                break
+                
+    if not target_run or not target_account_dir:
+        raise HTTPException(status_code=404, detail="未找到该运行记录")
+        
+    # Check public status
+    if not target_run.get("isPublic", False):
+        raise HTTPException(status_code=403, detail="该分析报告未公开分享")
+        
+    task_type = target_run.get("taskType", "diagnosis")
+    run_dir = target_account_dir / "runs" / task_type / run_id
+    if not run_dir.exists():
+        run_dir = target_account_dir / "runs" / run_id
+        
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"运行目录不存在")
+        
+    output_dir = run_dir / "workspace" / "output"
+    if not output_dir.exists() or not output_dir.is_dir():
+        raise HTTPException(status_code=404, detail="未找到分析产物目录 (workspace/output)")
+        
+    # 内存打包 ZIP
+    import io
+    import zipfile
+    
+    def generate_zip_bytes():
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in output_dir.rglob("*"):
+                if file_path.is_file():
+                    zf.write(file_path, file_path.relative_to(output_dir))
+        zip_buffer.seek(0)
+        return zip_buffer.getvalue()
+        
+    loop = asyncio.get_running_loop()
+    try:
+        zip_bytes = await loop.run_in_executor(None, generate_zip_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成压缩包失败: {str(e)}")
+        
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=analysis_{run_id}.zip"}
     )
 
 

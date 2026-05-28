@@ -25,6 +25,7 @@
     <div class="container">
         <nav>
             <a href="index.html" class="active">用户工作台</a>
+            <a href="history.html">历史诊断记录</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
@@ -364,7 +365,13 @@
 
         async function checkStatus() {
             try {
-                const res = await fetch('/api/status', { headers: authHeaders() });
+                const urlParams = new URLSearchParams(window.location.search);
+                const queryRunId = urlParams.get('run_id');
+                let statusUrl = '/api/status';
+                if (queryRunId) {
+                    statusUrl += '?run_id=' + encodeURIComponent(queryRunId);
+                }
+                const res = await fetch(statusUrl, { headers: authHeaders() });
                 const data = await res.json();
                 
                 currentRunId = data.runId || null;

@@ -370,11 +370,37 @@
 
         // ========== 复制链接 ==========
         function copyShareUrl(url) {
-            navigator.clipboard.writeText(url).then(() => {
-                alert('已成功复制免密公开分享链接，您可以直接通过微信/短信等方式发送给别人！');
-            }).catch(err => {
-                alert('复制失败，请手动选择复制 URL: ' + url);
-            });
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(url).then(() => {
+                    alert('已成功复制免密公开分享链接，您可以直接通过微信/短信等方式发送给别人！');
+                }).catch(err => {
+                    fallbackCopy(url);
+                });
+            } else {
+                fallbackCopy(url);
+            }
+        }
+
+        function fallbackCopy(text) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.top = "0";
+            textArea.style.left = "0";
+            textArea.style.position = "fixed";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    alert('已成功复制免密公开分享链接，您可以直接通过微信/短信等方式发送给别人！');
+                } else {
+                    prompt('复制失败，请手动复制以下链接：', text);
+                }
+            } catch (err) {
+                prompt('复制失败，请手动复制以下链接：', text);
+            }
+            document.body.removeChild(textArea);
         }
 
         // ========== 下载产物 ==========

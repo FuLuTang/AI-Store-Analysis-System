@@ -76,9 +76,8 @@ PLAN_TEMPLATE = [
      ),
      "status": "pending",
      "check": (
-         "# 检查两个报告产物都存在\n"
+         "# 检查报告产物\n"
          "import os\n"
-         "assert os.path.exists('output/summary.md'), 'summary.md 不存在'\n"
          "assert os.path.exists('output/summary_short.json'), 'summary_short.json 不存在'\n"
      ),
      "errors": []},

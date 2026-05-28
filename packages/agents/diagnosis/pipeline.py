@@ -138,7 +138,7 @@ class CustomPipeline(AgentPipeline):
                 step["detail"] = step["detail"].replace("get_param", params_str)
                     
         design_plan_impl(ws, json.dumps(plan, ensure_ascii=False))
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         if plan and plan[0]["status"] == "pending":
             plan[0]["status"] = "in_progress"
@@ -151,7 +151,7 @@ class CustomPipeline(AgentPipeline):
         metrics = []
 
         try:
-            short_path = ws.resolve("summary_short.json")
+            short_path = ws.resolve("output/summary_short.json")
             if short_path.exists():
                 short = json.loads(short_path.read_text(encoding="utf-8"))
                 if isinstance(short, dict):
@@ -160,14 +160,14 @@ class CustomPipeline(AgentPipeline):
             pass
 
         try:
-            summary_path = ws.resolve("summary.md")
+            summary_path = ws.resolve("output/summary.md")
             if summary_path.exists():
                 full_report = summary_path.read_text(encoding="utf-8")
         except Exception:
             pass
 
         try:
-            metrics_path = ws.resolve("output/指标.json")
+            metrics_path = ws.resolve("指标.json")
             if metrics_path.exists():
                 data = json.loads(metrics_path.read_text(encoding="utf-8"))
                 if isinstance(data, list):

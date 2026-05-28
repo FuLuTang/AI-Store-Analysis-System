@@ -183,7 +183,7 @@ def get_step_milestone(step_idx: int, total_steps: int) -> int:
 def get_plan_progress_info(ws) -> tuple[int, int]:
     """读取 plan.json，返回 (当前进行中/待执行步骤的索引, 总步骤数)。"""
     try:
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return -1, 0
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -258,7 +258,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
         return f"未找到文档: topic={topic}"
 
     def _read_plan() -> str:
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return "(plan 尚未初始化)"
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -267,7 +267,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
         return json.dumps(plan, ensure_ascii=False, indent=2)
 
     def _check_plan(step_index: int) -> str:
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return json.dumps({"error": "plan.json not found"})
         plan = json.loads(plan_path.read_text(encoding="utf-8"))

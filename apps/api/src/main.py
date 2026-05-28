@@ -789,8 +789,8 @@ def get_status(
                 pass
                 
         ws_dir = run_dir / "workspace"
-        short_path = ws_dir / "summary_short.json"
-        full_path = ws_dir / "summary.md"
+        short_path = ws_dir / "output" / "summary_short.json"
+        full_path = ws_dir / "output" / "summary.md"
         if short_path.exists():
             result_str = short_path.read_text(encoding="utf-8")
         if full_path.exists():
@@ -1275,8 +1275,8 @@ def get_public_report_status(
     full_str = sdata.get("fullResult")
     
     ws_dir = run_dir / "workspace"
-    short_path = ws_dir / "summary_short.json"
-    full_path = ws_dir / "summary.md"
+    short_path = ws_dir / "output" / "summary_short.json"
+    full_path = ws_dir / "output" / "summary.md"
     if short_path.exists():
         result_str = short_path.read_text(encoding="utf-8")
     if full_path.exists():

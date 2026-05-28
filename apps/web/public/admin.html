@@ -4,21 +4,40 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理员配置 - AI 分析系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        (function initTheme() {
+            const theme = localStorage.getItem('theme') || 'light';
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
+            }
+        })();
+    </script>
 </head>
 <body>
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
     <div class="container">
         <nav>
             <a href="index.html">用户工作台</a>
+            <a href="history.html">历史诊断记录</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html" class="active">管理员配置</a>
+            <div class="nav-right">
+                <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
+            </div>
         </nav>
 
         <header>
-            <h1>LLM 预设管理</h1>
+            <h1>管理员配置</h1>
             <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
-                仅可配置 low / medium / high 三档的 baseUrl、apiKey、model。
+                全局参数修改后所有后续请求均生效。
             </p>
         </header>
 
@@ -27,6 +46,11 @@
                 <label>管理员令牌（X-Admin-Token）</label>
                 <input type="password" id="adminToken" placeholder="请输入管理员令牌">
             </div>
+
+            <h3 style="margin-bottom: 0.8rem;">LLM 预设管理</h3>
+            <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
+                配置 low / medium / high 三档的 baseUrl、apiKey、model、reasoning_effort。
+            </p>
             <div id="presetContainer"></div>
             <div class="modal-actions" style="margin-top: 1rem;">
                 <button class="btn" id="saveBtn"><i class="fas fa-save"></i> 保存全部预设</button>
@@ -35,7 +59,7 @@
     </div>
 
     <script>
-        const efforts = ['low', 'medium', 'high'];
+        const EFFORTS = ['low', 'medium', 'high'];
         const presetContainer = document.getElementById('presetContainer');
         const saveBtn = document.getElementById('saveBtn');
         const adminTokenInput = document.getElementById('adminToken');
@@ -49,22 +73,56 @@
         }
 
         function renderPresets() {
-            presetContainer.innerHTML = efforts.map(effort => {
-                const preset = currentPresets[effort] || { baseUrl: '', apiKey: '', model: '' };
+            presetContainer.innerHTML = EFFORTS.map(effort => {
+                const preset = currentPresets[effort] || {};
+                const callConfig = preset.call || { baseUrl: '', apiKey: '', model: '', reasoningEffort: effort };
+                const fastConfig = preset.fastcall || { baseUrl: '', apiKey: '', model: '', reasoningEffort: effort };
                 return `
-                    <div class="card" style="padding: 1rem; margin-bottom: 1rem; border: 1px dashed var(--border); box-shadow:none;">
-                        <h3 style="margin-bottom: 0.8rem; text-transform: uppercase;">${effort}</h3>
-                        <div class="form-group">
-                            <label>API Base URL</label>
-                            <input type="text" data-effort="${effort}" data-key="baseUrl" value="${escapeHtml(preset.baseUrl || '')}" placeholder="https://api.openai.com/v1">
-                        </div>
-                        <div class="form-group">
-                            <label>API Key</label>
-                            <input type="password" data-effort="${effort}" data-key="apiKey" value="${escapeHtml(preset.apiKey || '')}" placeholder="sk-...">
-                        </div>
-                        <div class="form-group">
-                            <label>模型名称</label>
-                            <input type="text" data-effort="${effort}" data-key="model" value="${escapeHtml(preset.model || '')}" placeholder="gpt-5.4-mini">
+                    <div class="card" style="padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid var(--border); box-shadow:none;">
+                        <h2 style="margin-bottom: 1rem; text-transform: uppercase; color: var(--text-primary); border-bottom: 2px solid var(--border); padding-bottom: 0.5rem;">${effort} 预设档位</h2>
+                        
+                        <div style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
+                            <!-- Call (智能模型) Panel -->
+                            <div style="flex: 1; min-width: 280px; padding: 1rem; border: 1px dashed var(--border); border-radius: var(--radius); background: #fafafa;">
+                                <h3 style="margin-bottom: 0.8rem; color: var(--text-primary);"><i class="fas fa-brain" style="color: #6366f1;"></i> 智能推理配置 (call)</h3>
+                                <div class="form-group">
+                                    <label>API Base URL</label>
+                                    <input type="text" data-effort="${effort}" data-type="call" data-key="baseUrl" value="${escapeHtml(callConfig.baseUrl || '')}" placeholder="https://api.deepseek.com">
+                                </div>
+                                <div class="form-group">
+                                    <label>API Key</label>
+                                    <input type="password" data-effort="${effort}" data-type="call" data-key="apiKey" value="${escapeHtml(callConfig.apiKey || '')}" placeholder="sk-...">
+                                </div>
+                                <div class="form-group">
+                                    <label>模型名称</label>
+                                    <input type="text" data-effort="${effort}" data-type="call" data-key="model" value="${escapeHtml(callConfig.model || '')}" placeholder="deepseek-reasoner">
+                                </div>
+                                <div class="form-group">
+                                    <label>reasoning_effort</label>
+                                    <input type="text" data-effort="${effort}" data-type="call" data-key="reasoningEffort" value="${escapeHtml(callConfig.reasoningEffort || effort)}" placeholder="low / medium / high">
+                                </div>
+                            </div>
+
+                            <!-- Fastcall (高速模型) Panel -->
+                            <div style="flex: 1; min-width: 280px; padding: 1rem; border: 1px dashed var(--border); border-radius: var(--radius); background: #fafafa;">
+                                <h3 style="margin-bottom: 0.8rem; color: var(--text-primary);"><i class="fas fa-bolt" style="color: #eab308;"></i> 高速执行配置 (fastcall)</h3>
+                                <div class="form-group">
+                                    <label>API Base URL</label>
+                                    <input type="text" data-effort="${effort}" data-type="fastcall" data-key="baseUrl" value="${escapeHtml(fastConfig.baseUrl || '')}" placeholder="https://api.openai.com/v1">
+                                </div>
+                                <div class="form-group">
+                                    <label>API Key</label>
+                                    <input type="password" data-effort="${effort}" data-type="fastcall" data-key="apiKey" value="${escapeHtml(fastConfig.apiKey || '')}" placeholder="sk-...">
+                                </div>
+                                <div class="form-group">
+                                    <label>模型名称</label>
+                                    <input type="text" data-effort="${effort}" data-type="fastcall" data-key="model" value="${escapeHtml(fastConfig.model || '')}" placeholder="gpt-4o-mini">
+                                </div>
+                                <div class="form-group">
+                                    <label>reasoning_effort</label>
+                                    <input type="text" data-effort="${effort}" data-type="fastcall" data-key="reasoningEffort" value="${escapeHtml(fastConfig.reasoningEffort || effort)}" placeholder="low / medium / high">
+                                </div>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -73,15 +131,19 @@
 
         function collectPresetsFromForm() {
             const next = {};
-            efforts.forEach(effort => {
-                next[effort] = { baseUrl: '', apiKey: '', model: '' };
+            EFFORTS.forEach(effort => {
+                next[effort] = {
+                    call: { baseUrl: '', apiKey: '', model: '', reasoningEffort: '' },
+                    fastcall: { baseUrl: '', apiKey: '', model: '', reasoningEffort: '' }
+                };
             });
 
-            document.querySelectorAll('[data-effort][data-key]').forEach(el => {
+            document.querySelectorAll('[data-effort][data-type][data-key]').forEach(el => {
                 const effort = el.dataset.effort;
+                const type = el.dataset.type;
                 const key = el.dataset.key;
-                if (next[effort] && ['baseUrl', 'apiKey', 'model'].includes(key)) {
-                    next[effort][key] = el.value.trim();
+                if (next[effort] && next[effort][type] && ['baseUrl', 'apiKey', 'model', 'reasoningEffort'].includes(key)) {
+                    next[effort][type][key] = el.value.trim();
                 }
             });
             return next;
@@ -123,10 +185,7 @@
             }
         };
 
-        loadPresets().catch(err => {
-            console.error(err);
-            alert('加载预设失败');
-        });
+        loadPresets().catch(err => { console.error(err); alert('加载预设失败'); });
     </script>
 </body>
 </html>

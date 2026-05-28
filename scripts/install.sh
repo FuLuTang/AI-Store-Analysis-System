@@ -52,18 +52,20 @@ do_deploy() {
     cd "$APP_DIR"
 
     echo "==> 2. 正在准备系统环境与依赖..."
-    # 仅在第一次安装或依赖变化时可能需要 apt
-    apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends >/dev/null 2>&1
+    # 清理上次中断残留的 apt 锁，否则 apt 直接报错退出
+    rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/cache/apt/archives/lock
+    apt update && apt install -y python3 python3-pip python3-venv nginx --no-install-recommends
 
-    # 处理虚拟环境 (确保 activate 脚本存在)
+    # 处理虚拟环境 (每次重建确保干净，避免中断残留导致包损坏)
+    echo "==> 正在创建 Python 虚拟环境..."
+    rm -rf venv
+    python3 -m venv venv
     if [ ! -f "venv/bin/activate" ]; then
-        echo "==> 正在创建 Python 虚拟环境..."
-        rm -rf venv
-        python3 -m venv venv
+        echo "❌ 虚拟环境创建失败！"
+        exit 1
     fi
     . venv/bin/activate
-    pip install --upgrade pip >/dev/null
-    pip install -r requirements.txt >/dev/null
+    pip install -r requirements.txt
 
     echo "==> 3. 正在更新系统服务配置..."
     cat > "$SERVICE_FILE" <<EOF
@@ -96,6 +98,7 @@ EOF
 server {
     listen 80;
     server_name _;
+    client_max_body_size 128M;
     location / {
         proxy_pass http://127.0.0.1:$PORT;
         proxy_http_version 1.1;

@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>历史诊断记录 - AI 分析系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .table-card {
+            padding: 1.5rem 1.8rem !important;
+            overflow-x: auto;
+        }
+        table.history-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+        table.history-table th, table.history-table td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+        table.history-table th {
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+        table.history-table tr:last-child td {
+            border-bottom: none;
+        }
+        table.history-table tr:hover td {
+            background: var(--placeholder-bg);
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 500;
+        }
+        .badge.completed { background: rgba(16, 185, 129, 0.12); color: var(--success); }
+        .badge.running { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
+        .badge.queued { background: rgba(245, 158, 11, 0.12); color: var(--warning); }
+        .badge.error { background: rgba(239, 68, 68, 0.12); color: var(--error); }
+        .badge.aborted { background: rgba(100, 116, 139, 0.12); color: var(--text-muted); }
+        
+        .file-tag {
+            display: inline-block;
+            padding: 2px 6px;
+            background: var(--placeholder-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            color: var(--text);
+            margin-right: 4px;
+            margin-bottom: 4px;
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: middle;
+        }
+        .action-btns {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .btn-icon {
+            border: 1px solid var(--border);
+            background: var(--input-bg);
+            color: var(--text);
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 0.85rem;
+            text-decoration: none;
+        }
+        .btn-icon:hover {
+            background: var(--placeholder-bg);
+            border-color: var(--border-hover);
+            color: var(--primary);
+            transform: translateY(-1px);
+        }
+        .btn-icon.danger:hover {
+            color: var(--error);
+            border-color: rgba(239, 68, 68, 0.4);
+            background: rgba(239, 68, 68, 0.05);
+        }
+        .btn-icon.active {
+            background: var(--primary-glow);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        /* Slide toggle styling */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 36px;
+            height: 20px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: var(--border);
+            transition: .3s;
+            border-radius: 20px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 14px;
+            width: 14px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        input:checked + .toggle-slider {
+            background-color: var(--success);
+        }
+        input:checked + .toggle-slider:before {
+            transform: translateX(16px);
+        }
+    </style>
+    <script>
+        (function initTheme() {
+            const theme = localStorage.getItem('theme') || 'light';
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
+            }
+        })();
+    </script>
+</head>
+<body>
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
+    <div class="container" style="max-width:1200px;">
+        <nav>
+            <a href="index.html">用户工作台</a>
+            <a href="history.html" class="active">历史诊断记录</a>
+            <a href="monitor.html">后台监控流</a>
+            <a href="admin.html">管理员配置</a>
+            <div class="nav-right">
+                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
+                <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm); margin-right: 4px;">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
+                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                    <i class="fas fa-sign-out-alt"></i> 退出
+                </button>
+            </div>
+        </nav>
+
+        <header>
+            <h1>历史诊断记录管理</h1>
+            <p class="subtitle" style="margin-bottom: 1.5rem;">查看并管理您所有跑过的门店分析批次，生成或撤销向他人展示的公开分享链接。</p>
+        </header>
+
+        <div class="card table-card">
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th style="width: 180px;">诊断时间</th>
+                        <th>场景模式</th>
+                        <th>分析数据源</th>
+                        <th style="width: 120px;">运行状态</th>
+                        <th style="width: 120px; text-align: center;">公开访问</th>
+                        <th style="width: 180px; text-align: right;">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="runsListBody">
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                            <div class="spinner" style="margin: 0 auto 1rem;"></div>
+                            正在加载历史诊断记录，请稍候...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // ========== 鉴权守卫 ==========
+        function authHeaders() {
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            return { 'X-FZT-Key': key };
+        }
+
+        (async function authGuard() {
+            const key = localStorage.getItem('X-FZT-Key');
+            if (!key) { window.location.href = '/login.html'; return; }
+            try {
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
+                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; return; }
+                const data = await r.json();
+                if (data.status === 'ok' && data.userKey) {
+                    const disp = document.getElementById('userKeyDisplay');
+                    if (disp) disp.innerText = `密钥: ${data.userKey}`;
+                }
+            } catch(e) { window.location.href = '/login.html'; }
+        })();
+
+        // ========== 主题切换 ==========
+        window.toggleTheme = function() {
+            const isDark = document.documentElement.classList.toggle('dark-theme');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateThemeIcon();
+        };
+
+        function updateThemeIcon() {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                const isDark = document.documentElement.classList.contains('dark-theme');
+                icon.className = isDark ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+        setTimeout(updateThemeIcon, 0);
+
+        // ========== 加载历史数据 ==========
+        const listBody = document.getElementById('runsListBody');
+
+        async function loadRuns() {
+            try {
+                const res = await fetch('/api/reports', { headers: authHeaders() });
+                if (!res.ok) throw new Error('拉取列表失败');
+                const data = await res.json();
+                renderList(data.runs || []);
+            } catch (err) {
+                listBody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: var(--error); padding: 3rem;">
+                            <i class="fas fa-exclamation-circle" style="font-size: 1.5rem; margin-bottom: 0.5rem;"></i>
+                            <br>加载历史诊断记录失败: ${err.message}
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        function getStatusBadgeClass(status) {
+            switch(status) {
+                case 'completed': return 'completed';
+                case 'running': return 'running';
+                case 'queued': return 'queued';
+                case 'error': return 'error';
+                case 'aborted': return 'aborted';
+                default: return 'aborted';
+            }
+        }
+
+        function getStatusLabel(status) {
+            switch(status) {
+                case 'completed': return '已完成';
+                case 'running': return '分析中';
+                case 'queued': return '排队中';
+                case 'error': return '失败';
+                case 'aborted': return '已终止';
+                default: return status || '未知';
+            }
+        }
+
+        function renderList(runs) {
+            if (runs.length === 0) {
+                listBody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 4rem;">
+                            <i class="fas fa-folder-open" style="font-size: 2rem; opacity: 0.4; margin-bottom: 0.8rem;"></i>
+                            <br>暂无历史诊断记录，请先在用户工作台运行一次诊断分析。
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            listBody.innerHTML = runs.map((run) => {
+                const filesHtml = (run.fileNames || []).map(f => `<span class="file-tag" title="${f}"><i class="fas fa-file-alt" style="font-size:0.7rem; color:var(--primary); margin-right:3px;"></i>${f}</span>`).join('');
+                const statusBadge = getStatusBadgeClass(run.status);
+                const statusLabel = getStatusLabel(run.status);
+                const publicChecked = run.isPublic ? 'checked' : '';
+                const copyBtnDisabled = run.isPublic ? '' : 'disabled style="opacity:0.4; cursor:not-allowed;"';
+                
+                return `
+                    <tr id="row-${run.runId}">
+                        <td>
+                            <div style="font-family:'JetBrains Mono', monospace; font-size:0.85rem; color:var(--text);">${run.createdAt}</div>
+                        </td>
+                        <td>
+                            <span style="font-weight:500;">${run.taskType === 'diagnosis' ? '药店诊断' : run.taskType}</span>
+                        </td>
+                        <td>
+                            <div style="display:flex; flex-wrap:wrap; max-width:320px;">${filesHtml || '无上传文件'}</div>
+                        </td>
+                        <td>
+                            <span class="badge ${statusBadge}">${statusLabel}</span>
+                        </td>
+                        <td style="text-align: center;">
+                            <label class="toggle-switch">
+                                <input type="checkbox" ${publicChecked} onchange="togglePublic('${run.runId}', this)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </td>
+                        <td style="text-align: right;">
+                            <div class="action-btns" style="justify-content: flex-end;">
+                                <a href="index.html?run_id=${run.runId}" class="btn-icon" title="在工作台查看报告">
+                                    <i class="fas fa-external-link-alt"></i>
+                                </a>
+                                <button class="btn-icon copy-btn-${run.runId}" onclick="copyShareUrl('${run.shareUrl}')" title="复制免登录分享链接" ${copyBtnDisabled}>
+                                    <i class="fas fa-share-alt"></i>
+                                </button>
+                                <button class="btn-icon copy-dl-btn-${run.runId}" onclick="copyDownloadUrl('${run.downloadUrl}')" title="复制免登录直链下载" ${copyBtnDisabled}>
+                                    <i class="fas fa-link"></i>
+                                </button>
+                                <button class="btn-icon" onclick="downloadArchive('${run.runId}')" title="下载产物 (ZIP)">
+                                    <i class="fas fa-download"></i>
+                                </button>
+                                <button class="btn-icon danger" onclick="deleteRun('${run.runId}')" title="物理删除记录">
+                                    <i class="fas fa-trash-alt"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // ========== 控制公开分享 ==========
+        async function togglePublic(runId, checkbox) {
+            const isPublic = checkbox.checked;
+            const copyBtn = document.querySelector(`.copy-btn-${runId}`);
+            const copyDlBtn = document.querySelector(`.copy-dl-btn-${runId}`);
+            
+            try {
+                const res = await fetch(`/api/reports/${runId}/public`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify({ public: isPublic })
+                });
+                
+                if (!res.ok) throw new Error('修改失败');
+                const data = await res.json();
+                
+                if (data.isPublic) {
+                    copyBtn.removeAttribute('disabled');
+                    copyBtn.style.opacity = '1';
+                    copyBtn.style.cursor = 'pointer';
+                    copyBtn.setAttribute('onclick', `copyShareUrl('${data.shareUrl}')`);
+
+                    copyDlBtn.removeAttribute('disabled');
+                    copyDlBtn.style.opacity = '1';
+                    copyDlBtn.style.cursor = 'pointer';
+                    copyDlBtn.setAttribute('onclick', `copyDownloadUrl('${data.downloadUrl}')`);
+                } else {
+                    copyBtn.setAttribute('disabled', 'true');
+                    copyBtn.style.opacity = '0.4';
+                    copyBtn.style.cursor = 'not-allowed';
+
+                    copyDlBtn.setAttribute('disabled', 'true');
+                    copyDlBtn.style.opacity = '0.4';
+                    copyDlBtn.style.cursor = 'not-allowed';
+                }
+            } catch (err) {
+                alert('设置公开状态失败: ' + err.message);
+                checkbox.checked = !isPublic; // 还原状态
+            }
+        }
+
+        // ========== 复制链接 ==========
+        function copyShareUrl(url) {
+            const msg = '已成功复制免密公开分享链接，您可以直接通过微信/短信等方式发送给别人！';
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(url).then(() => {
+                    alert(msg);
+                }).catch(err => {
+                    fallbackCopy(url, msg);
+                });
+            } else {
+                fallbackCopy(url, msg);
+            }
+        }
+
+        function copyDownloadUrl(url) {
+            const msg = '已成功复制免密直链下载地址！其他人点击此链接可直接触发产物压缩包下载，无需加载预览页。';
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(url).then(() => {
+                    alert(msg);
+                }).catch(err => {
+                    fallbackCopy(url, msg);
+                });
+            } else {
+                fallbackCopy(url, msg);
+            }
+        }
+
+        function fallbackCopy(text, successMsg) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.top = "0";
+            textArea.style.left = "0";
+            textArea.style.position = "fixed";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    alert(successMsg);
+                } else {
+                    prompt('复制失败，请手动复制以下链接：', text);
+                }
+            } catch (err) {
+                prompt('复制失败，请手动复制以下链接：', text);
+            }
+            document.body.removeChild(textArea);
+        }
+
+        // ========== 下载产物 ==========
+        function downloadArchive(runId) {
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            const url = `/api/reports/download?x-fzt-key=${encodeURIComponent(key)}&run_id=${encodeURIComponent(runId)}`;
+            window.open(url, '_blank');
+        }
+
+        // ========== 删除记录 ==========
+        async function deleteRun(runId) {
+            if (!confirm('确认要物理删除该诊断记录吗？此操作将永久清空该批次在服务器上的所有产物及文件夹，无法撤销！')) return;
+            
+            try {
+                const res = await fetch(`/api/reports/${runId}`, {
+                    method: 'DELETE',
+                    headers: authHeaders()
+                });
+                if (!res.ok) throw new Error('删除失败');
+                
+                // 动画移除 DOM
+                const row = document.getElementById(`row-${runId}`);
+                if (row) {
+                    row.style.opacity = '0';
+                    row.style.transition = 'opacity 0.3s ease';
+                    setTimeout(() => {
+                        row.remove();
+                        // 重新加载以防列表为空需要渲染空状态
+                        loadRuns();
+                    }, 300);
+                }
+            } catch (err) {
+                alert('删除失败: ' + err.message);
+            }
+        }
+
+        window.onload = () => {
+            updateThemeIcon();
+            loadRuns();
+        };
+    </script>
+</body>
+</html>

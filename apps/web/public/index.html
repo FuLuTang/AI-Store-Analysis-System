@@ -4,123 +4,246 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>福州门店 AI 分析系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        (function initTheme() {
+            const theme = localStorage.getItem('theme') || 'dark';
+            if (theme === 'light') {
+                document.documentElement.classList.add('light-theme');
+            }
+        })();
+    </script>
 </head>
 <body>
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
     <div class="container">
         <nav>
             <a href="index.html" class="active">用户工作台</a>
+            <a href="history.html">历史诊断记录</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
-            <button class="settings-btn" onclick="openSettings()">
-                <i class="fas fa-cog"></i> 设置
-            </button>
-            <button class="settings-btn" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';" style="color:#ef4444;">
-                <i class="fas fa-sign-out-alt"></i> 退出
-            </button>
+            <div class="nav-right">
+                <select id="reasoningEffortSelect" class="nav-select">
+                    <option value="medium">medium（默认）</option>
+                    <option value="low">low（快速）</option>
+                    <option value="high">high（深度）</option>
+                </select>
+                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
+                <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
+                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                    <i class="fas fa-sign-out-alt"></i> 退出
+                </button>
+            </div>
         </nav>
 
         <header>
             <h1>药店经营 AI 智能诊断</h1>
-            <p style="color: var(--text-muted); margin-bottom: 2rem;">拖入门店经营 JSON 数据，一键获取深度归因与优化策略。</p>
+            <p class="subtitle">拖入门店经营 JSON 数据，一键获取深度归因与优化策略。</p>
         </header>
 
-        <div class="card">
-            <div id="dropZone" class="drop-zone">
-                <i class="fas fa-file-upload"></i>
-                <p id="fileName">拖放一个或多个 JSON 文件到此处</p>
-                <div id="fileList" class="file-list"></div>
-                <input type="file" id="fileInput" hidden multiple>
-            </div>
+        <div class="dashboard-grid">
+            <!-- 左侧：参数与操作 -->
+            <div class="dashboard-sidebar">
+                <div class="card sidebar-card">
+                    <h3><i class="fas fa-file-import"></i> 数据导入</h3>
+                    <div id="dropZone" class="drop-zone">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p id="fileName">拖放数据文件到此处</p>
+                        <span class="upload-hint">支持 Excel / CSV / JSON / PDF / Word / TXT / 压缩包</span>
+                        <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.md,.zip,.rar,.7z">
+                    </div>
+                    <div id="fileList" class="file-list"></div>
 
-            <div style="text-align: center; display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
-                <button id="exampleBtn" class="btn btn-secondary" style="background: #f1f5f9; color: var(--primary); border: 1px solid var(--primary);">
-                    <i class="fas fa-vial"></i> 使用案例 JSON 文件
-                </button>
-                <button id="startBtn" class="btn" disabled>
-                    <i class="fas fa-magic"></i> 开始多维 AI 诊断
-                </button>
-                <button id="stopBtn" class="btn btn-secondary" style="display: none; background: #ef4444; color: white; border-color: #ef4444;">
-                    <i class="fas fa-stop-circle"></i> 强制停止
-                </button>
-            </div>
+                    <div class="action-bar flex-column" style="gap: 0.75rem; margin-bottom: 0;">
+                        <button id="exampleBtn" class="btn-secondary w-full">
+                            <i class="fas fa-vial"></i> 载入案例数据
+                        </button>
+                        <button id="startBtn" class="btn w-full" disabled>
+                            <i class="fas fa-magic"></i> 开始多维 AI 诊断
+                        </button>
+                        <button id="stopBtn" class="btn-danger w-full" style="display:none;">
+                            <i class="fas fa-stop-circle"></i> 强制停止任务
+                        </button>
+                    </div>
 
-            <div id="loading" class="loading" style="display: none; justify-content: center; align-items: center; gap: 0.5rem;">
-                <div class="spinner" style="width: 20px; height: 20px;"></div>
-                <span id="statusText" style="color: #666;">任务正在后台运行，请等待...</span>
-            </div>
+                    <hr>
 
-
-
-            <div style="text-align: center; margin-top: 1rem; display: flex; justify-content: center; align-items: center; gap: 0.5rem;">
-                <span id="labelSimple" style="font-size: 0.9rem; color: var(--text-muted); font-weight: bold;">精简</span>
-                <label class="switch">
-                    <input type="checkbox" id="reportToggle">
-                    <span class="slider round"></span>
-                </label>
-                <span id="labelFull" style="font-size: 0.9rem; color: var(--text-muted);">完整</span>
-            </div>
-
-
-
-            <div id="result" class="report-section">
-                <div class="report-card">
-                    <div id="reportContent" class="markdown-body"></div>
+                    <details class="analysis-params-details" id="paramsDetails">
+                        <summary>
+                            <i class="fas fa-sliders-h"></i> 诊断参数（可选）
+                        </summary>
+                        <div class="params-body">
+                            <div id="paramsFormContainer"></div>
+                            <div class="param-actions">
+                                <select id="presetSelect" class="nav-select">
+                                    <option value="">📋 预设...</option>
+                                </select>
+                                <button id="addParamBtn" class="btn-secondary btn-sm">
+                                    <i class="fas fa-plus"></i> 添加参数
+                                </button>
+                                <button id="saveParamsBtn" class="btn btn-sm">
+                                    <i class="fas fa-save"></i> 保存
+                                </button>
+                                <span id="paramsSavedHint" class="saved-hint">✓ 已保存</span>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
 
-            <!-- 底部日志与进度 -->
-            <div id="progressContainer" style="display: none; max-width: 800px; margin: 30px auto 10px; padding: 0; border-top: 1px solid #e2e8f0; padding-top: 20px;">
-                <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--text-muted); margin-bottom: 5px; padding: 0 5px;">
-                    <span style="font-weight: 600;"><i class="fas fa-tasks"></i> 系统处理进度 <span style="font-weight: normal; font-size: 12px; color: #94a3b8; margin-left: 6px;">(预计 3-5 分钟)</span></span>
-                    <span id="progressText" style="font-weight: bold; color: var(--primary);">0%</span>
+            <!-- 右侧：执行进度、控制台日志与诊断报告 -->
+            <div class="dashboard-main">
+                <!-- 空闲时的引导提示 -->
+                <div id="dashboardPlaceholder" class="card placeholder-card">
+                    <div class="placeholder-content">
+                        <i class="fas fa-robot placeholder-icon"></i>
+                        <h2>门店 AI 智能诊断</h2>
+                        <p>请在左侧载入您的药店经营数据文件（支持销售流水、库存清单、财务数据等），点击“开始诊断”按钮即可通过 AI 引擎一键获取深度归因与策略优化报告。</p>
+                    </div>
                 </div>
-                <div style="width: 100%; background-color: #e2e8f0; border-radius: 6px; height: 10px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
-                    <div id="progressBar" style="width: 0%; height: 100%; background-color: var(--primary); transition: width 0.4s ease-out; background-image: linear-gradient(45deg, rgba(255,255,255,.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.15) 50%, rgba(255,255,255,.15) 75%, transparent 75%, transparent); background-size: 1rem 1rem;"></div>
-                </div>
-            </div>
 
-            <div id="globalLogContainer" style="display: none; max-width: 800px; margin: 0 auto 20px; background: #1e1e1e; color: #a3be8c; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 150px; overflow-y: auto; text-align: left; box-shadow: inset 0 0 10px rgba(0,0,0,0.5);">
-                <div style="color: #88c0d0; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #4c566a; padding-bottom: 5px; display: flex; justify-content: space-between;">
-                    <span><i class="fas fa-terminal"></i> 总后台运行日志</span>
-                    <a href="monitor.html" target="_blank" style="color: #81a1c1; text-decoration: none; font-weight: normal;"><i class="fas fa-external-link-alt"></i> 详细监控视图</a>
+                <!-- 运行状态与进度卡片 -->
+                <div class="card execution-card" id="executionCard" style="display:none; padding: 1.8rem 2rem;">
+                    <div class="progress-section" id="progressContainer" style="display:block; border-top:none; padding:0; margin:0; max-width:100%;">
+                        <div class="progress-header">
+                            <span class="progress-header-title"><i class="fas fa-tasks"></i> 系统处理进度 <span class="progress-header-hint">(预计 3-5 分钟)</span></span>
+                            <span class="progress-text" id="progressText">0%</span>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-bar" id="progressBar"></div>
+                        </div>
+                        <div id="currentStepText" style="margin-top:0.75rem; min-height:1.2em;"></div>
+                    </div>
+
+                    <div id="loading" class="loading">
+                        <div class="spinner"></div>
+                        <span id="statusText">任务正在后台运行，请等待...</span>
+                    </div>
+
+                    <!-- 下载产物操作区 -->
+                    <div id="downloadArea" style="display:none; margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); text-align: center;">
+                        <button id="downloadBtn" class="btn" style="width: 100%; max-width: 340px; display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem; font-size: 0.95rem; padding: 0.8rem 1.5rem;">
+                            <i class="fas fa-file-archive" style="font-size: 1.1rem;"></i> <strong>下载完整分析产物压缩包 (ZIP)</strong>
+                        </button>
+                    </div>
                 </div>
-                <div id="globalLogContent"></div>
+
+                <!-- 终端日志卡片 -->
+                <div class="card" id="logCard" style="display:none; padding: 1.5rem 1.8rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <h3 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fas fa-terminal" style="color: var(--primary);"></i> 诊断控制台日志
+                        </h3>
+                        <a href="monitor.html" target="_blank" style="color: var(--text-muted); text-decoration: none; font-size: 0.8rem; transition: color 0.2s;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--text-muted)'">
+                            <i class="fas fa-external-link-alt"></i> 详细监控视图
+                        </a>
+                    </div>
+                    <div class="log-container" id="globalLogContainer" style="display:block; max-width:100%; margin:0; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--log-bg); padding: 0.8rem 1rem; height: 180px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; text-align: left; box-shadow: inset 0 2px 8px rgba(0,0,0,0.15);">
+                        <div id="globalLogContent"></div>
+                    </div>
+                </div>
+
+                <!-- 报告展现卡片 -->
+                <div id="result" class="report-section" style="margin:0;">
+                    <div class="report-header-bar" id="reportHeaderBar" style="display:none;">
+                        <h3><i class="fas fa-poll-h"></i> 药店经营 AI 智能诊断报告</h3>
+                        <div class="report-toggle" id="reportToggleBar" style="margin:0;">
+                            <span id="labelSimple">精简</span>
+                            <label class="switch">
+                                <input type="checkbox" id="reportToggle">
+                                <span class="slider round"></span>
+                            </label>
+                            <span id="labelFull">完整</span>
+                        </div>
+                    </div>
+                    <div class="report-card" style="display:none;">
+                        <div id="reportContent" class="markdown-body"></div>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
 
-    <!-- 设置弹窗 -->
-    <div id="settingsModal" class="modal-overlay">
-        <div class="modal">
-            <h2><i class="fas fa-sliders-h"></i> 推理强度设置</h2>
-            <div class="form-group">
-                <label>reasoning_effort（仅支持 low / medium / high）</label>
-                <select id="settingReasoningEffort">
-                    <option value="low">low（快速）</option>
-                    <option value="medium">medium（默认）</option>
-                    <option value="high">high（深度）</option>
-                </select>
-            </div>
-            <div class="modal-actions">
-                <button class="btn-secondary" onclick="closeSettings()">取消</button>
-                <button class="btn" onclick="saveSettings()">
-                    <i class="fas fa-save"></i> 保存
-                </button>
+        <!-- 参数编辑弹窗 (放置在 grid 外部) -->
+        <div id="paramEditorModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
+            <div style="background:#161c2d;border-radius:var(--radius);padding:2rem;max-width:440px;width:90%;box-shadow:var(--shadow-lg);max-height:90vh;overflow-y:auto; border: 1px solid rgba(255,255,255,0.1);">
+                <h3 style="margin-bottom:1.25rem;font-size:1.15rem; color: white;"><i class="fas fa-plus-circle"></i> 新建参数</h3>
+                <div class="form-group">
+                    <label>控件类型</label>
+                    <select id="peType" class="form-select" onchange="window.updateParamEditor()">
+                        <option value="text">文本</option>
+                        <option value="number">数字</option>
+                        <option value="toggle">开关</option>
+                        <option value="slider">滑块</option>
+                        <option value="select">下拉选择</option>
+                        <option value="date">日期选择</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>参数名称</label>
+                    <input id="peKey" class="form-input" placeholder="例如：分析时间颗粒度">
+                </div>
+                <div class="form-group" id="peValueGroup">
+                    <label id="peValueLabel">默认值</label>
+                    <div id="peValueInner"></div>
+                </div>
+                <div id="peExtras"></div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="window.closeParamEditor()">取消</button>
+                    <button class="btn" onclick="window.confirmAddParam()"><i class="fas fa-check"></i> 确认添加</button>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
+        // ========== marked 图片渲染自定义 ==========
+        const _rewriteImageSrc = function(href) {
+            if (href && (href.startsWith('./') || (!href.includes('://') && !href.startsWith('data:')))) {
+                const filename = href.replace(/^\.\//, '');
+                const key = localStorage.getItem('X-FZT-Key') || '';
+                return `/api/reports/${currentRunId}/assets/${encodeURIComponent(filename)}?x-fzt-key=${encodeURIComponent(key)}`;
+            }
+            return href;
+        };
+        marked.use({
+            renderer: {
+                image(token) {
+                    // marked v12+ 传入单个 token 对象 { href, title, text }
+                    // marked v4~v11 传入三个独立参数 (href, title, text)
+                    const href = (typeof token === 'object' && token !== null) ? token.href : token;
+                    const title = (typeof token === 'object' && token !== null) ? (token.title || '') : (arguments[1] || '');
+                    const text = (typeof token === 'object' && token !== null) ? (token.text || '') : (arguments[2] || '');
+                    const src = _rewriteImageSrc(href);
+                    return `<img src="${src}" alt="${text}" title="${title}" style="max-width:100%; height:auto; display:block; margin:1.5rem auto; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.12); border:1px solid var(--border-color);" />`;
+                }
+            }
+        });
+
         // ========== 鉴权守卫 ==========
+        function authHeaders() {
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            return { 'X-FZT-Key': key };
+        }
+
         (async function authGuard() {
             const key = localStorage.getItem('X-FZT-Key');
             if (!key) { window.location.href = '/login.html'; return; }
             try {
-                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
-                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
+                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; return; }
+                const data = await r.json();
+                if (data.status === 'ok' && data.userKey) {
+                    const disp = document.getElementById('userKeyDisplay');
+                    if (disp) disp.innerText = `密钥: ${data.userKey}`;
+                }
             } catch(e) { window.location.href = '/login.html'; }
         })();
 
@@ -138,8 +261,11 @@
         const labelSimple = document.getElementById('labelSimple');
         const labelFull = document.getElementById('labelFull');
         const exampleBtn = document.getElementById('exampleBtn');
+        const downloadArea = document.getElementById('downloadArea');
+        const downloadBtn = document.getElementById('downloadBtn');
         
         let filesData = [];
+        let currentRunId = null;
         let currentReport = null;
         let currentFullReport = null;
         let pollingInterval = null;
@@ -148,85 +274,63 @@
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
         const progressText = document.getElementById('progressText');
-        
-        const nodeWeights = {
-            input: 1, clean: 1, api: 25, output: 1, review: 20,
-            alg1: 2, alg2: 8, alg3: 1, fusion: 1, rep1: 20, rep2: 20
-        };
-        let nodeProgress = {};
-        let aiWaitCounters = {};
+        const currentStepText = document.getElementById('currentStepText');
+
+        let currentProgress = 0;
+
+        function setProgress(pct) {
+            if (pct > currentProgress) {
+                currentProgress = pct;
+                if (currentProgress > 100) currentProgress = 100;
+                progressBar.style.width = currentProgress + '%';
+                progressText.innerText = currentProgress + '%';
+            }
+        }
 
         function resetProgressState() {
-            for (let key in nodeWeights) nodeProgress[key] = 0;
-            aiWaitCounters = { api: 0, review: 0, rep1: 0, rep2: 0 };
-            updateOverallProgress();
+            currentProgress = 0;
+            progressBar.style.width = '0%';
+            progressText.innerText = '0%';
+            currentStepText.innerText = '';
         }
-
-        function updateOverallProgress() {
-            let total = 0;
-            for (let key in nodeProgress) {
-                total += nodeProgress[key] * (nodeWeights[key] / 100);
-            }
-            let percentage = Math.round(total);
-            if (percentage > 100) percentage = 100;
-            progressBar.style.width = `${percentage}%`;
-            progressText.innerText = `${percentage}%`;
-        }
-        
-        resetProgressState();
 
         function connectSSE() {
             if (sseSource) return;
-            sseSource = new EventSource('/api/stream');
+            sseSource = new EventSource('/api/stream?x-fzt-key=' + encodeURIComponent(localStorage.getItem('X-FZT-Key') || ''));
             sseSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'log') {
+                    const level = data.level || 'info';
+
+                    // 读取 progress 字段，直接设进度条
+                    if (data.progress !== undefined && data.progress !== null) {
+                        setProgress(Math.round(data.progress));
+                    }
+
+                    // debug 级别：完全过滤
+                    if (level === 'debug') return;
+
+                    // status 级别：更新常驻"当前进度"文字（不追加日志行）
+                    if (level === 'status') {
+                        currentStepText.innerText = data.message || '';
+                        return;
+                    }
+
+                    // info / error 级别：追加到日志列表
                     const div = document.createElement('div');
                     div.style.marginBottom = '2px';
+                    if (level === 'error') {
+                        div.style.color = '#ef4444';
+                        div.style.fontWeight = '600';
+                    }
                     div.innerText = `[${data.time}] ${data.message}`;
                     globalLogContent.appendChild(div);
                     globalLogContainer.scrollTop = globalLogContainer.scrollHeight;
-                    
-                    // 针对长期等待的 AI 节点，根据输出的 log 估算非线性内部进度
-                    if (['api', 'review', 'rep1', 'rep2'].includes(data.nodeId)) {
-                        if (data.message.includes('正在思考中') || data.message.includes('模型:') || data.message.includes('请求')) {
-                            if (aiWaitCounters[data.nodeId] === undefined) aiWaitCounters[data.nodeId] = 0;
-                            aiWaitCounters[data.nodeId] += 1;
-                            let count = aiWaitCounters[data.nodeId];
-                            
-                            // 优化算法：前期按每跳（约5秒）8%匀速增长，避免一上来跑得太快
-                            // 当超过 10 跳（50秒）时，转为指数逼近 99%
-                            let p = 0;
-                            if (count <= 10) {
-                                p = count * 8; // 8, 16, 24 ... 80
-                            } else {
-                                p = 80 + 19 * (1 - Math.exp(-0.2 * (count - 10)));
-                            }
-                            if (p > 99) p = 99;
-                            
-                            if (nodeProgress[data.nodeId] !== 100) {
-                                nodeProgress[data.nodeId] = p;
-                                updateOverallProgress();
-                            }
-                        }
-                    }
-                } else if (data.type === 'progress') {
-                    if (data.nodeId === 'alg2') {
-                        let p = (data.current / data.total) * 100;
-                        if (p > 99 && data.current !== data.total) p = 99;
-                        if (nodeProgress[data.nodeId] !== 100) {
-                            nodeProgress[data.nodeId] = p;
-                            updateOverallProgress();
-                        }
-                    }
-                } else if (data.type === 'status') {
-                    if (data.status === 'success' || data.status === 'simulated' || data.status === 'error') {
-                        nodeProgress[data.nodeId] = 100;
-                        updateOverallProgress();
-                    }
                 } else if (data.type === 'reset') {
                     globalLogContent.innerHTML = '';
                     resetProgressState();
+                } else if (data.type === 'done') {
+                    disconnectSSE();
                 }
             };
         }
@@ -239,15 +343,80 @@
         }
 
         window.onload = async () => {
+            updateThemeIcon();
             await checkStatus();
         };
 
+        window.toggleTheme = function() {
+            const isDark = document.documentElement.classList.toggle('dark-theme');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateThemeIcon();
+        };
+
+        function updateThemeIcon() {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                const isDark = document.documentElement.classList.contains('dark-theme');
+                icon.className = isDark ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+
+        function updateDashboardVisibility(status, hasResult) {
+            const placeholder = document.getElementById('dashboardPlaceholder');
+            const executionCard = document.getElementById('executionCard');
+            const logCard = document.getElementById('logCard');
+            const reportHeaderBar = document.getElementById('reportHeaderBar');
+
+            if (status === 'idle' && !hasResult) {
+                placeholder.style.display = 'block';
+                executionCard.style.display = 'none';
+                logCard.style.display = 'none';
+                if (reportHeaderBar) reportHeaderBar.style.display = 'none';
+            } else {
+                placeholder.style.display = 'none';
+                if (status === 'running' || status === 'queued') {
+                    executionCard.style.display = 'block';
+                    logCard.style.display = 'block';
+                } else if (status === 'completed') {
+                    executionCard.style.display = 'block';
+                    logCard.style.display = 'block';
+                } else if (status === 'error' || status === 'aborted' || status === 'interrupted') {
+                    executionCard.style.display = 'block';
+                    logCard.style.display = 'block';
+                }
+                if (hasResult) {
+                    if (reportHeaderBar) reportHeaderBar.style.display = 'flex';
+                } else {
+                    if (reportHeaderBar) reportHeaderBar.style.display = 'none';
+                }
+            }
+        }
+
         async function checkStatus() {
             try {
-                const res = await fetch('/api/status');
+                const urlParams = new URLSearchParams(window.location.search);
+                const queryRunId = urlParams.get('run_id');
+                let statusUrl = '/api/status';
+                if (queryRunId) {
+                    statusUrl += '?run_id=' + encodeURIComponent(queryRunId);
+                }
+                const res = await fetch(statusUrl, { headers: authHeaders() });
                 const data = await res.json();
                 
-                if (data.status === 'running') {
+                currentRunId = data.runId || null;
+                if (data.status === 'completed') {
+                    downloadArea.style.display = 'block';
+                } else {
+                    downloadArea.style.display = 'none';
+                }
+
+                // ── 第一段：状态 UI（spinner / 按钮 / polling） ──
+                const isTerminal = data.status !== 'running' && data.status !== 'queued';
+                const hasResult = !!(data.result && data.fullResult);
+
+                updateDashboardVisibility(data.status, hasResult);
+
+                if (data.status === 'running' || data.status === 'queued') {
                     startBtn.disabled = true;
                     stopBtn.style.display = 'inline-flex';
                     loading.style.display = 'flex';
@@ -255,50 +424,49 @@
                     progressContainer.style.display = 'block';
                     globalLogContainer.style.display = 'block';
                     connectSSE();
-                    resultSection.classList.remove('visible');
-                    
                     if (!pollingInterval) {
                         pollingInterval = setInterval(checkStatus, 2000);
                     }
-                } else if (data.status === 'completed') {
+                } else {
                     if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-                    disconnectSSE();
                     startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
-                    progressContainer.style.display = 'block';
-                    globalLogContainer.style.display = 'block';
-                    
-                    if (data.result && data.fullResult) {
-                        currentReport = data.result;
-                        currentFullReport = data.fullResult;
-                        renderReport();
-                        resultSection.classList.add('visible');
+                    if (data.status === 'completed') {
+                        if (!sseSource) connectSSE(); // 回放历史日志
+                        progressContainer.style.display = 'block';
+                        globalLogContainer.style.display = 'block';
+                    } else if (data.status === 'error' || data.status === 'aborted') {
+                        disconnectSSE();
+                        progressContainer.style.display = 'block';
+                        globalLogContainer.style.display = 'block';
                     }
-                } else if (data.status === 'error' || data.status === 'aborted') {
-                    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-                    disconnectSSE();
-                    startBtn.disabled = filesData.length === 0;
-                    stopBtn.style.display = 'none';
-                    loading.style.display = 'none';
-                    progressContainer.style.display = 'block';
-                    globalLogContainer.style.display = 'block';
-                    
+                    // idle: 不展示进度/日志区域
+                }
+
+                // ── 第二段：结果渲染（完全独立于 status） ──
+                // 只要 API 回传了结果内容（无论 status 是什么），就渲染
+                if (hasResult) {
+                    // 清除上次的警告 banner（如果有）
+                    const oldBanner = document.getElementById('pipelineWarnBanner');
+                    if (oldBanner) oldBanner.remove();
+
+                    currentReport = data.result;
+                    currentFullReport = data.fullResult;
+                    renderReport();
+                    resultSection.classList.add('visible');
+                } else if (isTerminal && data.status !== 'idle' && data.status !== 'completed') {
+                    // 终止且没有结果内容，且之前也没有结果 → 弹提示
                     if (data.errorMessage && data.errorMessage.length > 0 && currentReport == null) {
                         alert('运行结束: ' + (data.errorMessage || data.status));
                     }
-                } else {
-                    // idle
-                    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-                    disconnectSSE();
-                    startBtn.disabled = filesData.length === 0;
-                    stopBtn.style.display = 'none';
-                    loading.style.display = 'none';
                 }
+
             } catch (e) {
                 console.error("Status fetch error", e);
             }
         }
+
 
         reportToggle.addEventListener('change', () => {
             if (reportToggle.checked) {
@@ -360,25 +528,30 @@
                             let icon = 'fa-info-circle';
                             let iconColor = 'var(--primary)';
                             if (c.color === 'red') { icon = 'fa-exclamation-triangle'; iconColor = 'var(--error)'; }
-                            if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = '#f59e0b'; }
+                            if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = 'var(--warning)'; }
                             if (c.color === 'green') { icon = 'fa-check-circle'; iconColor = 'var(--success)'; }
                             if (c.color === 'pink') { icon = 'fa-question-circle'; iconColor = '#ff6b9d'; }
+
+                            // Hover tooltip for evidence details
+                            const evidenceHtml = c.evidence ? `
+                                <div class="evidence-wrapper">
+                                    <i class="fas fa-chart-line evidence-icon"></i>
+                                    <div class="evidence-tooltip markdown-body">${marked.parse(c.evidence || '')}</div>
+                                </div>
+                            ` : '';
 
                             return `
                                 <div class="issue-card" data-color="${c.color || 'blue'}">
                                     <div class="issue-title">
                                         <i class="fas ${icon}" style="color: ${iconColor};"></i>
-                                        ${c.title}
+                                        <span>${c.title}</span>
                                     </div>
                                     <div class="issue-explanation">${c.explanation}</div>
                                     <div class="issue-suggestion">
                                         <i class="fas fa-lightbulb"></i>
                                         <span>${c.suggestion}</span>
                                     </div>
-                                    <div class="evidence-wrapper">
-                                        <i class="fas fa-chart-line evidence-icon"></i>
-                                        <div class="evidence-tooltip markdown-body">${marked.parse(c.evidence || '')}</div>
-                                    </div>
+                                    ${evidenceHtml}
                                 </div>
                             `;
                         }).join('');
@@ -394,53 +567,6 @@
                     contentDiv.className = 'markdown-body';
                     contentDiv.innerHTML = `<h3><i class="fas fa-exclamation-triangle" style="color:orange;"></i> 数据解析异常</h3><p>AI 返回的格式不符合预期，以下为原始内容：</p><br>` + marked.parse(rep);
                 }
-            }
-        }
-
-        let currentSettings = {
-            reasoningEffort: 'medium'
-        };
-        let currentHasKey = false;
-
-        // 页面加载时获取云端设置
-        fetch('/api/config').then(res => res.json()).then(data => {
-            if (data.reasoningEffort) currentSettings.reasoningEffort = data.reasoningEffort;
-            currentHasKey = !!data.hasKey;
-        }).catch(e => console.error('获取配置失败', e));
-
-        // === 设置相关 ===
-        function loadSettings() {
-            return currentSettings;
-        }
-
-        function openSettings() {
-            const s = loadSettings();
-            document.getElementById('settingReasoningEffort').value = s.reasoningEffort || 'medium';
-            document.getElementById('settingsModal').classList.add('open');
-        }
-
-        function closeSettings() {
-            document.getElementById('settingsModal').classList.remove('open');
-        }
-
-        async function saveSettings() {
-            const newSettings = {
-                reasoningEffort: document.getElementById('settingReasoningEffort').value
-            };
-            
-            try {
-                const resp = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newSettings)
-                });
-                const latest = await resp.json();
-                currentSettings = newSettings;
-                if (typeof latest.hasKey === 'boolean') currentHasKey = latest.hasKey;
-                closeSettings();
-            } catch (err) {
-                alert('保存配置到云端失败！');
-                console.error(err);
             }
         }
 
@@ -461,43 +587,142 @@
             handleFiles(e.dataTransfer.files);
         };
 
+        const ALLOWED_EXTENSIONS = ['.json', '.xlsx', '.xls', '.csv', '.pdf', '.docx', '.doc', '.txt', '.md', '.zip', '.rar', '.7z'];
+        
+        function getFileIconClass(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            switch (ext) {
+                case 'xlsx':
+                case 'xls':
+                    return 'fa-file-excel';
+                case 'pdf':
+                    return 'fa-file-pdf';
+                case 'docx':
+                case 'doc':
+                    return 'fa-file-word';
+                case 'zip':
+                case 'rar':
+                case '7z':
+                    return 'fa-file-archive';
+                case 'csv':
+                    return 'fa-file-csv';
+                case 'json':
+                case 'txt':
+                case 'md':
+                    return 'fa-file-code';
+                default:
+                    return 'fa-file-alt';
+            }
+        }
+
+        function getFileIconStyle(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            switch (ext) {
+                case 'xlsx':
+                case 'xls':
+                    return 'color: #10b981;';
+                case 'pdf':
+                    return 'color: #ef4444;';
+                case 'docx':
+                case 'doc':
+                    return 'color: #3b82f6;';
+                case 'zip':
+                case 'rar':
+                case '7z':
+                    return 'color: #f59e0b;';
+                case 'csv':
+                case 'json':
+                    return 'color: #6366f1;';
+                default:
+                    return 'color: var(--text-muted);';
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0 || !bytes) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        window.removeFile = function(idx, event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            filesData.splice(idx, 1);
+            renderFileList();
+        };
+
+        function renderFileList() {
+            fileListDisplay.innerHTML = '';
+            
+            if (filesData.length > 0) {
+                dropZone.classList.add('has-files');
+                document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
+                
+                filesData.forEach((file, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    
+                    const iconClass = getFileIconClass(file.name);
+                    const iconStyle = getFileIconStyle(file.name);
+                    const sizeStr = formatFileSize(file.size);
+                    
+                    item.innerHTML = `
+                        <span class="file-info" title="${file.name}">
+                            <i class="fas ${iconClass}" style="${iconStyle}"></i>
+                            <span class="file-name">${file.name}</span>
+                        </span>
+                        <span class="file-size">${sizeStr}</span>
+                        <button class="file-remove-btn" onclick="window.removeFile(${idx}, event)" title="删除文件">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    `;
+                    fileListDisplay.appendChild(item);
+                });
+                
+                startBtn.disabled = false;
+            } else {
+                dropZone.classList.remove('has-files');
+                document.getElementById('fileName').innerText = '拖放数据文件到此处';
+                startBtn.disabled = true;
+            }
+        }
+
         function handleFiles(files) {
             if (files.length === 0) return;
 
-            filesData = [];
-            fileListDisplay.innerHTML = '';
-
             Array.from(files).forEach(file => {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const arrayBuffer = e.target.result;
-                    const bytes = new Uint8Array(arrayBuffer);
-                    let binary = '';
-                    for (let i = 0; i < bytes.length; i++) {
-                        binary += String.fromCharCode(bytes[i]);
-                    }
-                    const b64 = btoa(binary);
-                    filesData.push({ name: file.name, base64: b64 });
-
-                    const item = document.createElement('div');
-                    item.className = 'file-item';
-                    item.innerHTML = `<i class="fas fa-file-code"></i> ${file.name}`;
-                    fileListDisplay.appendChild(item);
-
-                    if (filesData.length > 0) {
-                        startBtn.disabled = false;
-                        document.getElementById('fileName').innerText = `已准备 ${filesData.length} 个数据文件`;
-                    }
-                };
-                reader.readAsArrayBuffer(file);
+                const ext = '.' + file.name.split('.').pop().toLowerCase();
+                if (!ALLOWED_EXTENSIONS.includes(ext)) {
+                    alert(`不支持的文件: ${file.name}\n支持的格式: ${ALLOWED_EXTENSIONS.join(', ')}`);
+                    return;
+                }
+                const isDuplicate = filesData.some(f => f.name === file.name && f.size === file.size);
+                if (!isDuplicate) {
+                    filesData.push(file);
+                }
             });
+
+            renderFileList();
         }
 
         // === 开始分析 ===
         startBtn.onclick = async () => {
             if (filesData.length === 0) return;
 
-            const settings = loadSettings();
+            // 自动保存当前分析参数
+            const cleanedParams = collectParamsData();
+            try {
+                await fetch('/api/analysis-params', {
+                    method: 'PUT',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ analysis_params: cleanedParams }),
+                });
+            } catch (e) { /* 静默失败 */ }
+
+            const reasoningEffort = document.getElementById('reasoningEffortSelect').value || 'medium';
 
             startBtn.disabled = true;
             stopBtn.style.display = 'inline-flex';
@@ -505,22 +730,20 @@
             resetProgressState();
             progressContainer.style.display = 'block';
             globalLogContainer.style.display = 'block';
+            updateDashboardVisibility('running', false);
             connectSSE();
             resultSection.classList.remove('visible');
-            statusText.innerText = currentHasKey
-                ? '正在提交分析任务...'
-                : '正在使用模拟模式（未配置 API）...';
+            statusText.innerText = '正在提交分析任务...';
 
             try {
-                const response = await fetch('/api/run', {
+                const formData = new FormData();
+                filesData.forEach(file => formData.append('files', file));
+                formData.append('reasoningEffort', reasoningEffort);
+
+                const response = await fetch('/api/analyze', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        files: filesData,
-                        settings: {
-                            reasoningEffort: settings.reasoningEffort
-                        }
-                    })
+                    headers: authHeaders(),
+                    body: formData
                 });
 
                 const data = await response.json();
@@ -530,7 +753,7 @@
                         pollingInterval = setInterval(checkStatus, 2000);
                     }
                 } else {
-                    throw new Error(data.error || '启动失败');
+                    throw new Error(data.detail || data.error || '启动失败');
                 }
             } catch (err) {
                 alert('分析出错: ' + err.message);
@@ -543,11 +766,20 @@
         stopBtn.onclick = async () => {
             if (!confirm('确认要强制停止当前正在运行的后台分析任务吗？')) return;
             try {
-                await fetch('/api/stop', { method: 'POST' });
+                await fetch('/api/stop', { method: 'POST', headers: authHeaders() });
                 await checkStatus();
             } catch(e) {
                 console.error(e);
             }
+        };
+
+        downloadBtn.onclick = () => {
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            let url = `/api/reports/download?x-fzt-key=${encodeURIComponent(key)}`;
+            if (currentRunId) {
+                url += `&run_id=${encodeURIComponent(currentRunId)}`;
+            }
+            window.open(url, '_blank');
         };
 
         exampleBtn.onclick = async () => {
@@ -557,23 +789,355 @@
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
 
-                filesData = data.files;
-                fileListDisplay.innerHTML = '';
-                filesData.forEach((f) => {
-                    const item = document.createElement('div');
-                    item.className = 'file-item';
-                    item.innerHTML = `<i class="fas fa-file-code"></i> ${f.name || '案例文件'}`;
-                    fileListDisplay.appendChild(item);
+                filesData = [];
+                data.files.forEach((f) => {
+                    const byteStr = atob(f.base64);
+                    const bytes = new Uint8Array(byteStr.length);
+                    for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
+                    const file = new File([bytes], f.name, { type: 'application/octet-stream' });
+                    filesData.push(file);
                 });
 
-                startBtn.disabled = false;
-                document.getElementById('fileName').innerText = `已加载 ${filesData.length} 个案例文件`;
+                renderFileList();
             } catch (err) {
                 alert('加载案例失败: ' + err.message);
             } finally {
                 exampleBtn.disabled = false;
             }
         };
+
+        // ========== 分析参数 ==========
+        let paramsData = [];
+        let presetsMap = {};
+        const paramsContainer = document.getElementById('paramsFormContainer');
+        const saveParamsBtn = document.getElementById('saveParamsBtn');
+        const paramsSavedHint = document.getElementById('paramsSavedHint');
+        const addParamBtn = document.getElementById('addParamBtn');
+        const presetSelect = document.getElementById('presetSelect');
+
+        function detectControlType(item) {
+            if (item.options && Array.isArray(item.options) && item.options.length) return 'select';
+            if (typeof item.value === 'boolean') return 'toggle';
+            if (typeof item.value === 'number') {
+                if (item.step !== undefined) return 'slider';
+                if (item.min !== undefined && item.max !== undefined) return 'slider';
+                return 'number';
+            }
+            if (typeof item.value === 'string' && /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(item.value)) return 'date';
+            return 'text';
+        }
+
+        function renderParamsForm(data) {
+            if (!Array.isArray(data)) {
+                paramsContainer.innerHTML = '<div style="color:#94a3b8;font-size:0.85rem;">暂无参数</div>';
+                return;
+            }
+            paramsData = data;
+            let html = '';
+            data.forEach((item, i) => {
+                if (typeof item !== 'object' || item === null) return;
+                const key = item.key || '';
+                const value = item.value;
+                const ctrlType = detectControlType(item);
+                const options = item.options || [];
+                const minVal = item.min !== undefined ? item.min : (ctrlType === 'slider' ? 0 : undefined);
+                const maxVal = item.max !== undefined ? item.max : (ctrlType === 'slider' ? 1 : undefined);
+                const stepVal = ctrlType === 'slider' ? 0.01 : undefined;
+
+                let ctrlHtml = '';
+                if (ctrlType === 'select') {
+                    const opts = options.map(o => `<option value="${o.replace(/"/g,'&quot;')}" ${value === o ? 'selected' : ''}>${o}</option>`).join('');
+                    ctrlHtml = `<select class="param-select" data-idx="${i}" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;background:#fff;">${opts}</select>`;
+                } else if (ctrlType === 'toggle') {
+                    const on = value === true;
+                    ctrlHtml = `<label class="param-toggle" data-idx="${i}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+                        <input type="checkbox" ${on ? 'checked' : ''} style="display:none;">
+                        <span style="position:relative;display:inline-block;width:40px;height:22px;background:${on ? 'var(--success)' : '#e2e8f0'};border-radius:11px;transition:.2s;">
+                            <span style="position:absolute;top:2px;left:${on ? '20px' : '2px'};width:18px;height:18px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2);"></span>
+                        </span>
+                        <span style="font-size:0.8rem;color:${on ? 'var(--success)' : '#94a3b8'};">${on ? 'ON' : 'OFF'}</span>
+                    </label>`;
+                } else if (ctrlType === 'slider') {
+                    const pct = typeof value === 'number' ? Math.round(value / (maxVal || 1) * 100) : 0;
+                    ctrlHtml = `<div style="display:inline-flex;align-items:center;gap:6px;">
+                        <input type="range" class="param-slider" data-idx="${i}" min="${minVal}" max="${maxVal}" step="${stepVal}" value="${value}" style="width:100px;">
+                        <span class="param-slider-val" style="font-size:0.8rem;color:var(--text-muted);min-width:32px;">${pct}%</span>
+                    </div>`;
+                } else if (ctrlType === 'number') {
+                    ctrlHtml = `<input type="number" class="param-number" data-idx="${i}" value="${value}" ${minVal !== undefined ? `min="${minVal}"` : ''} ${maxVal !== undefined ? `max="${maxVal}"` : ''} style="width:80px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;">`;
+                } else if (ctrlType === 'date') {
+                    ctrlHtml = `<input type="date" class="param-date" data-idx="${i}" value="${value || ''}" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;">`;
+                } else {
+                    ctrlHtml = `<input type="text" class="param-text" data-idx="${i}" value="${String(value !== undefined && value !== null ? value : '').replace(/"/g,'&quot;')}" placeholder="输入值" style="width:160px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;">`;
+                }
+
+                html += `<div class="param-row" data-idx="${i}" style="display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:4px 0;">
+                    <input type="text" class="param-key" data-idx="${i}" value="${key.replace(/"/g,'&quot;')}" placeholder="参数名" style="width:120px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.85rem;background:#fafafa;">
+                    ${ctrlHtml}
+                    <button class="param-del" data-idx="${i}" style="border:none;background:none;cursor:pointer;color:#ef4444;font-size:1rem;padding:2px;" title="删除">✕</button>
+                </div>`;
+            });
+            if (!html) {
+                paramsContainer.innerHTML = '<div style="color:#94a3b8;font-size:0.85rem;">暂无参数，点击"添加参数"新建</div>';
+            } else {
+                paramsContainer.innerHTML = html;
+            }
+            bindParamEvents();
+        }
+
+        function bindParamEvents() {
+            // 删除
+            document.querySelectorAll('.param-del').forEach(btn => {
+                btn.onclick = () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    paramsData.splice(idx, 1);
+                    renderParamsForm(paramsData);
+                };
+            });
+            // key 输入
+            document.querySelectorAll('.param-key').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].key = inp.value;
+                };
+            });
+            // text 输入
+            document.querySelectorAll('.param-text').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = inp.value;
+                };
+            });
+            // select
+            document.querySelectorAll('.param-select').forEach(sel => {
+                sel.onchange = () => {
+                    const idx = parseInt(sel.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = sel.value;
+                };
+            });
+            // toggle
+            document.querySelectorAll('.param-toggle input[type=checkbox]').forEach(cb => {
+                cb.onchange = () => {
+                    const idx = parseInt(cb.closest('.param-toggle').dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = cb.checked;
+                    // 刷新 UI 颜色
+                    const label = cb.closest('.param-toggle');
+                    const bg = label.querySelector('span:first-of-type');
+                    const dot = bg.querySelector('span');
+                    const txt = label.querySelector('span:last-of-type');
+                    bg.style.background = cb.checked ? 'var(--success)' : '#e2e8f0';
+                    dot.style.left = cb.checked ? '20px' : '2px';
+                    txt.textContent = cb.checked ? 'ON' : 'OFF';
+                    txt.style.color = cb.checked ? 'var(--success)' : '#94a3b8';
+                };
+            });
+            // slider
+            document.querySelectorAll('.param-slider').forEach(sl => {
+                sl.oninput = () => {
+                    const idx = parseInt(sl.dataset.idx);
+                    const val = parseFloat(sl.value);
+                    if (paramsData[idx]) paramsData[idx].value = val;
+                    const pct = Math.round(val / parseFloat(sl.max || 1) * 100);
+                    sl.parentNode.querySelector('.param-slider-val').textContent = pct + '%';
+                };
+            });
+            // number input change
+            document.querySelectorAll('.param-number').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    const val = inp.value === '' ? '' : parseFloat(inp.value);
+                    if (paramsData[idx]) paramsData[idx].value = val;
+                };
+            });
+            // date 输入
+            document.querySelectorAll('.param-date').forEach(inp => {
+                inp.oninput = () => {
+                    const idx = parseInt(inp.dataset.idx);
+                    if (paramsData[idx]) paramsData[idx].value = inp.value || '';
+                };
+            });
+        }
+
+        function collectParamsData() {
+            // 收集 + 清理：移除空 key 的行，去掉 UI 冗余字段
+            return paramsData.filter(item => item && item.key && item.key.trim() !== '').map(item => {
+                const { type, ...rest } = item;
+                return rest;
+            });
+        }
+
+        async function loadAnalysisParams() {
+            try {
+                const res = await fetch('/api/analysis-params', { headers: authHeaders() });
+                const data = await res.json();
+                const raw = data.analysis_params;
+                if (Array.isArray(raw)) {
+                    paramsData = raw;
+                } else if (raw && typeof raw === 'string') {
+                    // 尝试解析为对象（旧格式）
+                    try {
+                        const obj = JSON.parse(raw);
+                        if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
+                            paramsData = Object.entries(obj).map(([k, v]) => ({key: k, value: v}));
+                        } else {
+                            paramsData = [{key: '分析参数', value: raw}];
+                        }
+                    } catch {
+                        paramsData = [{key: '分析参数', value: raw}];
+                    }
+                } else {
+                    paramsData = [];
+                }
+                renderParamsForm(paramsData);
+            } catch (e) {
+                paramsData = [];
+                renderParamsForm(paramsData);
+            }
+        }
+        loadAnalysisParams();
+
+        // 加载预设列表
+        async function loadPresets() {
+            try {
+                const res = await fetch('/api/analysis-params/presets', { headers: authHeaders() });
+                const data = await res.json();
+                presetsMap = data.presets || {};
+                const names = Object.keys(presetsMap);
+                presetSelect.innerHTML = '<option value="">📋 预设...</option>';
+                names.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    presetSelect.appendChild(opt);
+                });
+            } catch (e) {
+                // ignore
+            }
+        }
+        loadPresets();
+
+        presetSelect.onchange = () => {
+            const name = presetSelect.value;
+            if (!name || !presetsMap[name]) return;
+            if (paramsData.length > 0 && !confirm(`"${name}" 将替换当前所有参数，确认？`)) {
+                presetSelect.value = '';
+                return;
+            }
+            const preset = presetsMap[name];
+            // 新格式: {reasoning_effort, params} / 旧格式: [...] 数组
+            if (Array.isArray(preset)) {
+                paramsData = JSON.parse(JSON.stringify(preset));
+            } else {
+                if (preset.reasoning_effort) {
+                    document.getElementById('reasoningEffortSelect').value = preset.reasoning_effort;
+                }
+                paramsData = JSON.parse(JSON.stringify(preset.params || []));
+            }
+            renderParamsForm(paramsData);
+            presetSelect.value = '';
+        };
+
+        saveParamsBtn.onclick = async () => {
+            try {
+                saveParamsBtn.disabled = true;
+                paramsSavedHint.style.display = 'none';
+                const cleaned = collectParamsData();
+                await fetch('/api/analysis-params', {
+                    method: 'PUT',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ analysis_params: cleaned }),
+                });
+                paramsData = cleaned;
+                renderParamsForm(cleaned);
+                paramsSavedHint.style.display = 'inline';
+                setTimeout(() => { paramsSavedHint.style.display = 'none'; }, 2000);
+            } catch (e) {
+                alert('保存失败: ' + e.message);
+            } finally {
+                saveParamsBtn.disabled = false;
+            }
+        };
+
+        addParamBtn.onclick = () => openParamEditor();
+
+        // ========== 参数编辑弹窗 ==========
+        function openParamEditor() {
+            document.getElementById('paramEditorModal').style.display = 'flex';
+            document.getElementById('peKey').value = '';
+            updateParamEditor();
+        }
+
+        function closeParamEditor() {
+            document.getElementById('paramEditorModal').style.display = 'none';
+        }
+
+        function updateParamEditor() {
+            const type = document.getElementById('peType').value;
+            const inner = document.getElementById('peValueInner');
+            const extras = document.getElementById('peExtras');
+            extras.innerHTML = '';
+
+            if (type === 'toggle') {
+                inner.innerHTML = `<label class="param-toggle" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="peValue" checked style="display:none;">
+                    <span style="position:relative;display:inline-block;width:40px;height:22px;background:var(--success);border-radius:11px;transition:.2s;">
+                        <span style="position:absolute;top:2px;left:20px;width:18px;height:18px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2);"></span>
+                    </span>
+                    <span style="font-size:0.8rem;color:var(--success);" id="peToggleLabel">ON</span>
+                </label>`;
+                const cb = inner.querySelector('input');
+                cb.onchange = () => {
+                    const bg = cb.closest('label').querySelector('span:first-of-type');
+                    const dot = bg.querySelector('span');
+                    const txt = document.getElementById('peToggleLabel');
+                    bg.style.background = cb.checked ? 'var(--success)' : '#e2e8f0';
+                    dot.style.left = cb.checked ? '20px' : '2px';
+                    txt.textContent = cb.checked ? 'ON' : 'OFF';
+                    txt.style.color = cb.checked ? 'var(--success)' : '#94a3b8';
+                };
+            } else if (type === 'select') {
+                inner.innerHTML = `<input id="peValue" class="form-input" placeholder="例如：选项A">`;
+                extras.innerHTML = `<div class="form-group"><label>选项列表（每行一个）</label><textarea id="peOptions" class="form-input" rows="4" placeholder="选项A\n选项B\n选项C" style="resize:vertical;"></textarea></div>`;
+            } else if (type === 'slider') {
+                inner.innerHTML = `<input id="peValue" type="number" class="form-input" step="0.01" min="0" max="1" value="0.5" placeholder="0.5">`;
+                extras.innerHTML = `<div style="display:flex;gap:1rem;"><div class="form-group" style="flex:1;"><label>最小值</label><input id="peMin" type="number" class="form-input" step="0.01" value="0"></div><div class="form-group" style="flex:1;"><label>最大值</label><input id="peMax" type="number" class="form-input" step="0.01" value="1"></div></div>`;
+            } else if (type === 'number') {
+                inner.innerHTML = `<input id="peValue" type="number" class="form-input" value="0" placeholder="0">`;
+            } else if (type === 'date') {
+                inner.innerHTML = `<input id="peValue" type="date" class="form-input" value="">`;
+            } else {
+                inner.innerHTML = `<input id="peValue" class="form-input" placeholder="输入默认值">`;
+            }
+        }
+
+        function confirmAddParam() {
+            const type = document.getElementById('peType').value;
+            const key = document.getElementById('peKey').value.trim();
+            if (!key) { alert('请输入参数名称'); return; }
+
+            let value, extra = {};
+            if (type === 'toggle') {
+                value = document.querySelector('#peValueInner input[type=checkbox]').checked;
+            } else if (type === 'select') {
+                value = document.getElementById('peValue').value;
+                const opts = document.getElementById('peOptions').value.split('\n').map(s => s.trim()).filter(Boolean);
+                if (opts.length) extra.options = opts;
+            } else if (type === 'slider') {
+                value = parseFloat(document.getElementById('peValue').value) || 0.5;
+                extra.min = parseFloat(document.getElementById('peMin').value) || 0;
+                extra.max = parseFloat(document.getElementById('peMax').value) || 1;
+            } else if (type === 'number') {
+                value = parseFloat(document.getElementById('peValue').value) || 0;
+            } else if (type === 'date') {
+                value = document.getElementById('peValue').value || '';
+            } else {
+                value = document.getElementById('peValue').value || '';
+            }
+
+            paramsData.push({ key, value, ...extra });
+            renderParamsForm(paramsData);
+            closeParamEditor();
+        }
     </script>
 </body>
 </html>

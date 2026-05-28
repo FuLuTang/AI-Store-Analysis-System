@@ -4,84 +4,106 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 门店分析系统 | 门户</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary: #6366f1;
             --secondary: #a855f7;
-            --bg: #0f172a;
-            --glass: rgba(30, 41, 59, 0.7);
-            --border: rgba(255, 255, 255, 0.1);
+            --bg: #0b0f19;
+            --glass: rgba(22, 28, 45, 0.6);
+            --border: rgba(255, 255, 255, 0.08);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: 'Outfit', sans-serif;
-            background: var(--bg);
+            font-family: 'Outfit', -apple-system, sans-serif;
+            background-color: var(--bg);
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(168, 85, 247, 0.12) 0%, transparent 40%);
             color: white;
             height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
             overflow: hidden;
+            position: relative;
         }
 
-        body::before {
-            content: '';
+        /* Floating background glow elements */
+        .ambient-glow-1 {
             position: absolute;
-            width: 200%; height: 200%;
-            background: radial-gradient(circle at center, #1e293b 0%, transparent 70%);
-            animation: drift 20s infinite linear;
+            top: 20%;
+            left: 15%;
+            width: 300px;
+            height: 300px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+            filter: blur(40px);
             z-index: -1;
+            pointer-events: none;
         }
 
-        @keyframes drift {
-            from { transform: translate(-25%, -25%) rotate(0deg); }
-            to { transform: translate(-25%, -25%) rotate(360deg); }
+        .ambient-glow-2 {
+            position: absolute;
+            bottom: 20%;
+            right: 15%;
+            width: 350px;
+            height: 350px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.1) 0%, transparent 70%);
+            filter: blur(50px);
+            z-index: -1;
+            pointer-events: none;
         }
 
         .container { width: 100%; max-width: 450px; padding: 20px; z-index: 10; }
 
         .glass-card {
             background: var(--glass);
-            backdrop-filter: blur(16px);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             border: 1px solid var(--border);
-            border-radius: 24px;
+            border-radius: 20px;
             padding: 40px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
             text-align: center;
+            transition: all 0.3s ease;
         }
 
         h1 {
-            font-weight: 600; font-size: 2.2rem; margin-bottom: 8px;
-            background: linear-gradient(to right, #818cf8, #c084fc);
+            font-weight: 700; font-size: 2.2rem; margin-bottom: 8px;
+            background: linear-gradient(135deg, #818cf8, #c084fc);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         p.subtitle { color: #94a3b8; font-size: 0.95rem; margin-bottom: 32px; }
 
         .input-group { text-align: left; margin-bottom: 20px; }
 
-        label { display: block; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 8px; }
+        label { display: block; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 8px; font-weight: 500; }
 
         input {
-            width: 100%; background: rgba(15, 23, 42, 0.6);
-            border: 1px solid var(--border); border-radius: 12px;
+            width: 100%; background: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border); border-radius: 10px;
             padding: 14px 16px; color: white; font-size: 1rem;
             transition: all 0.3s;
+            outline: none;
         }
 
-        input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2); }
+        input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); background: rgba(15, 23, 42, 0.9); }
 
         .btn {
-            width: 100%; padding: 14px; border-radius: 12px; border: none;
+            width: 100%; padding: 14px; border-radius: 10px; border: none;
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             color: white; font-size: 1rem; font-weight: 600; cursor: pointer;
-            transition: transform 0.2s, opacity 0.2s; margin-top: 10px;
+            transition: all 0.3s ease; margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
         }
 
-        .btn:hover { opacity: 0.9; transform: translateY(-2px); }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(99, 102, 241, 0.45); filter: brightness(1.1); }
 
         .divider { margin: 24px 0; display: flex; align-items: center; color: #475569; font-size: 0.8rem; }
         .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #334155; }
@@ -105,6 +127,9 @@
     </style>
 </head>
 <body>
+
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
 
     <div class="container">
         <div class="glass-card">
@@ -149,7 +174,7 @@
             if (!key) return;
             setLoading(true);
             try {
-                const r = await fetch('/api/auth/me', { headers: { 'X-FZT-Key': key } });
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
                 if (r.ok) {
                     localStorage.setItem('X-FZT-Key', key);
                     const data = await r.json();

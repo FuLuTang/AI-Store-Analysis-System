@@ -250,7 +250,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent.parent.parent
         doc_map = {
-            "指标计算文档": root / "docs" / "指标计算文档.md",
+            "指标计算文档": root / "docs" / "经营分析" / "指标计算文档.md",
         }
         path = doc_map.get(topic.replace(".md", ""))
         if path and path.is_file():

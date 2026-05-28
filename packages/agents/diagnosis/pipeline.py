@@ -117,8 +117,10 @@ class CustomPipeline(AgentPipeline):
     def _stage_context(self, ws: Workspace):
         ROOT = Path(__file__).parent.parent.parent.parent
         docs_dir = ROOT / "docs"
-        for name in ["指标计算文档.md"]:
-            doc = docs_dir / name
+        doc_map = {
+            "指标计算文档.md": docs_dir / "经营分析" / "指标计算文档.md",
+        }
+        for name, doc in doc_map.items():
             if doc.exists():
                 ws.write_context(name, doc.read_text(encoding="utf-8"))
 

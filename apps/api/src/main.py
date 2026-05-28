@@ -9,7 +9,7 @@ import uuid
 import datetime
 import hashlib
 import logging
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from threading import Lock
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +29,17 @@ from packages.agents.core.errors import PipelineAbortedError
 from packages.agents.registry import create_pipeline
 from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
+from packages.price_recommendation.models import (
+    DEFAULT_CANDIDATE_COUNT,
+    MAX_CANDIDATE_COUNT,
+    PRICE_RECOMMENDATION_TASK_TYPE,
+    PRICE_SUPPORTED_EXTENSIONS,
+)
+from packages.price_recommendation.service import (
+    read_price_service_result,
+    run_price_precheck,
+    run_price_workflow,
+)
 
 load_dotenv()
 
@@ -442,7 +453,7 @@ class SessionManager:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self._sessions: Dict[str, SessionState] = {}
+        self._sessions: Dict[Tuple[str, str], SessionState] = {}
         self._lock = Lock()
 
     def _default_config(self) -> dict:
@@ -527,10 +538,12 @@ class SessionManager:
         state["_runDir"] = str(run_dir)
         return state
 
-    def get_session(self, user_key: str, create_if_missing: bool = True) -> SessionState:
+    def get_session(self, user_key: str, create_if_missing: bool = True, task_type: str = "diagnosis") -> SessionState:
         key_hash, slug, account_dir = self._account_dir(user_key)
+        task_type = (task_type or "diagnosis").strip() or "diagnosis"
+        cache_key = (key_hash, task_type)
         with self._lock:
-            existing = self._sessions.get(key_hash)
+            existing = self._sessions.get(cache_key)
             if existing:
                 _save_account_json(account_dir, user_key, key_hash)
                 return existing
@@ -543,9 +556,11 @@ class SessionManager:
             _save_account_json(account_dir, user_key, key_hash)
             cfg = self._load_profile(account_dir)
             session = SessionState(user_key=user_key, key_hash=key_hash, account_slug=slug, account_dir=account_dir, config=cfg)
+            session.task_type = task_type
 
-            saved = self._try_load_session(account_dir)
+            saved = self._try_load_session(account_dir, task_type=task_type)
             if saved:
+                session.task_type = saved.get("taskType") or task_type
                 session.status = saved.get("status", "idle")
                 session.error_message = saved.get("errorMessage", "")
                 session.result = saved.get("result")
@@ -561,7 +576,7 @@ class SessionManager:
                         except Exception:
                             pass
 
-            self._sessions[key_hash] = session
+            self._sessions[cache_key] = session
             return session
 
     def get_legacy_session(self) -> SessionState:
@@ -576,9 +591,13 @@ class SessionManager:
             encoding="utf-8"
         )
 
-    def drop_session(self, key_hash: str):
+    def drop_session(self, key_hash: str, task_type: Optional[str] = None):
         with self._lock:
-            self._sessions.pop(key_hash, None)
+            if task_type:
+                self._sessions.pop((key_hash, task_type), None)
+                return
+            for cache_key in [k for k in self._sessions if k[0] == key_hash]:
+                self._sessions.pop(cache_key, None)
 
 
 session_manager = SessionManager(ACCOUNTS_DIR)
@@ -685,14 +704,34 @@ def sanitize_settings(raw: Optional[dict]) -> dict:
     }
 
 
-def resolve_session(x_fzt_key: Optional[str]) -> SessionState:
+def resolve_session(x_fzt_key: Optional[str], task_type: str = "diagnosis") -> SessionState:
     key = (x_fzt_key or "").strip()
     if not key:
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        return session_manager.get_session(key, create_if_missing=False)
+        return session_manager.get_session(key, create_if_missing=False, task_type=task_type)
     except KeyError:
         raise HTTPException(status_code=401, detail="Invalid or expired key")
+
+
+def _normalize_candidate_count(value: Optional[int]) -> int:
+    if not isinstance(value, int):
+        return DEFAULT_CANDIDATE_COUNT
+    return min(max(value, 1), MAX_CANDIDATE_COUNT)
+
+
+async def _read_uploaded_files(files: List[UploadFile], supported_extensions: set[str]) -> list[dict]:
+    decoded_files: list[dict] = []
+    for uploaded_file in files:
+        filename = uploaded_file.filename or "unnamed"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in supported_extensions:
+            raise HTTPException(status_code=400, detail=f"不支持的文件格式: {ext or '未知'}，支持: {', '.join(sorted(supported_extensions))}")
+        raw = await uploaded_file.read()
+        if len(raw) > MAX_UPLOAD_FILE_SIZE:
+            raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {filename}")
+        decoded_files.append({"name": filename, "bytes": raw})
+    return decoded_files
 
 
 
@@ -998,6 +1037,165 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             session.error_message = str(e)
         _update_run_status_in_meta(session, "error")
         _save_session_json(session)
+
+
+async def run_price_recommendation_task(session: SessionState, decoded_files: list[dict], product_name: str, candidate_count: int):
+    """Run the price recommendation workflow for a price_recommendation session."""
+    with session.runtime_lock:
+        if session.force_stop or session.status == "aborted":
+            return
+        session.status = "running"
+    reset_events(session)
+    emit_event(session, "workflow", {"workflow": PRICE_RECOMMENDATION_TASK_TYPE})
+
+    def check_aborted():
+        ensure_not_stopped(session)
+
+    try:
+        ws_dir = session.run_dir / "workspace" if session.run_dir else None
+        if not ws_dir:
+            raise RuntimeError("价格推荐 workspace 未初始化")
+
+        result, full_result = await asyncio.to_thread(
+            run_price_workflow,
+            decoded_files=decoded_files,
+            product_name=product_name,
+            candidate_count=candidate_count,
+            workspace_dir=ws_dir,
+            emit_log=lambda nid, payload: add_log(session, nid, payload),
+            check_aborted=check_aborted,
+        )
+        session.result = result
+        session.full_result = full_result
+        with session.runtime_lock:
+            if session.force_stop or session.status == "aborted":
+                _save_session_json(session)
+                return
+            session.status = "completed"
+        _save_session_json(session)
+    except (TaskAbortedError, asyncio.CancelledError):
+        add_log(session, "price_done", {"level": "error", "message": "价格推荐任务被用户强制终止。", "progress": 100})
+        with session.runtime_lock:
+            session.status = "aborted"
+            session.error_message = "任务被用户强行终止。"
+        _save_session_json(session)
+    except Exception as e:
+        add_log(session, "price_done", {"level": "error", "message": f"价格推荐任务失败: {str(e)}", "error_details": str(e)})
+        with session.runtime_lock:
+            session.status = "error"
+            session.error_message = str(e)
+        _save_session_json(session)
+
+
+@app.post("/api/price-recommendations/precheck")
+async def price_recommendation_precheck(
+    files: List[UploadFile] = File(...),
+    productName: str = Form(...),
+    x_fzt_key: Optional[str] = Header(default=None),
+    reasoningEffort: Optional[str] = Form(None),
+):
+    resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    product_name = (productName or "").strip()
+    if not product_name:
+        raise HTTPException(status_code=400, detail="缺少 productName")
+    decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
+    return run_price_precheck(decoded_files, product_name)
+
+
+@app.post("/api/price-recommendations")
+async def start_price_recommendation(
+    files: List[UploadFile] = File(...),
+    productName: str = Form(...),
+    x_fzt_key: Optional[str] = Header(default=None),
+    reasoningEffort: Optional[str] = Form(None),
+    candidateCount: Optional[int] = Form(None),
+):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    product_name = (productName or "").strip()
+    if not product_name:
+        raise HTTPException(status_code=400, detail="缺少 productName")
+    with session.runtime_lock:
+        if session.status in ("queued", "running"):
+            raise HTTPException(status_code=400, detail="任务正在运行中")
+
+    decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
+    precheck = run_price_precheck(decoded_files, product_name)
+    if not precheck.get("valid"):
+        raise HTTPException(status_code=400, detail=precheck)
+
+    session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort or "high")
+    candidate_count = _normalize_candidate_count(candidateCount)
+    with session.runtime_lock:
+        if session.status in ("queued", "running"):
+            raise HTTPException(status_code=400, detail="任务正在运行中")
+        session.status = "queued"
+        session.force_stop = False
+        session.error_message = ""
+        session.result = None
+        session.full_result = None
+        session.run_id = None
+        session.run_dir = None
+
+    _ensure_run_dir(session)
+    _save_session_json(session)
+    session._pipeline_task = asyncio.create_task(
+        run_price_recommendation_task(session, decoded_files, product_name, candidate_count)
+    )
+    return {
+        "status": "started",
+        "taskType": PRICE_RECOMMENDATION_TASK_TYPE,
+        "workflow": PRICE_RECOMMENDATION_TASK_TYPE,
+        "runId": session.run_id,
+    }
+
+
+@app.get("/api/price-recommendations/status")
+def get_price_recommendation_status(x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    result = session.result
+    full_result = session.full_result
+    try:
+        disk_result, disk_full = read_price_service_result(session.run_dir)
+        result = disk_result if disk_result is not None else result
+        full_result = disk_full if disk_full is not None else full_result
+    except Exception:
+        pass
+    return {
+        "status": session.status,
+        "errorMessage": session.error_message if session.status in ("error", "aborted", "interrupted") else "",
+        "result": result,
+        "fullResult": full_result,
+    }
+
+
+@app.get("/api/price-recommendations/logs")
+def get_price_recommendation_logs(x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    return {"logs": _load_logs_from_file(session)}
+
+
+@app.get("/api/price-recommendations/stream")
+async def stream_price_recommendation(
+    x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
+):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    return StreamingResponse(sse_generator(session), media_type="text/event-stream")
+
+
+@app.post("/api/price-recommendations/stop")
+def stop_price_recommendation(x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    with session.runtime_lock:
+        if session.status in ("queued", "running"):
+            session.force_stop = True
+            session.status = "aborted"
+            session.error_message = "任务被用户强行终止。"
+            add_log(session, "price_done", {"level": "error", "message": "用户强制终止了价格推荐任务。", "progress": 100})
+            _save_session_json(session)
+            task = getattr(session, "_pipeline_task", None)
+            if task and not task.done():
+                task.cancel()
+    return {"status": "ok"}
 
 
 @app.post("/api/analyze")

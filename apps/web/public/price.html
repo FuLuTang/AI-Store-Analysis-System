@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最优价格推算 - AI 分析系统</title>
+    <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <style>
+        body.price-page {
+            --bg-color: #f4fbf8;
+            --card-bg: rgba(255, 255, 255, 0.92);
+            --primary: #0f766e;
+            --accent: #2563eb;
+            --text: #0f172a;
+            --text-muted: #64748b;
+            --success: #059669;
+            --error: #dc2626;
+            --border: #dce7e3;
+            background:
+                radial-gradient(circle at top left, rgba(15, 118, 110, 0.14), transparent 30%),
+                radial-gradient(circle at top right, rgba(37, 99, 235, 0.10), transparent 34%),
+                linear-gradient(135deg, #f7fcfa 0%, #edf4ff 100%);
+        }
+
+        body.price-page .container {
+            max-width: 1240px;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+            gap: 1rem;
+            align-items: stretch;
+            margin-bottom: 1.25rem;
+        }
+
+        .hero-copy {
+            background: linear-gradient(135deg, rgba(15,118,110,0.10), rgba(37,99,235,0.08));
+            border: 1px solid rgba(15,118,110,0.12);
+            border-radius: calc(var(--radius) + 0.25rem);
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+        }
+
+        .hero-copy h1 {
+            margin-bottom: 0.5rem;
+        }
+
+        .hero-copy .subtitle {
+            margin-bottom: 1rem;
+        }
+
+        .pill-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.4rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.82rem;
+            color: #0f172a;
+            background: rgba(255,255,255,0.8);
+            border: 1px solid var(--border);
+        }
+
+        .hero-metric {
+            background: rgba(255,255,255,0.82);
+            border: 1px solid var(--border);
+            border-radius: calc(var(--radius) + 0.25rem);
+            padding: 1.15rem 1.25rem;
+            box-shadow: var(--shadow);
+            display: grid;
+            gap: 0.9rem;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 0.9rem 1rem;
+        }
+
+        .metric-label {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .metric-value {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .panel {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: calc(var(--radius) + 0.25rem);
+            box-shadow: var(--shadow-lg);
+            padding: 1.2rem;
+        }
+
+        .panel h2 {
+            font-size: 1.08rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .panel-desc {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+            margin-top: -0.45rem;
+            margin-bottom: 1rem;
+        }
+
+        .uploader {
+            border: 2px dashed var(--border);
+            background: linear-gradient(135deg, rgba(15,118,110,0.04), rgba(37,99,235,0.04));
+            border-radius: 1rem;
+            padding: 1.4rem 1rem;
+            text-align: center;
+            transition: 0.2s ease;
+            cursor: pointer;
+        }
+
+        .uploader.drag-over {
+            border-color: var(--primary);
+            background: linear-gradient(135deg, rgba(15,118,110,0.08), rgba(37,99,235,0.08));
+            transform: translateY(-1px);
+        }
+
+        .uploader i {
+            font-size: 2rem;
+            color: var(--primary);
+            margin-bottom: 0.45rem;
+        }
+
+        .file-list {
+            margin-top: 0.85rem;
+            display: grid;
+            gap: 0.45rem;
+        }
+
+        .file-chip {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.55rem 0.7rem;
+            border-radius: 0.7rem;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            font-size: 0.86rem;
+            color: var(--text);
+        }
+
+        .file-chip small {
+            color: var(--text-muted);
+            margin-left: auto;
+        }
+
+        .form-grid {
+            display: grid;
+            gap: 0.85rem;
+            margin-top: 1rem;
+        }
+
+        .inline-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.85rem;
+        }
+
+        .helper {
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            margin-top: 0.35rem;
+            line-height: 1.45;
+        }
+
+        .action-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            margin-top: 1rem;
+        }
+
+        .btn,
+        .btn-secondary,
+        .btn-danger {
+            text-decoration: none;
+        }
+
+        .status-banner {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.75rem 0.9rem;
+            border-radius: 0.9rem;
+            background: linear-gradient(135deg, #ecfeff 0%, #eef2ff 100%);
+            border: 1px solid #c7d2fe;
+            color: #1e3a8a;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            min-height: 44px;
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 10px;
+            background: #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+            margin-top: 0.7rem;
+        }
+
+        .progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--accent));
+            transition: width 0.25s ease;
+        }
+
+        .result-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.75rem;
+            margin-bottom: 0.85rem;
+        }
+
+        .result-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .result-subtitle {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+            margin-top: 0.2rem;
+        }
+
+        .result-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.85rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .price-card {
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 1rem;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        }
+
+        .price-rank {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 1.8rem;
+            height: 1.8rem;
+            padding: 0 0.55rem;
+            border-radius: 999px;
+            background: rgba(15,118,110,0.12);
+            color: var(--primary);
+            font-size: 0.82rem;
+            font-weight: 700;
+            margin-bottom: 0.55rem;
+        }
+
+        .price-value {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: var(--text);
+            margin-bottom: 0.35rem;
+        }
+
+        .price-reason {
+            color: var(--text-muted);
+            font-size: 0.84rem;
+            line-height: 1.5;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.65rem;
+            margin-top: 0.85rem;
+        }
+
+        .meta-card {
+            border: 1px solid var(--border);
+            border-radius: 0.85rem;
+            padding: 0.8rem;
+            background: #f8fafc;
+        }
+
+        .meta-card .label {
+            color: var(--text-muted);
+            font-size: 0.77rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .meta-card .value {
+            color: var(--text);
+            font-weight: 700;
+            font-size: 0.92rem;
+            word-break: break-word;
+        }
+
+        .precheck-list,
+        .issue-list,
+        .warning-list {
+            display: grid;
+            gap: 0.5rem;
+            margin-top: 0.8rem;
+        }
+
+        .list-item {
+            border: 1px solid var(--border);
+            border-radius: 0.8rem;
+            padding: 0.75rem 0.8rem;
+            background: #f8fafc;
+            font-size: 0.86rem;
+            line-height: 1.5;
+        }
+
+        .list-item strong {
+            display: block;
+            margin-bottom: 0.2rem;
+            color: var(--text);
+        }
+
+        .list-item.ok {
+            border-color: rgba(5,150,105,0.25);
+            background: rgba(5,150,105,0.06);
+        }
+
+        .list-item.warn {
+            border-color: rgba(245,158,11,0.28);
+            background: rgba(245,158,11,0.08);
+        }
+
+        .list-item.err {
+            border-color: rgba(220,38,38,0.28);
+            background: rgba(220,38,38,0.08);
+        }
+
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.34rem 0.55rem;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: #fff;
+            color: var(--text);
+            font-size: 0.76rem;
+        }
+
+        .badge.success {
+            color: var(--success);
+            border-color: rgba(5,150,105,0.3);
+            background: rgba(5,150,105,0.06);
+        }
+
+        .badge.warn {
+            color: #b45309;
+            border-color: rgba(245,158,11,0.28);
+            background: rgba(245,158,11,0.08);
+        }
+
+        .log-panel {
+            margin-top: 0.65rem;
+            border-radius: 0.9rem;
+            border: 1px solid var(--border);
+            background: #0f172a;
+            color: #dbeafe;
+            padding: 0.85rem;
+            max-height: 280px;
+            overflow-y: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 0.78rem;
+            line-height: 1.55;
+        }
+
+        .log-line {
+            display: flex;
+            gap: 0.45rem;
+            align-items: flex-start;
+            padding: 0.15rem 0;
+            word-break: break-word;
+        }
+
+        .log-time {
+            color: #94a3b8;
+            flex-shrink: 0;
+        }
+
+        .log-level {
+            flex-shrink: 0;
+            color: #67e8f9;
+        }
+
+        .log-node {
+            color: #c4b5fd;
+            flex-shrink: 0;
+        }
+
+        .empty-state {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+            padding: 0.35rem 0;
+        }
+
+        .link-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        @media (max-width: 980px) {
+            .hero,
+            .grid,
+            .result-grid,
+            .meta-grid,
+            .inline-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body class="price-page">
+    <div class="container">
+        <nav>
+            <a href="index.html">用户工作台</a>
+            <a href="history.html">历史诊断记录</a>
+            <a href="price.html" class="active">最优价格推算</a>
+            <a href="monitor.html">后台监控流</a>
+            <a href="admin.html">管理员配置</a>
+            <div class="nav-right">
+                <a href="/login.html" class="nav-btn"><i class="fas fa-right-to-bracket"></i> 登录</a>
+                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                    <i class="fas fa-sign-out-alt"></i> 退出
+                </button>
+            </div>
+        </nav>
+
+        <section class="hero">
+            <div class="hero-copy">
+                <h1>最优价格推算</h1>
+                <p class="subtitle">上传销售明细或 ZIP 压缩包，先做快速预检，再生成两个可解释的候选价格。</p>
+                <div class="pill-row">
+                    <span class="pill"><i class="fas fa-bolt"></i> 快速预检</span>
+                    <span class="pill"><i class="fas fa-file-archive"></i> ZIP 自动展开</span>
+                    <span class="pill"><i class="fas fa-tags"></i> 双候选价格</span>
+                    <span class="pill"><i class="fas fa-stream"></i> 独立 workflow</span>
+                </div>
+            </div>
+            <div class="hero-metric">
+                <div class="metric-card">
+                    <div class="metric-label">当前登录状态</div>
+                    <div class="metric-value" id="authStateText">未检查</div>
+                    <div class="helper" id="authStateHint">会从本地保存的 X-FZT-Key 读取。</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">支持输入</div>
+                    <div class="metric-value">JSON / CSV / Excel</div>
+                    <div class="helper">ZIP 会在浏览器侧展开成多个数据文件后再上传。</div>
+                </div>
+            </div>
+        </section>
+
+        <div class="status-banner" id="statusBanner">
+            <i class="fas fa-circle-info"></i>
+            <span id="statusBannerText">等待上传数据并完成预检。</span>
+        </div>
+
+        <section class="grid">
+            <div class="panel">
+                <h2>输入数据</h2>
+                <p class="panel-desc">先选文件，再填商品名称。支持拖放，ZIP 会自动展开。</p>
+
+                <div id="dropZone" class="uploader">
+                    <i class="fas fa-file-arrow-up"></i>
+                    <div style="font-weight:700;margin-bottom:0.25rem;">拖放文件到此处</div>
+                    <div style="color:var(--text-muted);font-size:0.88rem;">支持 JSON / CSV / Excel / ZIP</div>
+                    <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.zip">
+                </div>
+
+                <div class="file-list" id="fileList"></div>
+
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>商品名称</label>
+                        <input id="productNameInput" type="text" class="form-input" placeholder="例如：阿莫西林胶囊 0.25g*24粒">
+                        <div class="helper">名称越具体，命中历史记录的概率越高。</div>
+                    </div>
+
+                    <div class="inline-grid">
+                        <div class="form-group">
+                            <label>候选数量</label>
+                            <select id="candidateCountSelect" class="form-select">
+                                <option value="2" selected>2 个候选价格</option>
+                                <option value="3">3 个候选价格</option>
+                                <option value="4">4 个候选价格</option>
+                                <option value="5">5 个候选价格</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>推理档位</label>
+                            <select id="reasoningEffortSelect" class="form-select">
+                                <option value="low">low（快速）</option>
+                                <option value="medium" selected>medium（默认）</option>
+                                <option value="high">high（深度）</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="action-row">
+                    <button id="precheckBtn" class="btn-secondary" disabled>
+                        <i class="fas fa-shield-halved"></i> 预检
+                    </button>
+                    <button id="startBtn" class="btn" disabled>
+                        <i class="fas fa-play"></i> 开始推算
+                    </button>
+                    <button id="stopBtn" class="btn-danger" hidden>
+                        <i class="fas fa-stop-circle"></i> 强制停止
+                    </button>
+                    <a class="btn-secondary link-btn" href="monitor.html" style="text-decoration:none;">
+                        <i class="fas fa-eye"></i> 打开监控流
+                    </a>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="result-head">
+                    <div>
+                        <h2>预检结果</h2>
+                        <div class="result-subtitle" id="precheckSubtitle">还没有进行预检。</div>
+                    </div>
+                    <span class="badge" id="precheckBadge"><i class="fas fa-circle"></i> 未开始</span>
+                </div>
+
+                <div class="badge-row" id="precheckFlags"></div>
+                <div class="precheck-list" id="precheckList">
+                    <div class="empty-state">先上传文件并点击“预检”。</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="grid">
+            <div class="panel">
+                <div class="result-head">
+                    <div>
+                        <h2>推算结果</h2>
+                        <div class="result-subtitle" id="resultSubtitle">启动任务后，两个候选价格会在这里显示。</div>
+                    </div>
+                    <span class="badge success" id="resultBadge"><i class="fas fa-sparkles"></i> 等待结果</span>
+                </div>
+
+                <div class="progress-track">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+
+                <div class="result-grid" id="resultGrid">
+                    <div class="empty-state">当前还没有推算结果。</div>
+                </div>
+
+                <div class="meta-grid" id="resultMeta"></div>
+            </div>
+
+            <div class="panel">
+                <div class="result-head">
+                    <div>
+                        <h2>实时日志</h2>
+                        <div class="result-subtitle">观察 workflow 的每个阶段。</div>
+                    </div>
+                    <button id="clearLogBtn" class="btn-secondary" style="padding:0.45rem 0.75rem;font-size:0.82rem;">
+                        <i class="fas fa-broom"></i> 清空
+                    </button>
+                </div>
+                <div class="log-panel" id="logPanel">
+                    <div class="empty-state" style="color:#cbd5e1;">等待任务启动后输出日志。</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const allowedDataExtensions = ['.json', '.xlsx', '.xls', '.csv'];
+        const allowedArchiveExtensions = ['.zip'];
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const productNameInput = document.getElementById('productNameInput');
+        const candidateCountSelect = document.getElementById('candidateCountSelect');
+        const reasoningEffortSelect = document.getElementById('reasoningEffortSelect');
+        const precheckBtn = document.getElementById('precheckBtn');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const clearLogBtn = document.getElementById('clearLogBtn');
+        const statusBannerText = document.getElementById('statusBannerText');
+        const authStateText = document.getElementById('authStateText');
+        const authStateHint = document.getElementById('authStateHint');
+        const precheckSubtitle = document.getElementById('precheckSubtitle');
+        const precheckBadge = document.getElementById('precheckBadge');
+        const precheckFlags = document.getElementById('precheckFlags');
+        const precheckList = document.getElementById('precheckList');
+        const resultSubtitle = document.getElementById('resultSubtitle');
+        const resultBadge = document.getElementById('resultBadge');
+        const resultGrid = document.getElementById('resultGrid');
+        const resultMeta = document.getElementById('resultMeta');
+        const progressFill = document.getElementById('progressFill');
+        const logPanel = document.getElementById('logPanel');
+
+        let selectedFiles = [];
+        let selectedLabels = [];
+        let currentPrecheck = null;
+        let currentResult = null;
+        let currentFullResult = null;
+        let pollingTimer = null;
+        let sseSource = null;
+        let latestProgress = 0;
+        let hasConnectedStream = false;
+
+        function authKey() {
+            return (localStorage.getItem('X-FZT-Key') || '').trim();
+        }
+
+        function authHeaders() {
+            const key = authKey();
+            return key ? { 'X-FZT-Key': key } : {};
+        }
+
+        function updateAuthState() {
+            const key = authKey();
+            if (key) {
+                authStateText.textContent = '已登录';
+                authStateHint.textContent = `Key: ${key.slice(0, 6)}...${key.slice(-4)}`;
+            } else {
+                authStateText.textContent = '未登录';
+                authStateHint.textContent = '请先登录后再运行预检或推算。';
+            }
+        }
+
+        function setStatus(text) {
+            statusBannerText.textContent = text;
+        }
+
+        function setProgress(value) {
+            const next = Math.max(0, Math.min(100, Number(value) || 0));
+            latestProgress = Math.max(latestProgress, next);
+            progressFill.style.width = `${latestProgress}%`;
+        }
+
+        function resetProgress() {
+            latestProgress = 0;
+            progressFill.style.width = '0%';
+        }
+
+        function connectStream() {
+            if (sseSource) return;
+            const key = authKey();
+            if (!key) return;
+            sseSource = new EventSource(`/api/price-recommendations/stream?x-fzt-key=${encodeURIComponent(key)}`);
+            hasConnectedStream = true;
+            sseSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'reset') {
+                        clearLogs();
+                        return;
+                    }
+                    handleStreamEvent(data);
+                } catch (e) {
+                    console.error('SSE parse error', e);
+                }
+            };
+            sseSource.onerror = () => {
+                disconnectStream();
+            };
+        }
+
+        function disconnectStream() {
+            if (sseSource) {
+                sseSource.close();
+                sseSource = null;
+            }
+        }
+
+        function handleStreamEvent(data) {
+            if (typeof data.progress === 'number') {
+                setProgress(data.progress);
+            }
+            if (data.type === 'log') {
+                appendLog(data);
+                if (data.message) setStatus(data.message);
+            } else if (data.type === 'status') {
+                appendLog({
+                    time: data.time,
+                    level: 'status',
+                    nodeId: data.nodeId,
+                    message: data.status
+                });
+            } else if (data.type === 'progress') {
+                appendLog({
+                    time: data.time,
+                    level: 'debug',
+                    nodeId: data.nodeId,
+                    message: `progress ${data.current}/${data.total}`
+                });
+                if (data.total) {
+                    setProgress((data.current / data.total) * 100);
+                }
+            } else if (data.type === 'tally') {
+                appendLog({
+                    time: data.time,
+                    level: 'debug',
+                    nodeId: data.nodeId,
+                    message: JSON.stringify(data.tally || {})
+                });
+            } else if (data.type === 'workflow') {
+                appendLog({
+                    time: data.time,
+                    level: 'info',
+                    nodeId: 'workflow',
+                    message: data.workflow || ''
+                });
+            } else if (data.type !== 'reset') {
+                appendLog({
+                    time: data.time,
+                    level: data.level || 'info',
+                    nodeId: data.nodeId || data.type || '',
+                    message: data.message || data.workflow || data.status || JSON.stringify(data)
+                });
+            }
+        }
+
+        function appendLog(entry) {
+            const row = document.createElement('div');
+            row.className = 'log-line';
+            const time = document.createElement('span');
+            time.className = 'log-time';
+            time.textContent = `[${entry.time || '--:--:--'}]`;
+            const level = document.createElement('span');
+            level.className = 'log-level';
+            level.textContent = `[${entry.level || 'info'}]`;
+            const node = document.createElement('span');
+            node.className = 'log-node';
+            node.textContent = entry.nodeId ? `[${entry.nodeId}]` : '';
+            const msg = document.createElement('span');
+            msg.textContent = entry.message || '';
+            row.append(time, level, node, msg);
+            if (logPanel.querySelector('.empty-state')) {
+                logPanel.innerHTML = '';
+            }
+            logPanel.appendChild(row);
+            while (logPanel.children.length > 200) {
+                logPanel.removeChild(logPanel.firstChild);
+            }
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
+
+        function clearLogs() {
+            logPanel.innerHTML = '<div class="empty-state" style="color:#cbd5e1;">等待任务启动后输出日志。</div>';
+        }
+
+        function renderFileList() {
+            if (selectedFiles.length === 0) {
+                fileList.innerHTML = '';
+                return;
+            }
+            fileList.innerHTML = '';
+            selectedFiles.forEach((file, index) => {
+                const chip = document.createElement('div');
+                chip.className = 'file-chip';
+                chip.innerHTML = '<i class="fas fa-file"></i>';
+                const name = document.createElement('span');
+                name.textContent = file.name;
+                const suffix = document.createElement('small');
+                suffix.textContent = selectedLabels[index] || '';
+                chip.append(name, suffix);
+                fileList.appendChild(chip);
+            });
+        }
+
+        async function expandZipFile(file) {
+            if (!window.JSZip) {
+                throw new Error('ZIP 解析组件尚未加载');
+            }
+            const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+            const files = [];
+            for (const entryName of Object.keys(zip.files)) {
+                const entry = zip.files[entryName];
+                if (entry.dir) continue;
+                const ext = getExtension(entry.name);
+                if (!allowedDataExtensions.includes(ext)) continue;
+                const bytes = await entry.async('uint8array');
+                const cleanName = entry.name.replace(/[\\/]+/g, '_').trim();
+                const name = `${file.name.replace(/\.[^.]+$/, '')}__${cleanName}`;
+                files.push(new File([bytes], name, { type: 'application/octet-stream' }));
+            }
+            return files;
+        }
+
+        async function normalizeFiles(list) {
+            const nextFiles = [];
+            const nextLabels = [];
+            for (const file of Array.from(list)) {
+                const ext = getExtension(file.name);
+                if (allowedDataExtensions.includes(ext)) {
+                    nextFiles.push(file);
+                    nextLabels.push('原始文件');
+                    continue;
+                }
+                if (allowedArchiveExtensions.includes(ext)) {
+                    const expanded = await expandZipFile(file);
+                    if (expanded.length === 0) {
+                        throw new Error(`压缩包 ${file.name} 内没有可用的数据文件`);
+                    }
+                    expanded.forEach((item) => {
+                        nextFiles.push(item);
+                        nextLabels.push(`来自 ${file.name}`);
+                    });
+                    continue;
+                }
+                throw new Error(`不支持的文件格式: ${file.name}`);
+            }
+            return { files: nextFiles, labels: nextLabels };
+        }
+
+        function getExtension(name) {
+            const idx = name.lastIndexOf('.');
+            return idx >= 0 ? name.slice(idx).toLowerCase() : '';
+        }
+
+        async function handleFiles(list) {
+            try {
+                const { files, labels } = await normalizeFiles(list);
+                selectedFiles = files;
+                selectedLabels = labels;
+                renderFileList();
+                const hasData = selectedFiles.length > 0;
+                precheckBtn.disabled = !hasData;
+                startBtn.disabled = !hasData;
+                if (hasData) {
+                    setStatus(`已加载 ${selectedFiles.length} 个数据文件，等待预检。`);
+                }
+            } catch (e) {
+                alert(e.message || '文件处理失败');
+            }
+        }
+
+        function syncButtons() {
+            const hasFiles = selectedFiles.length > 0;
+            const hasProduct = productNameInput.value.trim().length > 0;
+            precheckBtn.disabled = !(hasFiles && hasProduct);
+            startBtn.disabled = !(hasFiles && hasProduct);
+        }
+
+        async function runPrecheck() {
+            if (selectedFiles.length === 0) {
+                alert('请先选择数据文件');
+                return;
+            }
+            const productName = productNameInput.value.trim();
+            if (!productName) {
+                alert('请先输入商品名称');
+                return;
+            }
+            const formData = new FormData();
+            selectedFiles.forEach((file) => formData.append('files', file));
+            formData.append('productName', productName);
+
+            precheckBtn.disabled = true;
+            setStatus('正在执行快速预检...');
+            try {
+                const resp = await fetch('/api/price-recommendations/precheck', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: formData
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    throw new Error(data.detail ? JSON.stringify(data.detail) : '预检失败');
+                }
+                currentPrecheck = data;
+                renderPrecheck(data);
+                setStatus(data.valid ? '预检通过，可以启动推算任务。' : '预检未通过，请先修正输入。');
+                if (data.valid) {
+                    startBtn.disabled = false;
+                }
+            } catch (e) {
+                alert(`预检失败: ${e.message}`);
+                setStatus('预检失败，请检查输入。');
+            } finally {
+                syncButtons();
+            }
+        }
+
+        function renderPrecheck(data) {
+            if (!data) return;
+            const valid = !!data.valid;
+            precheckBadge.className = valid ? 'badge success' : 'badge warn';
+            precheckBadge.innerHTML = valid ? '<i class="fas fa-circle-check"></i> 通过' : '<i class="fas fa-triangle-exclamation"></i> 未通过';
+            precheckSubtitle.textContent = valid
+                ? `已识别 ${data.productDataMatch?.matchedRows || 0} 行目标商品数据。`
+                : '存在阻断项，需要先修正输入。';
+
+            const flags = [];
+            if (data.productNameQuality) {
+                flags.push(flagBadge('商品名', data.productNameQuality.status));
+            }
+            if (data.fileQuality) {
+                flags.push(flagBadge('文件', data.fileQuality.status));
+            }
+            if (data.productDataMatch) {
+                flags.push(flagBadge('命中', data.productDataMatch.status));
+            }
+            precheckFlags.innerHTML = flags.join('');
+
+            const parts = [];
+            parts.push(listItem('商品名称', data.productName || ''));
+            parts.push(listItem('命中行数', String(data.productDataMatch?.matchedRows ?? 0)));
+            parts.push(listItem('置信度', formatPercent(data.productDataMatch?.confidence)));
+            const detected = data.detectedFields || {};
+            parts.push(listItem('识别字段', [
+                `商品字段: ${joinText(detected.productFields)}`,
+                `价格字段: ${joinText(detected.priceFields)}`,
+                `销量字段: ${joinText(detected.salesFields)}`,
+                `时间字段: ${joinText(detected.timeFields)}`
+            ].join('\n')));
+            precheckList.innerHTML = parts.join('');
+            renderPrecheckIssues(data);
+        }
+
+        function renderPrecheckIssues(data) {
+            const issues = Array.isArray(data.issues) ? data.issues : [];
+            const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+            const blocks = [];
+            if (issues.length > 0) {
+                blocks.push('<div class="issue-list">');
+                issues.forEach((item) => {
+                    blocks.push(`<div class="list-item err"><strong>${escapeHtml(item.code || 'issue')}</strong>${escapeHtml(item.message || '')}</div>`);
+                });
+                blocks.push('</div>');
+            }
+            if (warnings.length > 0) {
+                blocks.push('<div class="warning-list">');
+                warnings.forEach((item) => {
+                    blocks.push(`<div class="list-item warn"><strong>${escapeHtml(item.code || 'warning')}</strong>${escapeHtml(item.message || '')}</div>`);
+                });
+                blocks.push('</div>');
+            }
+            if (blocks.length === 0) {
+                blocks.push('<div class="empty-state">没有明显阻断项。</div>');
+            }
+            precheckList.insertAdjacentHTML('beforeend', blocks.join(''));
+        }
+
+        function renderResult(data, fullText) {
+            if (!data) return;
+            currentResult = data;
+            currentFullResult = fullText || '';
+            resultBadge.className = 'badge success';
+            resultBadge.innerHTML = '<i class="fas fa-sparkles"></i> 已完成';
+            resultSubtitle.textContent = `${data.productName || '目标商品'} 的候选价格已生成。`;
+
+            const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
+            if (recommendations.length === 0) {
+                resultGrid.innerHTML = '<div class="empty-state">没有生成推算结果。</div>';
+            } else {
+                resultGrid.innerHTML = recommendations.map((item) => `
+                    <div class="price-card">
+                        <div class="price-rank">TOP ${item.rank ?? ''}</div>
+                        <div class="price-value">${formatPrice(item.price)} <span style="font-size:1rem;font-weight:700;color:var(--text-muted);">${escapeHtml(item.unit || '元')}</span></div>
+                        <div class="badge-row" style="margin-bottom:0.55rem;">
+                            <span class="badge success"><i class="fas fa-bullseye"></i> 置信度 ${formatPercent(item.confidence)}</span>
+                        </div>
+                        <div class="price-reason">${escapeHtml(item.reason || '暂无解释')}</div>
+                    </div>
+                `).join('');
+            }
+
+            const evidence = data.evidence || {};
+            const range = data.validPriceRange || {};
+            resultMeta.innerHTML = [
+                metaCard('有效价格区间', `${formatPrice(range.min)} - ${formatPrice(range.max)}`),
+                metaCard('命中行数', String(evidence.matchedRows ?? 0)),
+                metaCard('观察价格数', String(evidence.observedPriceCount ?? 0)),
+                metaCard('价格字段', evidence.priceField || ''),
+                metaCard('销量字段', evidence.salesField || ''),
+                metaCard('时间字段', evidence.timeField || '')
+            ].join('');
+        }
+
+        function metaCard(label, value) {
+            return `<div class="meta-card"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div></div>`;
+        }
+
+        function listItem(title, body) {
+            return `<div class="list-item"><strong>${escapeHtml(title)}</strong><span style="white-space:pre-line;">${escapeHtml(body)}</span></div>`;
+        }
+
+        function flagBadge(label, status) {
+            const state = String(status || '').toLowerCase();
+            if (state === 'ok' || state === 'success') {
+                return `<span class="badge success"><i class="fas fa-circle-check"></i> ${label} 通过</span>`;
+            }
+            if (state === 'warning') {
+                return `<span class="badge warn"><i class="fas fa-circle-exclamation"></i> ${label} 注意</span>`;
+            }
+            return `<span class="badge"><i class="fas fa-circle-xmark"></i> ${label} 待确认</span>`;
+        }
+
+        function joinText(list) {
+            if (!Array.isArray(list) || list.length === 0) return '未识别';
+            return list.join('、');
+        }
+
+        function formatPercent(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return '0%';
+            return `${Math.round(num * 100)}%`;
+        }
+
+        function formatPrice(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return '-';
+            return num.toFixed(2);
+        }
+
+        function escapeHtml(text) {
+            return String(text)
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        async function startRecommendation() {
+            if (selectedFiles.length === 0) {
+                alert('请先选择数据文件');
+                return;
+            }
+            const productName = productNameInput.value.trim();
+            if (!productName) {
+                alert('请先输入商品名称');
+                return;
+            }
+
+            const precheckData = currentPrecheck || await fetchPrecheckSilently();
+            if (!precheckData || !precheckData.valid) {
+                alert('预检未通过，先修正输入再启动推算');
+                return;
+            }
+
+            const formData = new FormData();
+            selectedFiles.forEach((file) => formData.append('files', file));
+            formData.append('productName', productName);
+            formData.append('candidateCount', candidateCountSelect.value || '2');
+            formData.append('reasoningEffort', reasoningEffortSelect.value || 'medium');
+
+            startBtn.disabled = true;
+            stopBtn.hidden = false;
+            resetProgress();
+            setStatus('正在提交价格推算任务...');
+            connectStream();
+
+            try {
+                const resp = await fetch('/api/price-recommendations', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: formData
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data));
+                }
+                setStatus('任务已提交，正在后台运行...');
+                if (!pollingTimer) {
+                    pollingTimer = setInterval(refreshStatus, 2000);
+                }
+                await refreshStatus();
+            } catch (e) {
+                alert(`启动失败: ${e.message}`);
+                stopBtn.hidden = true;
+                startBtn.disabled = false;
+                setStatus('启动失败，请重试。');
+            }
+        }
+
+        async function fetchPrecheckSilently() {
+            const formData = new FormData();
+            selectedFiles.forEach((file) => formData.append('files', file));
+            formData.append('productName', productNameInput.value.trim());
+            const resp = await fetch('/api/price-recommendations/precheck', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: formData
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(typeof data.detail === 'string' ? data.detail : '预检失败');
+            }
+            currentPrecheck = data;
+            renderPrecheck(data);
+            return data;
+        }
+
+        async function refreshStatus() {
+            try {
+                const resp = await fetch('/api/price-recommendations/status', { headers: authHeaders() });
+                const data = await resp.json();
+                const terminal = !['queued', 'running'].includes(data.status);
+                if (['queued', 'running'].includes(data.status)) {
+                    setStatus(data.status === 'running' ? '任务正在运行中...' : '任务正在排队...');
+                    stopBtn.hidden = false;
+                    startBtn.disabled = true;
+                    connectStream();
+                    if (!pollingTimer) {
+                        pollingTimer = setInterval(refreshStatus, 2000);
+                    }
+                } else {
+                    if (pollingTimer) {
+                        clearInterval(pollingTimer);
+                        pollingTimer = null;
+                    }
+                    stopBtn.hidden = true;
+                    startBtn.disabled = selectedFiles.length === 0 || !productNameInput.value.trim();
+                    if (data.status === 'completed') {
+                        setStatus('推算完成。');
+                    } else if (data.status === 'aborted') {
+                        setStatus('任务已停止。');
+                    } else if (data.status === 'error') {
+                        setStatus(data.errorMessage ? `任务失败：${data.errorMessage}` : '任务失败。');
+                    }
+                }
+
+                if (data.result) {
+                    renderResult(data.result, data.fullResult || '');
+                }
+                if (typeof data.result === 'object' && data.result && data.result.recommendations) {
+                    currentResult = data.result;
+                }
+                if (terminal && data.status !== 'completed' && data.errorMessage) {
+                    resultSubtitle.textContent = data.errorMessage;
+                    resultBadge.className = 'badge warn';
+                    resultBadge.innerHTML = '<i class="fas fa-triangle-exclamation"></i> 失败';
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+        dropZone.ondragover = (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        };
+        dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            handleFiles(e.dataTransfer.files);
+        };
+
+        productNameInput.oninput = syncButtons;
+        candidateCountSelect.onchange = syncButtons;
+        reasoningEffortSelect.onchange = syncButtons;
+
+        precheckBtn.onclick = runPrecheck;
+        startBtn.onclick = startRecommendation;
+        stopBtn.onclick = async () => {
+            if (!confirm('确认要强制停止当前价格推算任务吗？')) return;
+            try {
+                await fetch('/api/price-recommendations/stop', { method: 'POST', headers: authHeaders() });
+                await refreshStatus();
+            } catch (e) {
+                console.error(e);
+            }
+        };
+        clearLogBtn.onclick = clearLogs;
+
+        async function init() {
+            updateAuthState();
+            const key = authKey();
+            if (!key) {
+                setStatus('未登录，点击右上角登录后再运行任务。');
+            } else {
+                try {
+                    const resp = await fetch('/api/auth/verify', { method: 'POST', headers: authHeaders() });
+                    if (!resp.ok) {
+                        setStatus('登录状态失效，请重新登录。');
+                    }
+                } catch (e) {
+                    setStatus('无法验证登录状态。');
+                }
+            }
+            await refreshStatus();
+            syncButtons();
+        }
+
+        setInterval(() => {
+            updateAuthState();
+        }, 30000);
+
+        init();
+    </script>
+</body>
+</html>

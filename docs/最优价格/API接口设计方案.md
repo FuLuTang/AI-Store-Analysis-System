@@ -4,6 +4,14 @@
 
 当前阶段先固定外围 workflow 与接口契约，内部算法、曲线拟合方式、定价模型可以后续替换。
 
+当前 MVP 已实现：
+
+- 快速预检接口。
+- 异步价格推荐任务接口。
+- 独立 status / logs / stream / stop。
+- `price_recommendation` 任务类型的内存 session 隔离与物理目录隔离。
+- 确定性基准推荐结果生成。复杂价格弹性、曲线拟合和 Agent Runner 后续接入。
+
 ## 1. 核心流程图
 
 ```mermaid
@@ -132,6 +140,8 @@ graph TD
   "runId": "20260526T153000_ab12cd"
 }
 ```
+
+启动接口会在入队前再次执行快速预检。预检不通过时直接返回 `400`，`detail` 中包含完整预检结果。
 
 **错误**:
 
@@ -280,7 +290,7 @@ graph TD
 
 ## 4. 结果 JSON 规范
 
-价格推荐任务的最终结果文件建议固定为：
+价格推荐任务的最终结果文件固定为：
 
 ```text
 workspace/output/price_recommendation.json
@@ -350,7 +360,7 @@ workspace/output/price_recommendation.json
 
 ### 5.2 低成本 LLM 判断
 
-低成本 LLM 只做快速辅助判断：
+低成本 LLM 只做快速辅助判断。当前 MVP 先实现确定性预检，fastcall/low LLM 作为后续增强点：
 
 - 商品名称是否过宽或过模糊。
 - 上传文件是否像销售/价格相关数据。
@@ -398,6 +408,23 @@ storage/accounts/{account_slug}/runs/price_recommendation/{run_id}/
 5. **向后兼容**：
    - 现有的门店经营诊断任务依旧存放在 `storage/accounts/{account_slug}/runs/{run_id}/` 下，保持原样不用改动。
    - 历史旧数据和旧的 `latest_run.json` 留在原地不做强制迁移。
+
+### 内存 Session 隔离
+
+价格推荐任务不复用诊断任务的内存状态对象。后端 session 缓存维度为：
+
+```text
+(key_hash, task_type)
+```
+
+同一用户可以同时拥有：
+
+```text
+(key_hash, diagnosis)
+(key_hash, price_recommendation)
+```
+
+两者的 `status`、`logs`、`result`、`run_id`、`run_dir`、后台任务句柄互不覆盖。
 
 ### session.json 元数据
 

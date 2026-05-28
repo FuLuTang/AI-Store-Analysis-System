@@ -10,6 +10,90 @@
     <link rel="stylesheet" href="index.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .workspace-switcher {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.25rem;
+        }
+        .workspace-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            padding: 1.2rem 1.25rem;
+            border-radius: calc(var(--radius) + 0.25rem);
+            border: 1px solid var(--border);
+            background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+            text-decoration: none;
+            color: var(--text);
+            box-shadow: var(--shadow-lg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+            min-height: 160px;
+        }
+        .workspace-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--border-hover);
+            box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+        }
+        .workspace-card-analysis {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(15, 23, 42, 0.08));
+        }
+        .workspace-card-price {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(15, 23, 42, 0.08));
+        }
+        .workspace-card-top {
+            display: flex;
+            align-items: center;
+            gap: 0.9rem;
+        }
+        .workspace-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.15rem;
+            color: var(--primary);
+            background: var(--primary-glow);
+            border: 1px solid rgba(255,255,255,0.08);
+            flex-shrink: 0;
+        }
+        .workspace-card-price .workspace-icon {
+            color: var(--success);
+            background: rgba(16, 185, 129, 0.12);
+        }
+        .workspace-copy h2 {
+            font-size: 1.08rem;
+            margin-bottom: 0.25rem;
+            color: var(--text);
+        }
+        .workspace-copy p {
+            color: var(--text-muted);
+            font-size: 0.92rem;
+            line-height: 1.55;
+        }
+        .workspace-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-top: auto;
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: var(--primary);
+        }
+        .workspace-card-price .workspace-cta {
+            color: var(--success);
+        }
+        @media (max-width: 900px) {
+            .workspace-switcher {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
     <script>
         (function initTheme() {
             const theme = localStorage.getItem('theme') || 'dark';
@@ -26,6 +110,7 @@
         <nav>
             <a href="index.html" class="active">用户工作台</a>
             <a href="history.html">历史诊断记录</a>
+            <a href="price.html">最优价格推算</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
@@ -45,10 +130,33 @@
 
         <header>
             <h1>药店经营 AI 智能诊断</h1>
-            <p class="subtitle">拖入门店经营 JSON 数据，一键获取深度归因与优化策略。</p>
+            <p class="subtitle">从用户工作台进入经营分析或最优价格推算，按业务场景选择对应流程。</p>
         </header>
 
-        <div class="dashboard-grid">
+        <div class="workspace-switcher">
+            <a href="#analysisWorkspace" class="workspace-card workspace-card-analysis">
+                <div class="workspace-card-top">
+                    <div class="workspace-icon"><i class="fas fa-chart-line"></i></div>
+                    <div class="workspace-copy">
+                        <h2>经营分析</h2>
+                        <p>导入门店经营数据，进入 AI 诊断工作台，输出结构化报告与优化建议。</p>
+                    </div>
+                </div>
+                <div class="workspace-cta"><i class="fas fa-arrow-right"></i><span>进入经营分析</span></div>
+            </a>
+            <a href="price.html" class="workspace-card workspace-card-price">
+                <div class="workspace-card-top">
+                    <div class="workspace-icon"><i class="fas fa-tags"></i></div>
+                    <div class="workspace-copy">
+                        <h2>最优价格推算</h2>
+                        <p>上传销售明细或 ZIP 压缩包，快速预检后生成两个可解释的推荐价格。</p>
+                    </div>
+                </div>
+                <div class="workspace-cta"><i class="fas fa-arrow-right"></i><span>打开价格工作台</span></div>
+            </a>
+        </div>
+
+        <div class="dashboard-grid" id="analysisWorkspace">
             <!-- 左侧：参数与操作 -->
             <div class="dashboard-sidebar">
                 <div class="card sidebar-card">

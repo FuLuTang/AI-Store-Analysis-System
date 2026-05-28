@@ -1430,6 +1430,105 @@ def get_params_presets():
     return {"presets": presets}
 
 
+# ── 新增：服务运行期生成的静态资产（如分析图表）的路由 ──
+@app.get("/api/reports/{run_id}/assets/{filename}")
+def get_report_asset(
+    run_id: str,
+    filename: str,
+    x_fzt_key: Optional[str] = Header(default=None),
+    x_fzt_key_query: Optional[str] = Query(default=None, alias="x-fzt-key")
+):
+    key = x_fzt_key or x_fzt_key_query
+    session = resolve_session(key)
+
+    # 路径安全检查，防止目录遍历攻击
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    target_run_dir = session.account_dir / "runs" / "diagnosis" / run_id
+    if not target_run_dir.exists():
+        target_run_dir = session.account_dir / "runs" / run_id
+        if not target_run_dir.exists():
+            raise HTTPException(status_code=404, detail="Run not found")
+
+    asset_path = target_run_dir / "workspace" / "output" / filename
+    if not asset_path.exists() or not asset_path.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    # 根据后缀决定 content-type
+    media_type = "application/octet-stream"
+    ext = filename.lower()
+    if ext.endswith(".png"):
+        media_type = "image/png"
+    elif ext.endswith((".jpg", ".jpeg")):
+        media_type = "image/jpeg"
+    elif ext.endswith(".svg"):
+        media_type = "image/svg+xml"
+    elif ext.endswith(".gif"):
+        media_type = "image/gif"
+
+    return FileResponse(asset_path, media_type=media_type)
+
+
+@app.get("/api/reports/public/{run_id}/assets/{filename}")
+def get_public_report_asset(
+    run_id: str,
+    filename: str,
+    sign: str = Query(...)
+):
+    # 校验签名和公开状态
+    expected_sign = generate_share_sign(run_id)
+    if sign != expected_sign:
+        raise HTTPException(status_code=403, detail="签名不匹配，无权访问")
+
+    target_run = None
+    target_account_dir = None
+
+    for account_dir in ACCOUNTS_DIR.iterdir():
+        if account_dir.is_dir():
+            runs = _load_runs(account_dir)
+            for r in runs:
+                if r.get("runId") == run_id:
+                    target_run = r
+                    target_account_dir = account_dir
+                    break
+            if target_run:
+                break
+
+    if not target_run or not target_account_dir:
+        raise HTTPException(status_code=404, detail="未找到该运行批次")
+
+    if not target_run.get("isPublic", False):
+        raise HTTPException(status_code=403, detail="该分析报告未公开分享")
+
+    # 路径安全检查
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    task_type = target_run.get("taskType", "diagnosis")
+    run_dir = target_account_dir / "runs" / task_type / run_id
+    if not run_dir.exists():
+        run_dir = target_account_dir / "runs" / run_id
+
+    asset_path = run_dir / "workspace" / "output" / filename
+    if not asset_path.exists() or not asset_path.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    # 根据后缀决定 content-type
+    media_type = "application/octet-stream"
+    ext = filename.lower()
+    if ext.endswith(".png"):
+        media_type = "image/png"
+    elif ext.endswith((".jpg", ".jpeg")):
+        media_type = "image/jpeg"
+    elif ext.endswith(".svg"):
+        media_type = "image/svg+xml"
+    elif ext.endswith(".gif"):
+        media_type = "image/gif"
+
+    return FileResponse(asset_path, media_type=media_type)
+
+
 # 挂载静态文件 (使用绝对路径更稳健)
 static_path = ROOT_DIR / "apps" / "web" / "public"
 if static_path.exists():

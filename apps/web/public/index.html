@@ -204,6 +204,19 @@
     </div>
 
     <script>
+        // ========== marked 图片渲染自定义 ==========
+        const renderer = new marked.Renderer();
+        renderer.image = function(href, title, text) {
+            let newHref = href;
+            if (href && (href.startsWith('./') || !href.includes('://'))) {
+                const filename = href.replace(/^\.\//, '');
+                const key = localStorage.getItem('X-FZT-Key') || '';
+                newHref = `/api/reports/${currentRunId}/assets/${filename}?x-fzt-key=${encodeURIComponent(key)}`;
+            }
+            return `<img src="${newHref}" alt="${text || ''}" title="${title || ''}" style="max-width:100%; height:auto; display:block; margin:1.5rem auto; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.12); border:1px solid var(--border-color);" />`;
+        };
+        marked.use({ renderer });
+
         // ========== 鉴权守卫 ==========
         function authHeaders() {
             const key = localStorage.getItem('X-FZT-Key') || '';

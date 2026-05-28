@@ -410,7 +410,6 @@ class SessionState:
         self.account_slug = account_slug
         self.account_dir = account_dir
         self.cache_dir = account_dir / "cache"
-        self.profile_path = account_dir / "profile.json"
         self.status = "idle"  # idle, queued, running, completed, error, aborted, interrupted
         self.error_message = ""
         self.logs = []
@@ -451,18 +450,7 @@ class SessionManager:
         }
 
     def _load_profile(self, account_dir: Path) -> dict:
-        profile_path = account_dir / "profile.json"
-        cfg = self._default_config()
-        if profile_path.exists():
-            try:
-                profile = json.loads(profile_path.read_text(encoding="utf-8"))
-                if isinstance(profile, dict):
-                    cfg["reasoningEffort"] = normalize_reasoning_effort(
-                        profile.get("reasoningEffort") or profile.get("reasoning_effort")
-                    )
-            except Exception:
-                pass
-        return cfg
+        return self._default_config()
 
     def _account_dir(self, user_key: str) -> tuple[str, str, Path]:
         key_hash = hash_user_key(user_key)
@@ -535,8 +523,8 @@ class SessionManager:
                 _save_account_json(account_dir, user_key, key_hash)
                 return existing
 
-            profile_path = account_dir / "profile.json"
-            if not create_if_missing and not profile_path.exists():
+            account_json_path = account_dir / "account.json"
+            if not create_if_missing and not account_json_path.exists():
                 raise KeyError("invalid_key")
 
             account_dir.mkdir(parents=True, exist_ok=True)
@@ -566,15 +554,6 @@ class SessionManager:
 
     def get_legacy_session(self) -> SessionState:
         return self.get_session(LEGACY_ACCOUNT_KEY, create_if_missing=True)
-
-    def save_profile(self, session: SessionState):
-        session.account_dir.mkdir(parents=True, exist_ok=True)
-        session.profile_path.write_text(
-            json.dumps({
-                "reasoningEffort": normalize_reasoning_effort(session.config.get("reasoningEffort"))
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
 
     def drop_session(self, key_hash: str):
         with self._lock:
@@ -715,11 +694,6 @@ async def auth_register(request: Request):
     if isinstance(api_key, str) and api_key.strip():
         set_global_api_key(api_key)
 
-    try:
-        session_manager.save_profile(session)
-    except Exception as e:
-        session_manager.drop_session(session.key_hash)
-        raise HTTPException(status_code=500, detail=f"账号初始化失败: {str(e)}")
     return {"userKey": user_key, "status": "ok"}
 
 

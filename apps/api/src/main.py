@@ -29,6 +29,7 @@ from packages.agents.core.errors import PipelineAbortedError
 from packages.agents.registry import create_pipeline
 from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
+from apps.api.src.chat_bridge import register_chat_routes
 
 load_dotenv()
 
@@ -624,6 +625,8 @@ def add_log(session: SessionState, node_id: str, message):
             payload["error_details"] = _mask_sensitive_text(str(message["error_details"]))
         if "progress" in message:
             payload["progress"] = message["progress"]
+        if "terminal" in message:
+            payload["terminal"] = bool(message["terminal"])
     else:
         level = "info"
         safe_msg = _mask_sensitive_text(str(message))
@@ -925,6 +928,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
                 _save_session_json(session)
                 return
             session.status = "completed"
+        add_log(session, "system", {"level": "status", "message": "", "progress": 100, "terminal": True})
         _update_run_status_in_meta(session, "completed")
         save_latest_report(session)
         _save_session_json(session)
@@ -960,6 +964,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             
     except (PipelineAbortedError, asyncio.CancelledError):
         add_log(session, "system", "⚠️ 任务被用户强制终止。")
+        add_log(session, "system", {"level": "status", "message": "", "terminal": True})
         with session.runtime_lock:
             session.status = "aborted"
             session.error_message = "任务被用户强行终止。"
@@ -967,6 +972,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         _save_session_json(session)
     except Exception as e:
         add_log(session, "system", f"管线执行失败: {str(e)}")
+        add_log(session, "system", {"level": "status", "message": "", "terminal": True})
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
@@ -1527,6 +1533,14 @@ def get_public_report_asset(
         media_type = "image/gif"
 
     return FileResponse(asset_path, media_type=media_type)
+
+
+register_chat_routes(
+    app,
+    resolve_session=resolve_session,
+    get_llm_preset=get_llm_preset,
+    normalize_reasoning_effort=normalize_reasoning_effort,
+)
 
 
 # 挂载静态文件 (使用绝对路径更稳健)

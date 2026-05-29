@@ -136,21 +136,6 @@
                     </div>
                 </div>
 
-                <!-- 终端日志卡片 -->
-                <div class="card" id="logCard" style="display:none; padding: 1.5rem 1.8rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                        <h3 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 0.5rem;">
-                            <i class="fas fa-terminal" style="color: var(--primary);"></i> 诊断控制台日志
-                        </h3>
-                        <a href="monitor.html" target="_blank" style="color: var(--text-muted); text-decoration: none; font-size: 0.8rem; transition: color 0.2s;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--text-muted)'">
-                            <i class="fas fa-external-link-alt"></i> 详细监控视图
-                        </a>
-                    </div>
-                    <div class="log-container" id="globalLogContainer" style="display:block; max-width:100%; margin:0; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--log-bg); padding: 0.8rem 1rem; height: 180px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; text-align: left; box-shadow: inset 0 2px 8px rgba(0,0,0,0.15);">
-                        <div id="globalLogContent"></div>
-                    </div>
-                </div>
-
                 <!-- 报告展现卡片 -->
                 <div id="result" class="report-section" style="margin:0;">
                     <div class="report-header-bar" id="reportHeaderBar" style="display:none;">
@@ -166,6 +151,21 @@
                     </div>
                     <div class="report-card" style="display:none;">
                         <div id="reportContent" class="markdown-body"></div>
+                    </div>
+                </div>
+
+                <!-- 终端日志卡片 -->
+                <div class="card" id="logCard" style="display:none; padding: 1.5rem 1.8rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <h3 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fas fa-terminal" style="color: var(--primary);"></i> 诊断控制台日志
+                        </h3>
+                        <a href="monitor.html" target="_blank" style="color: var(--text-muted); text-decoration: none; font-size: 0.8rem; transition: color 0.2s;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--text-muted)'">
+                            <i class="fas fa-external-link-alt"></i> 详细监控视图
+                        </a>
+                    </div>
+                    <div class="log-container" id="globalLogContainer" style="display:block; max-width:100%; margin:0; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--log-bg); padding: 0.8rem 1rem; height: 180px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; text-align: left; box-shadow: inset 0 2px 8px rgba(0,0,0,0.15);">
+                        <div id="globalLogContent"></div>
                     </div>
                 </div>
             </div>
@@ -202,6 +202,34 @@
             </div>
         </div>
     </div>
+
+    <button id="chatFab" class="chat-fab" type="button" aria-label="打开对话助手" aria-expanded="false">
+        <i class="fas fa-comments"></i>
+    </button>
+
+    <section id="chatPanel" class="chat-panel" aria-hidden="true">
+        <div class="chat-panel-header">
+            <div>
+                <h3><i class="fas fa-comments"></i> 对话追问</h3>
+                <div id="chatRunBadge" class="chat-run-badge">未绑定分析批次</div>
+            </div>
+            <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div id="chatMessages" class="chat-messages">
+            <div class="chat-empty-state">请先完成一次分析，然后在这里继续追问。</div>
+        </div>
+        <div class="chat-composer">
+            <textarea id="chatInput" class="chat-input" placeholder="继续追问这次分析的结论、原因或建议..." rows="3"></textarea>
+            <div class="chat-composer-actions">
+                <span id="chatStatusHint" class="chat-status-hint">基于当前分析结果多轮对话</span>
+                <button id="chatSendBtn" class="btn" type="button">
+                    <i class="fas fa-paper-plane"></i> 发送
+                </button>
+            </div>
+        </div>
+    </section>
 
     <script>
         // ========== marked 图片渲染自定义 ==========
@@ -263,6 +291,15 @@
         const exampleBtn = document.getElementById('exampleBtn');
         const downloadArea = document.getElementById('downloadArea');
         const downloadBtn = document.getElementById('downloadBtn');
+        const reasoningEffortSelect = document.getElementById('reasoningEffortSelect');
+        const chatFab = document.getElementById('chatFab');
+        const chatPanel = document.getElementById('chatPanel');
+        const chatCloseBtn = document.getElementById('chatCloseBtn');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const chatSendBtn = document.getElementById('chatSendBtn');
+        const chatRunBadge = document.getElementById('chatRunBadge');
+        const chatStatusHint = document.getElementById('chatStatusHint');
         
         let filesData = [];
         let currentRunId = null;
@@ -270,6 +307,9 @@
         let currentFullReport = null;
         let pollingInterval = null;
         let sseSource = null;
+        let progressClosed = false;
+        let chatSending = false;
+        const chatHistories = {};
         
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
@@ -289,9 +329,12 @@
 
         function resetProgressState() {
             currentProgress = 0;
+            progressClosed = false;
             progressBar.style.width = '0%';
             progressText.innerText = '0%';
             currentStepText.innerText = '';
+            progressBar.classList.remove('is-terminal');
+            currentStepText.removeAttribute('data-terminal');
         }
 
         function connectSSE() {
@@ -312,6 +355,14 @@
 
                     // status 级别：更新常驻"当前进度"文字（不追加日志行）
                     if (level === 'status') {
+                        if (data.terminal) {
+                            progressClosed = true;
+                            currentStepText.innerText = '';
+                            currentStepText.removeAttribute('data-terminal');
+                            progressBar.classList.add('is-terminal');
+                            progressContainer.style.display = 'none';
+                            return;
+                        }
                         currentStepText.innerText = data.message || '';
                         return;
                     }
@@ -342,9 +393,143 @@
             }
         }
 
+        function getActiveChatRunId() {
+            const queryRunId = new URLSearchParams(window.location.search).get('run_id');
+            return currentRunId || queryRunId || null;
+        }
+
+        function getChatHistory(runId = getActiveChatRunId()) {
+            const key = runId || '__empty__';
+            if (!chatHistories[key]) chatHistories[key] = [];
+            return chatHistories[key];
+        }
+
+        function escapeChatHtml(text) {
+            return String(text || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatChatContent(text) {
+            return escapeChatHtml(text).replace(/\n/g, '<br>');
+        }
+
+        function syncChatRunContext() {
+            const runId = getActiveChatRunId();
+            chatRunBadge.textContent = runId ? `run: ${runId}` : '未绑定分析批次';
+            renderChatMessages();
+        }
+
+        function setChatOpen(open) {
+            chatPanel.classList.toggle('open', open);
+            chatPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
+            chatFab.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) {
+                syncChatRunContext();
+                setTimeout(() => chatInput.focus(), 50);
+            }
+        }
+
+        function renderChatMessages() {
+            const runId = getActiveChatRunId();
+            if (!runId) {
+                chatMessages.innerHTML = '<div class="chat-empty-state">请先完成一次分析，然后在这里继续追问。</div>';
+                return;
+            }
+
+            const history = getChatHistory(runId).filter(msg => msg.role === 'user' || msg.role === 'assistant');
+            if (history.length === 0) {
+                chatMessages.innerHTML = '<div class="chat-empty-state">可以继续追问这次分析里的结论、证据、风险或建议。</div>';
+                return;
+            }
+
+            chatMessages.innerHTML = history.map(msg => `
+                <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
+                    <div class="chat-message-role">${msg.role === 'user' ? '你' : 'AI'}</div>
+                    <div class="chat-message-bubble">${formatChatContent(msg.content)}</div>
+                </div>
+            `).join('');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function updateChatComposerState() {
+            chatSendBtn.disabled = chatSending;
+            chatInput.disabled = chatSending;
+            chatStatusHint.textContent = chatSending ? 'AI 正在回复...' : '基于当前分析结果多轮对话';
+        }
+
+        async function sendChatMessage() {
+            const content = chatInput.value.trim();
+            if (!content || chatSending) return;
+
+            const runId = getActiveChatRunId();
+            if (!runId) {
+                chatMessages.innerHTML = '<div class="chat-empty-state">当前没有可追问的分析批次。请先完成一次分析。</div>';
+                return;
+            }
+
+            const history = getChatHistory(runId);
+            const requestMessages = history.concat([{ role: 'user', content }]);
+            history.push({ role: 'user', content });
+            const assistantMessage = { role: 'assistant', content: '' };
+            history.push(assistantMessage);
+
+            chatInput.value = '';
+            chatSending = true;
+            updateChatComposerState();
+            renderChatMessages();
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        runId,
+                        reasoningEffort: reasoningEffortSelect.value || 'medium',
+                        messages: requestMessages
+                    })
+                });
+
+                if (!response.ok) {
+                    let errorText = '请求失败';
+                    try {
+                        const errorData = await response.json();
+                        errorText = errorData.detail || errorText;
+                    } catch (_) {
+                        errorText = await response.text() || errorText;
+                    }
+                    throw new Error(errorText);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    assistantMessage.content += decoder.decode(value, { stream: true });
+                    renderChatMessages();
+                }
+                assistantMessage.content += decoder.decode();
+                if (!assistantMessage.content.trim()) {
+                    assistantMessage.content = '当前没有返回可显示的内容。';
+                }
+            } catch (err) {
+                assistantMessage.content = `对话失败：${err.message}`;
+            } finally {
+                chatSending = false;
+                updateChatComposerState();
+                renderChatMessages();
+            }
+        }
+
         window.onload = async () => {
             updateThemeIcon();
             await checkStatus();
+            syncChatRunContext();
+            updateChatComposerState();
         };
 
         window.toggleTheme = function() {
@@ -402,8 +587,9 @@
                 }
                 const res = await fetch(statusUrl, { headers: authHeaders() });
                 const data = await res.json();
-                
                 currentRunId = data.runId || null;
+                syncChatRunContext();
+
                 if (data.status === 'completed') {
                     downloadArea.style.display = 'block';
                 } else {
@@ -421,6 +607,7 @@
                     stopBtn.style.display = 'inline-flex';
                     loading.style.display = 'flex';
                     statusText.innerText = '任务正在后台运行，请等待...';
+                    progressClosed = false;
                     progressContainer.style.display = 'block';
                     globalLogContainer.style.display = 'block';
                     connectSSE();
@@ -432,13 +619,9 @@
                     startBtn.disabled = filesData.length === 0;
                     stopBtn.style.display = 'none';
                     loading.style.display = 'none';
-                    if (data.status === 'completed') {
-                        if (!sseSource) connectSSE(); // 回放历史日志
-                        progressContainer.style.display = 'block';
-                        globalLogContainer.style.display = 'block';
-                    } else if (data.status === 'error' || data.status === 'aborted') {
-                        disconnectSSE();
-                        progressContainer.style.display = 'block';
+                    if (data.status === 'completed' || data.status === 'error' || data.status === 'aborted') {
+                        if (!sseSource) connectSSE();
+                        progressContainer.style.display = progressClosed ? 'none' : 'block';
                         globalLogContainer.style.display = 'block';
                     }
                     // idle: 不展示进度/日志区域
@@ -781,6 +964,16 @@
             }
             window.open(url, '_blank');
         };
+
+        chatFab.onclick = () => setChatOpen(!chatPanel.classList.contains('open'));
+        chatCloseBtn.onclick = () => setChatOpen(false);
+        chatSendBtn.onclick = () => sendChatMessage();
+        chatInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendChatMessage();
+            }
+        });
 
         exampleBtn.onclick = async () => {
             try {

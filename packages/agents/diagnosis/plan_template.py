@@ -69,7 +69,7 @@ PLAN_TEMPLATE = [
          "写 output/summary_short.json — 给管理层看的精简视图，严格 JSON 格式："
          '{\"health_status\": \"1-2词整体状态\", \"overview_text\": \"大白话说当前状况\", '
          '\"cards\": [{\"title\": \"问题标题\", \"explanation\": \"咋回事\", '
-         '\"suggestion\": \"咋办\", \"evidence\": \"数据证据（优先 Markdown 迷你表格）\", '
+         '\"suggestion\": \"咋办\", \"evidence\": \"数据证据（优先 Markdown 表格，即使是单列数据也可以用表格，但是不推荐列数超过5，行数也别太多，可以用有代表性的举例。可以用 文字+表格）\", '
          '\"color\": \"red/yellow/green/blue/pink\"}]}。'
          "cards 尽量别超过 7 个。"
          "完成后调 check_plan(3) 验证。"

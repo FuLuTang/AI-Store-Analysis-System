@@ -171,6 +171,24 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
                 "required": ["step_index"],
             },
         ),
+        _make_tool(
+            name="finish_task",
+            description="结束或中止当前分析任务。如果任务成功完成，传入 success=true 和 text 总结；如果发生不可恢复的严重错误需要报错停止，传入 success=false 并提供详细的 text 原因。在传入 success=true 时，系统会校验是否所有计划步骤都已成功验证，否则会返回错误提示。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "success": {
+                        "type": "boolean",
+                        "description": "是否成功完成任务。true 表示成功结束，false 表示报错终止任务。"
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "如果 success=true，写最终总结（包含健康状态、核心结论和交付物清单）；如果 success=false，写具体的错误原因说明。"
+                    }
+                },
+                "required": ["success", "text"],
+            },
+        ),
     ]
 
 
@@ -196,11 +214,12 @@ def get_plan_progress_info(ws) -> tuple[int, int]:
         return -1, 0
 
 
-def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
+def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=None) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
 
     emit_log(node_id, message)  —— 日志回调，message 可为 str 或 dict
     emit_status(node_id, status) —— 节点状态回调
+    on_finish(success, text)     —— 任务结束回调
     """
     _emit_log = emit_log or (lambda nid, msg: None)
     _emit_status = emit_status or (lambda nid, st: None)
@@ -322,6 +341,28 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
             result["advanced"] = True
         return json.dumps(result, ensure_ascii=False)
 
+    def _finish_task(success: bool, text: str) -> str:
+        if success:
+            try:
+                plan_path = ws.resolve("plan.json")
+                if not plan_path.exists():
+                    return "调用出错：未找到 plan.json 计划文件。"
+                plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                all_done = all(s.get("status") == "success" for s in plan)
+            except Exception as e:
+                return f"调用出错：读取或解析 plan.json 失败: {str(e)}"
+
+            if not all_done:
+                return "调用出错：当前还有未完成的步骤，请先完成所有步骤并调用 check_plan 验证后，再调用 finish_task。"
+
+            if on_finish:
+                on_finish(success=True, text=text)
+            return "任务已成功结束。"
+        else:
+            if on_finish:
+                on_finish(success=False, text=text)
+            return "任务已报错终止。"
+
     return {
         "read_document": _read_document,
         "read_document_structure": _read_document,
@@ -337,6 +378,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None) -> dict:
         "read_context": _read_context,
         "read_plan": _read_plan,
         "check_plan": _check_plan,
+        "finish_task": _finish_task,
     }
 
 

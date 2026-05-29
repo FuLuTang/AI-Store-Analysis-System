@@ -105,6 +105,6 @@ def read_plan_short_impl(ws: Workspace) -> str:
         lines.append(f"剩余 {pending} 步待完成（已通过 check_plan 后会解锁）。")
 
     if not lines:
-        lines.append("所有步骤已完成。")
+        lines.append("所有步骤已完成。请调用 finish_task 结束任务。")
 
     return "\n".join(lines)

@@ -62,7 +62,16 @@ class AgentLoop:
         self.tools = available_tool_call_for_agent(ws)
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
-        self.tool_map = build_tool_map(ws, emit_log=self._emit_log, emit_status=self._emit_status)
+        self._finished = False
+        self._finish_success = True
+        self._finish_text = ""
+
+        def on_finish(success: bool, text: str):
+            self._finished = True
+            self._finish_success = success
+            self._finish_text = text
+
+        self.tool_map = build_tool_map(ws, emit_log=self._emit_log, emit_status=self._emit_status, on_finish=on_finish)
         self._round = 0
         self._progress = 15  # 进度起点（pipeline 已推到 15%）
 
@@ -165,19 +174,18 @@ class AgentLoop:
                                 "content": result,
                             })
 
-                        # plan 全部完成后，注入收尾请求，不继续普通循环
-                        if _is_plan_done(self.ws):
-                            self._emit_log("custom_agent", {"level": "status", "message": "📋 所有步骤已完成，生成最终总结..."})
-                            self.messages.append({
-                                "role": "user",
-                                "content": "所有计划步骤已全部完成。请提供一份简洁的最终总结（约200字），包含健康状态、核心结论和交付物清单。不要调用任何工具。"
-                            })
-                            self._round += 1
-                            sr = self._call_api()
-                            self.messages.append(self._normalize_assistant_message(sr))
-                            self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
-                            self._emit_status("custom_agent", "success")
-                            return self._with_usage(self._parse_final_output(sr.content))
+                            if self._finished:
+                                break
+
+                        if self._finished:
+                            if self._finish_success:
+                                self._emit_log("custom_agent", {"level": "info", "message": f"✅ 任务成功结束"})
+                                self._emit_status("custom_agent", "success")
+                                return self._with_usage(self._parse_final_output(self._finish_text))
+                            else:
+                                self._emit_log("custom_agent", {"level": "error", "message": f"❌ 任务报错终止，原因：{self._finish_text}"})
+                                self._emit_status("custom_agent", "error")
+                                raise RuntimeError(self._finish_text)
 
             except Exception as e:
                 # 用户强制停止 → 让 PipelineAbortedError 透传

@@ -37,6 +37,7 @@ def identity() -> str:
         "你是一个自主经营数据分析 Agent。"
         "你可以通过调用工具来读取文件、查询 DuckDB 数据库、提取文档表格、执行 Python 脚本，最终产出完整的分析报告。"
         "你必须按计划逐步推进，每完成一步后调用 check_plan 验证并前进到下一步。"
+        "当计划的全部步骤完成，或者遇到无法继续的严重错误时，必须调用 finish_task 结束/终止当前任务。"
     )
 
 
@@ -104,6 +105,7 @@ def workspace_summary(ws) -> str:
 def task_instruction() -> str:
     return (
         "按 plan 中的步骤逐步推进。每完成一步后，必须调用 check_plan(step_index) 验证并前进到下一步。"
+        "所有步骤全部完成后（或者遇到不可恢复的错误），调用 finish_task 结束任务。"
     )
 
 

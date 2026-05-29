@@ -30,6 +30,7 @@ def run_precheck(decoded_files: list[dict], product_name: str) -> dict:
     product_name = (product_name or "").strip()
     issues: list[dict] = []
     warnings: list[dict] = []
+    text_source_present = any(str(item.get("name") or "").lower().endswith(".txt") for item in decoded_files)
 
     if not product_name:
         issues.append({"code": "missing_product_name", "message": "缺少商品名称"})
@@ -50,24 +51,49 @@ def run_precheck(decoded_files: list[dict], product_name: str) -> dict:
     matched_row_count = len(matched_rows)
 
     if not tables or total_rows == 0:
-        issues.append({"code": "no_tabular_data", "message": "上传文件中没有可用于分析的表格数据"})
+        if text_source_present:
+            warnings.append({"code": "text_only_input", "message": "文本文件未解析出表格结构，将继续按内容尝试匹配"})
+        else:
+            issues.append({"code": "no_tabular_data", "message": "上传文件中没有可用于分析的表格数据"})
     if product_name and len(_normalize_text(product_name)) < 2:
         issues.append({"code": "product_name_too_short", "message": "商品名称过短，请提供更具体的完整品名"})
     elif product_name and len(_normalize_text(product_name)) < 4:
         warnings.append({"code": "product_name_may_be_broad", "message": "商品名称可能偏宽，建议补充规格或完整品名"})
     if tables and not product_fields:
-        issues.append({"code": "product_field_missing", "message": "未识别到商品名称、品名或 SKU 字段"})
+        if text_source_present:
+            warnings.append({"code": "product_field_missing", "message": "文本中未识别到明确的商品字段，将按全文内容继续匹配"})
+        else:
+            issues.append({"code": "product_field_missing", "message": "未识别到商品名称、品名或 SKU 字段"})
     if tables and not price_fields:
-        issues.append({"code": "price_field_missing", "message": "未识别到价格、售价或单价字段"})
+        if text_source_present:
+            warnings.append({"code": "price_field_missing", "message": "文本中未识别到明确的价格字段，将尝试从价格语句中提取数字"})
+        else:
+            issues.append({"code": "price_field_missing", "message": "未识别到价格、售价或单价字段"})
     if tables and not sales_fields:
-        issues.append({"code": "sales_field_missing", "message": "未识别到销量、销售额或订单量字段"})
+        if text_source_present:
+            warnings.append({"code": "sales_field_missing", "message": "文本中未识别到明确的销量字段，将继续尝试从内容中提取"})
+        else:
+            issues.append({"code": "sales_field_missing", "message": "未识别到销量、销售额或订单量字段"})
     if product_name and product_fields and matched_row_count == 0:
-        issues.append({"code": "product_not_found", "message": "上传文件中没有找到该商品的销售记录"})
+        if text_source_present:
+            warnings.append({"code": "product_not_found", "message": "文本中未找到明确的商品记录，将继续允许后续流程处理"})
+        else:
+            issues.append({"code": "product_not_found", "message": "上传文件中没有找到该商品的销售记录"})
     if tables and not time_fields:
         warnings.append({"code": "time_field_missing", "message": "未识别到日期或时间字段，后续趋势判断会受限"})
 
     valid = not issues
-    match_confidence = _confidence(matched_row_count, total_rows, bool(price_fields), bool(sales_fields))
+    match_confidence = _confidence(
+        matched_row_count,
+        total_rows,
+        bool(price_fields),
+        bool(sales_fields),
+        bool(time_fields),
+        bool(product_fields),
+        product_name,
+    )
+    if text_source_present:
+        match_confidence = min(match_confidence, 0.72 if matched_row_count else 0.55)
 
     return {
         "status": "ok" if valid else "failed",
@@ -78,11 +104,11 @@ def run_precheck(decoded_files: list[dict], product_name: str) -> dict:
             "message": "商品名称足够具体" if product_name and len(_normalize_text(product_name)) >= 4 else "商品名称需要更具体",
         },
         "fileQuality": {
-            "status": "ok" if tables and total_rows > 0 else "failed",
-            "message": f"文件可解析，识别到 {len(tables)} 张表、{total_rows} 行数据" if tables else "文件未解析出表格数据",
+            "status": "ok" if tables and total_rows > 0 else ("warning" if text_source_present else "failed"),
+            "message": f"文件可解析，识别到 {len(tables)} 张表、{total_rows} 行数据" if tables else ("文本文件已接收，正在按内容匹配" if text_source_present else "文件未解析出表格数据"),
         },
         "productDataMatch": {
-            "status": "ok" if matched_row_count > 0 else "failed",
+            "status": "ok" if matched_row_count > 0 else ("warning" if text_source_present else "failed"),
             "matchedRows": matched_row_count,
             "confidence": match_confidence,
         },
@@ -111,6 +137,8 @@ def inspect_uploaded_files(decoded_files: list[dict], max_rows_per_table: int = 
                 tables.extend(_json_to_tables(raw, os.path.splitext(name)[0], max_rows_per_table))
             elif lower.endswith(".csv"):
                 tables.append(_csv_to_table(data, name, max_rows_per_table))
+            elif lower.endswith(".txt"):
+                tables.extend(_txt_to_tables(data, name, max_rows_per_table))
             elif lower.endswith((".xlsx", ".xls")):
                 tables.extend(_xlsx_to_tables(data, name, max_rows_per_table))
         except Exception as exc:
@@ -131,9 +159,7 @@ def build_basic_recommendation(inspection: dict, product_name: str, candidate_co
 
     price_values: list[float] = []
     for row in matched_rows:
-        value = _to_number(row.get(price_field)) if price_field else None
-        if value is not None and value > 0:
-            price_values.append(value)
+        price_values.extend(_extract_price_candidates_from_row(row, price_field))
 
     if not price_values:
         raise ValueError("目标商品没有可用的历史价格数据")
@@ -153,7 +179,15 @@ def build_basic_recommendation(inspection: dict, product_name: str, candidate_co
             "price": price,
             "unit": "元",
             "reason": "基于目标商品历史价格分布生成的基准推荐，后续可替换为价格弹性或曲线拟合模型",
-            "confidence": _confidence(len(matched_rows), sum(len(t["rows"]) for t in tables), True, bool(sales_fields)),
+            "confidence": _confidence(
+                len(matched_rows),
+                sum(len(t["rows"]) for t in tables),
+                bool(price_values),
+                bool(sales_fields),
+                bool(time_fields),
+                bool(product_fields),
+                product_name,
+            ),
         })
 
     return {
@@ -227,6 +261,23 @@ def _xlsx_to_tables(data: bytes, name: str, max_rows: int) -> list[dict]:
     return tables
 
 
+def _txt_to_tables(data: bytes, name: str, max_rows: int) -> list[dict]:
+    text = _decode_text(data)
+    lines = [line.strip() for line in text.splitlines()]
+    rows: list[dict] = []
+    for idx, line in enumerate(lines, start=1):
+        if not line:
+            continue
+        row: dict[str, Any] = {"line_no": idx, "content": line}
+        row.update(_extract_text_row_fields(line))
+        rows.append(row)
+        if len(rows) >= max_rows:
+            break
+    if not rows and text.strip():
+        rows.append({"line_no": 1, "content": text.strip()})
+    return [{"name": name, "rows": rows}]
+
+
 def _dict_rows(values: list[Any]) -> list[dict]:
     rows: list[dict] = []
     for value in values:
@@ -244,6 +295,90 @@ def _collect_fields(tables: list[dict]) -> list[str]:
             if isinstance(row, dict):
                 fields.update(str(key) for key in row.keys())
     return sorted(fields)
+
+
+def _decode_text(data: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            return data.decode(encoding)
+        except Exception:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _extract_text_row_fields(line: str) -> dict[str, str]:
+    row: dict[str, str] = {}
+    parts = re.split(r"[,\t|;；]+", line)
+    for part in parts:
+        segment = part.strip()
+        if not segment:
+            continue
+        if any(sep in segment for sep in (":", "：", "=")):
+            key, value = re.split(r"[:：=]", segment, maxsplit=1)
+            mapped = _map_text_field_name(key)
+            if mapped and value.strip():
+                row[mapped] = value.strip()
+            elif key.strip() and value.strip():
+                row[key.strip()] = value.strip()
+
+    if "商品名称" not in row:
+        value = _extract_text_value(line, PRODUCT_FIELD_KEYWORDS)
+        if value:
+            row["商品名称"] = value
+    if "价格" not in row:
+        value = _extract_numeric_text_value(line, PRICE_FIELD_KEYWORDS)
+        if value:
+            row["价格"] = value
+    if "销量" not in row:
+        value = _extract_numeric_text_value(line, SALES_FIELD_KEYWORDS)
+        if value:
+            row["销量"] = value
+    if "日期" not in row:
+        value = _extract_text_value(line, TIME_FIELD_KEYWORDS)
+        if value:
+            row["日期"] = value
+    return row
+
+
+def _map_text_field_name(key: str) -> str | None:
+    normalized = _normalize_text(key)
+    if any(keyword in normalized for keyword in PRODUCT_FIELD_KEYWORDS):
+        return "商品名称"
+    if any(keyword in normalized for keyword in PRICE_FIELD_KEYWORDS):
+        return "价格"
+    if any(keyword in normalized for keyword in SALES_FIELD_KEYWORDS):
+        return "销量"
+    if any(keyword in normalized for keyword in TIME_FIELD_KEYWORDS):
+        return "日期"
+    return None
+
+
+def _extract_text_value(line: str, keywords: tuple[str, ...]) -> str:
+    label_pattern = "|".join(re.escape(keyword) for keyword in keywords)
+    patterns = [
+        rf"(?:{label_pattern})\s*[:：=]?\s*([^,，;；|\t]+)",
+        rf"(?:{label_pattern})\s*(?:是|为|：|:)?\s*([^,，;；|\t]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, line, flags=re.IGNORECASE)
+        if match:
+            value = match.group(1).strip()
+            if value:
+                return value
+    return ""
+
+
+def _extract_numeric_text_value(line: str, keywords: tuple[str, ...]) -> str:
+    label_pattern = "|".join(re.escape(keyword) for keyword in keywords)
+    patterns = [
+        rf"(?:{label_pattern})\s*[:：=]?\s*(?:￥|¥|RMB|元)?\s*(-?\d+(?:\.\d+)?)",
+        rf"(?:{label_pattern})\s*(?:是|为|：|:)?\s*(?:￥|¥|RMB|元)?\s*(-?\d+(?:\.\d+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, line, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def _match_fields(fields: list[str], keywords: tuple[str, ...]) -> list[str]:
@@ -293,15 +428,40 @@ def _to_number(value: Any) -> float | None:
         return None
 
 
-def _confidence(matched_rows: int, total_rows: int, has_price: bool, has_sales: bool) -> float:
-    score = 0.4
-    if matched_rows:
-        score += min(0.3, matched_rows / max(total_rows, 1))
+def _confidence(
+    matched_rows: int,
+    total_rows: int,
+    has_price: bool,
+    has_sales: bool,
+    has_time: bool = False,
+    has_product: bool = False,
+    product_name: str = "",
+) -> float:
+    score = 0.2
+    normalized_name = _normalize_text(product_name)
+    if normalized_name:
+        if len(normalized_name) >= 12:
+            score += 0.16
+        elif len(normalized_name) >= 8:
+            score += 0.12
+        elif len(normalized_name) >= 4:
+            score += 0.08
+        else:
+            score += 0.02
+    if total_rows > 0 and matched_rows:
+        coverage = matched_rows / max(total_rows, 1)
+        score += min(0.24, coverage * 0.35)
+    elif total_rows > 0:
+        score += 0.02
+    if has_product:
+        score += 0.08
     if has_price:
-        score += 0.15
+        score += 0.16
     if has_sales:
         score += 0.1
-    return round(min(score, 0.95), 2)
+    if has_time:
+        score += 0.05
+    return round(min(max(score, 0.05), 0.95), 2)
 
 
 def _dedupe_prices(values: list[float]) -> list[float]:
@@ -313,3 +473,53 @@ def _dedupe_prices(values: list[float]) -> list[float]:
             result.append(rounded)
             seen.add(rounded)
     return result
+
+
+def _extract_price_candidates_from_row(row: dict, price_field: str) -> list[float]:
+    candidates: list[float] = []
+    if price_field:
+        value = _to_number(row.get(price_field))
+        if value is not None:
+            candidates.append(value)
+    for key in ("价格", "售价", "单价", "零售价", "retail", "sale_price", "price"):
+        value = _to_number(row.get(key))
+        if value is not None:
+            candidates.append(value)
+    content = str(row.get("content") or "")
+    if content:
+        candidates.extend(_extract_price_numbers_from_text(content))
+    if not candidates:
+        for key, value in row.items():
+            if key == "line_no":
+                continue
+            if isinstance(value, (int, float)):
+                number = float(value)
+                if number > 0:
+                    candidates.append(number)
+            elif isinstance(value, str):
+                candidates.extend(_extract_price_numbers_from_text(value))
+    return _dedupe_prices(candidates)
+
+
+def _extract_price_numbers_from_text(text: str) -> list[float]:
+    if not text:
+        return []
+    price_matches: list[float] = []
+    keyword_pattern = r"(?:售价|价格|单价|零售价|price|sale_price|retail)"
+    labeled_patterns = [
+        rf"{keyword_pattern}\s*[:：=]?\s*(?:￥|¥|RMB|元)?\s*(-?\d+(?:\.\d+)?)",
+        rf"(?:￥|¥|RMB|元)\s*(-?\d+(?:\.\d+)?)",
+    ]
+    for pattern in labeled_patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            number = _to_number(match.group(1))
+            if number is not None:
+                price_matches.append(number)
+    if price_matches:
+        return price_matches
+    generic_numbers: list[float] = []
+    for match in re.finditer(r"-?\d+(?:\.\d+)?", text):
+        number = _to_number(match.group(0))
+        if number is not None and number > 0:
+            generic_numbers.append(number)
+    return generic_numbers

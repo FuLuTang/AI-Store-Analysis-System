@@ -66,7 +66,7 @@ def read_plan_short_impl(ws: Workspace) -> str:
 
     展示规则：
       只展示当前 in_progress（或 failed）步骤的完整信息，
-      已完成和 pending 步骤不展示任何细节，只计个数。
+      已完成和 pending 步骤不展示任何细节，只显示title。
       目的是强制 LLM 必须调 check_plan 才能解锁下一步的指令。
     """
 
@@ -93,7 +93,7 @@ def read_plan_short_impl(ws: Workspace) -> str:
             if errors:
                 current_lines.append(f"errors: {'; '.join(errors)}")
             current_lines.append("")
-            current_lines.append(f"完成后调 check_plan({idx}) 验证并查看下一步。")
+            current_lines.append(f"完成后调 check_plan({idx}) 验证并查看下一步的detail信息。")
         elif status == "pending":
             pending_lines.append(f"- [待做步骤] {step['title']}")
 

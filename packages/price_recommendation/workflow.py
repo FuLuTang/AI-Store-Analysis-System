@@ -57,7 +57,7 @@ def run_price_recommendation_workflow(
     plan = copy.deepcopy(PRICE_PLAN_TEMPLATE)
     design_plan_impl(ws, json.dumps(plan, ensure_ascii=False))
     
-    plan_path = ws.resolve("output/plan.json")
+    plan_path = ws.resolve("plan.json")
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     if plan and plan[0]["status"] == "pending":
         plan[0]["status"] = "in_progress"
@@ -195,7 +195,7 @@ def run_price_recommendation_workflow(
 
 def _is_plan_done(ws: Workspace) -> bool:
     try:
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return False
         plan = json.loads(plan_path.read_text(encoding="utf-8"))

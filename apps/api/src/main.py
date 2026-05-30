@@ -40,6 +40,7 @@ from packages.price_recommendation.service import (
     run_price_precheck,
     run_price_workflow,
 )
+from apps.api.src.chat_bridge import register_chat_routes
 
 load_dotenv()
 
@@ -421,7 +422,6 @@ class SessionState:
         self.account_slug = account_slug
         self.account_dir = account_dir
         self.cache_dir = account_dir / "cache"
-        self.profile_path = account_dir / "profile.json"
         self.status = "idle"  # idle, queued, running, completed, error, aborted, interrupted
         self.error_message = ""
         self.logs = []
@@ -462,18 +462,7 @@ class SessionManager:
         }
 
     def _load_profile(self, account_dir: Path) -> dict:
-        profile_path = account_dir / "profile.json"
-        cfg = self._default_config()
-        if profile_path.exists():
-            try:
-                profile = json.loads(profile_path.read_text(encoding="utf-8"))
-                if isinstance(profile, dict):
-                    cfg["reasoningEffort"] = normalize_reasoning_effort(
-                        profile.get("reasoningEffort") or profile.get("reasoning_effort")
-                    )
-            except Exception:
-                pass
-        return cfg
+        return self._default_config()
 
     def _account_dir(self, user_key: str) -> tuple[str, str, Path]:
         key_hash = hash_user_key(user_key)
@@ -548,8 +537,8 @@ class SessionManager:
                 _save_account_json(account_dir, user_key, key_hash)
                 return existing
 
-            profile_path = account_dir / "profile.json"
-            if not create_if_missing and not profile_path.exists():
+            account_json_path = account_dir / "account.json"
+            if not create_if_missing and not account_json_path.exists():
                 raise KeyError("invalid_key")
 
             account_dir.mkdir(parents=True, exist_ok=True)
@@ -664,6 +653,8 @@ def add_log(session: SessionState, node_id: str, message):
             payload["error_details"] = _mask_sensitive_text(str(message["error_details"]))
         if "progress" in message:
             payload["progress"] = message["progress"]
+        if "terminal" in message:
+            payload["terminal"] = bool(message["terminal"])
     else:
         level = "info"
         safe_msg = _mask_sensitive_text(str(message))
@@ -754,11 +745,6 @@ async def auth_register(request: Request):
     if isinstance(api_key, str) and api_key.strip():
         set_global_api_key(api_key)
 
-    try:
-        session_manager.save_profile(session)
-    except Exception as e:
-        session_manager.drop_session(session.key_hash)
-        raise HTTPException(status_code=500, detail=f"账号初始化失败: {str(e)}")
     return {"userKey": user_key, "status": "ok"}
 
 
@@ -854,8 +840,8 @@ def get_status(
                 pass
                 
         ws_dir = run_dir / "workspace"
-        short_path = ws_dir / "summary_short.json"
-        full_path = ws_dir / "summary.md"
+        short_path = ws_dir / "output" / "summary_short.json"
+        full_path = ws_dir / "output" / "summary.md"
         if short_path.exists():
             result_str = short_path.read_text(encoding="utf-8")
         if full_path.exists():
@@ -990,6 +976,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
                 _save_session_json(session)
                 return
             session.status = "completed"
+        add_log(session, "system", {"level": "status", "message": "", "progress": 100, "terminal": True})
         _update_run_status_in_meta(session, "completed")
         save_latest_report(session)
         _save_session_json(session)
@@ -1025,6 +1012,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             
     except (PipelineAbortedError, asyncio.CancelledError):
         add_log(session, "system", "⚠️ 任务被用户强制终止。")
+        add_log(session, "system", {"level": "status", "message": "", "terminal": True})
         with session.runtime_lock:
             session.status = "aborted"
             session.error_message = "任务被用户强行终止。"
@@ -1032,6 +1020,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         _save_session_json(session)
     except Exception as e:
         add_log(session, "system", f"管线执行失败: {str(e)}")
+        add_log(session, "system", {"level": "status", "message": "", "terminal": True})
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
@@ -1347,6 +1336,7 @@ def get_reports_list(
         run_id = r["runId"]
         sign = generate_share_sign(run_id)
         r["shareUrl"] = f"{origin}/public.html?run_id={run_id}&sign={sign}"
+        r["downloadUrl"] = f"{origin}/api/reports/public/download?run_id={run_id}&sign={sign}"
         
     return {"status": "ok", "runs": runs}
 
@@ -1395,10 +1385,12 @@ async def toggle_report_public(
             except Exception:
                 pass
                 
+    download_url = f"{origin}/api/reports/public/download?run_id={run_id}&sign={sign}"
     return {
         "status": "ok",
         "isPublic": is_public,
-        "shareUrl": share_url
+        "shareUrl": share_url,
+        "downloadUrl": download_url
     }
 
 
@@ -1496,19 +1488,29 @@ def get_public_report_status(
     full_str = sdata.get("fullResult")
     
     ws_dir = run_dir / "workspace"
-    short_path = ws_dir / "summary_short.json"
-    full_path = ws_dir / "summary.md"
+    short_path = ws_dir / "output" / "summary_short.json"
+    full_path = ws_dir / "output" / "summary.md"
     if short_path.exists():
         result_str = short_path.read_text(encoding="utf-8")
     if full_path.exists():
         full_str = full_path.read_text(encoding="utf-8")
         
+    user_key = target_account_dir.name
+    account_json_path = target_account_dir / "account.json"
+    if account_json_path.exists():
+        try:
+            adata = json.loads(account_json_path.read_text(encoding="utf-8"))
+            user_key = adata.get("keyMask", user_key)
+        except Exception:
+            pass
+
     return {
         "status": sdata.get("status", "completed"),
         "errorMessage": sdata.get("errorMessage", ""),
         "result": result_str,
         "fullResult": full_str,
-        "runId": run_id
+        "runId": run_id,
+        "userKey": user_key
     }
 
 
@@ -1639,6 +1641,113 @@ def get_params_presets():
             except Exception as e:
                 logger.warning("预设加载失败: %s (%s)", f_path, e)
     return {"presets": presets}
+
+
+# ── 新增：服务运行期生成的静态资产（如分析图表）的路由 ──
+@app.get("/api/reports/{run_id}/assets/{filename}")
+def get_report_asset(
+    run_id: str,
+    filename: str,
+    x_fzt_key: Optional[str] = Header(default=None),
+    x_fzt_key_query: Optional[str] = Query(default=None, alias="x-fzt-key")
+):
+    key = x_fzt_key or x_fzt_key_query
+    session = resolve_session(key)
+
+    # 路径安全检查，防止目录遍历攻击
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    target_run_dir = session.account_dir / "runs" / "diagnosis" / run_id
+    if not target_run_dir.exists():
+        target_run_dir = session.account_dir / "runs" / run_id
+        if not target_run_dir.exists():
+            raise HTTPException(status_code=404, detail="Run not found")
+
+    asset_path = target_run_dir / "workspace" / "output" / filename
+    if not asset_path.exists() or not asset_path.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    # 根据后缀决定 content-type
+    media_type = "application/octet-stream"
+    ext = filename.lower()
+    if ext.endswith(".png"):
+        media_type = "image/png"
+    elif ext.endswith((".jpg", ".jpeg")):
+        media_type = "image/jpeg"
+    elif ext.endswith(".svg"):
+        media_type = "image/svg+xml"
+    elif ext.endswith(".gif"):
+        media_type = "image/gif"
+
+    return FileResponse(asset_path, media_type=media_type)
+
+
+@app.get("/api/reports/public/{run_id}/assets/{filename}")
+def get_public_report_asset(
+    run_id: str,
+    filename: str,
+    sign: str = Query(...)
+):
+    # 校验签名和公开状态
+    expected_sign = generate_share_sign(run_id)
+    if sign != expected_sign:
+        raise HTTPException(status_code=403, detail="签名不匹配，无权访问")
+
+    target_run = None
+    target_account_dir = None
+
+    for account_dir in ACCOUNTS_DIR.iterdir():
+        if account_dir.is_dir():
+            runs = _load_runs(account_dir)
+            for r in runs:
+                if r.get("runId") == run_id:
+                    target_run = r
+                    target_account_dir = account_dir
+                    break
+            if target_run:
+                break
+
+    if not target_run or not target_account_dir:
+        raise HTTPException(status_code=404, detail="未找到该运行批次")
+
+    if not target_run.get("isPublic", False):
+        raise HTTPException(status_code=403, detail="该分析报告未公开分享")
+
+    # 路径安全检查
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    task_type = target_run.get("taskType", "diagnosis")
+    run_dir = target_account_dir / "runs" / task_type / run_id
+    if not run_dir.exists():
+        run_dir = target_account_dir / "runs" / run_id
+
+    asset_path = run_dir / "workspace" / "output" / filename
+    if not asset_path.exists() or not asset_path.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    # 根据后缀决定 content-type
+    media_type = "application/octet-stream"
+    ext = filename.lower()
+    if ext.endswith(".png"):
+        media_type = "image/png"
+    elif ext.endswith((".jpg", ".jpeg")):
+        media_type = "image/jpeg"
+    elif ext.endswith(".svg"):
+        media_type = "image/svg+xml"
+    elif ext.endswith(".gif"):
+        media_type = "image/gif"
+
+    return FileResponse(asset_path, media_type=media_type)
+
+
+register_chat_routes(
+    app,
+    resolve_session=resolve_session,
+    get_llm_preset=get_llm_preset,
+    normalize_reasoning_effort=normalize_reasoning_effort,
+)
 
 
 # 挂载静态文件 (使用绝对路径更稳健)

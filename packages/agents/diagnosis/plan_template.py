@@ -21,30 +21,30 @@ PLAN_TEMPLATE = [
          "    assert cnt > 0, f'{t} 行数为 0'\n"
      ),
      "errors": []},
-    {"title": "算指标，写入 output/指标.json",
+    {"title": "算指标，写入 指标.json",
      "detail": (
          "读 指标计算文档.md 了解公式，DESCRIBE 表结构看实际列名，直接写 SQL 用实际列名（双引号包裹）算指标。"
-         "每算几个就用 write_file 追加到 output/指标.json 里存着。"
+         "每算几个就用 write_file 追加到 指标.json 里存着。"
          "每条 metric 要有 metric_id/name/value/unit/status/reason/evidence，"
          "status 只能是 pass/attention/warning/uncountable 四种。"
          "完成后调 check_plan(1) 验证。"
      ),
      "status": "pending",
      "check": (
-         "# 检查 output/指标.json 存在\n"
+         "# 检查 指标.json 存在\n"
          "import os\n"
-         "assert os.path.exists('output/指标.json'), '指标.json 还没写'\n"
+         "assert os.path.exists('指标.json'), '指标.json 还没写'\n"
      ),
      "errors": []},
-    {"title": "分析深层原因，写诊断报告 → summary.md",
+    {"title": "分析深层原因，写诊断报告 → output/summary.md",
      "detail": (
          "根据算出来的指标，分析背后的原因——哪些指标异常？为什么？有什么趋势？"
-         "结合行业常识和数据证据，写一篇完整的 Markdown 经营诊断报告，用 write_file 保存到 summary.md。"
-         "报告格式分两大部分："
+         "结合行业常识和数据证据，写一篇完整的 Markdown 经营诊断报告，用 write_file 保存到 output/summary.md。"
+         "报告格式分两部分："
          "# 第一部分：现状诊断报告 — "
          "1) 核心经营判断（涨跌稳定波动，可能原因，带emoji如📈📉）；"
          "2) 核心指标逐项解读（优先关注 attention/warning 项）；"
-         "3) 关联分析（多指标交叉解读，如营收涨但毛利跌说明什么）；"
+         "3) 关联分析（多指标交叉解读，如营收涨变毛利跌说明什么）；"
          "4) 风险预警。"
          "# 第二部分：优化行动方案 — "
          "1) 紧急事项（高风险指标对应的动作）；"
@@ -59,28 +59,26 @@ PLAN_TEMPLATE = [
      ),
      "status": "pending",
      "check": (
-         "# 检查 summary.md 存在\n"
+         "# 检查 output/summary.md 存在\n"
          "import os\n"
-         "assert os.path.exists('summary.md'), 'summary.md 还没写'\n"
+         "assert os.path.exists('output/summary.md'), 'summary.md 还没写'\n"
      ),
      "errors": []},
-    {"title": "输出精简视图 + 最终产物",
+    {"title": "输出精简视图",
      "detail": (
-         "写 summary_short.json — 给管理层看的精简视图，严格 JSON 格式："
+         "写 output/summary_short.json — 给管理层看的精简视图，严格 JSON 格式："
          '{\"health_status\": \"1-2词整体状态\", \"overview_text\": \"大白话说当前状况\", '
          '\"cards\": [{\"title\": \"问题标题\", \"explanation\": \"咋回事\", '
-         '\"suggestion\": \"咋办\", \"evidence\": \"数据证据（优先 Markdown 迷你表格）\", '
+         '\"suggestion\": \"咋办\", \"evidence\": \"数据证据（优先 Markdown 表格，即使是单列数据也可以用表格，但是不推荐列数超过5，行数也别太多，可以用有代表性的举例。可以用 文字+表格）\", '
          '\"color\": \"red/yellow/green/blue/pink\"}]}。'
          "cards 尽量别超过 7 个。"
          "完成后调 check_plan(3) 验证。"
      ),
      "status": "pending",
      "check": (
-         "# 检查三个产物都存在\n"
+         "# 检查报告产物\n"
          "import os\n"
-         "assert os.path.exists('summary.md'), 'summary.md 不存在'\n"
-         "assert os.path.exists('summary_short.json'), 'summary_short.json 不存在'\n"
-         "assert os.path.exists('output/result.json'), 'result.json 不存在'\n"
+         "assert os.path.exists('output/summary_short.json'), 'summary_short.json 不存在'\n"
      ),
      "errors": []},
 ]

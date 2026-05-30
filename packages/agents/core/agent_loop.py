@@ -499,7 +499,7 @@ class AgentLoop:
 def _is_plan_done(ws) -> bool:
     """检查 plan 中所有步骤是否都已完成。"""
     try:
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return False
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -511,7 +511,7 @@ def _is_plan_done(ws) -> bool:
 def _plan_step_tag(ws) -> str:
     """读取 plan.json，返回短标签，如 '[步骤3/6: 展平数据] '。"""
     try:
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return ""
         plan = json.loads(plan_path.read_text(encoding="utf-8"))

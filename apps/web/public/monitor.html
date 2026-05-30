@@ -226,6 +226,7 @@
             <a href="monitor.html" class="active">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
+                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm); margin-right: 4px;">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
@@ -351,7 +352,12 @@
             if (!key) { window.location.href = '/login.html'; return; }
             try {
                 const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
-                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; }
+                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; return; }
+                const data = await r.json();
+                if (data.status === 'ok' && data.userKey) {
+                    const disp = document.getElementById('userKeyDisplay');
+                    if (disp) disp.innerText = `密钥: ${data.userKey}`;
+                }
             } catch(e) { window.location.href = '/login.html'; }
         })();
 

@@ -306,11 +306,16 @@ def build_recommendation_from_points(
     recommendations = []
     total_points = max(len(scored_points), 1)
     for rank, item in enumerate(scored_points[:max(1, candidate_count)], start=1):
+        reason = (
+            f"归一化后销售额最高，折算销量 {item['normalizedQty']:.2f}"
+            if rank == 1
+            else f"归一化后销售额第 {rank} 高，折算销量 {item['normalizedQty']:.2f}"
+        )
         recommendations.append({
             "rank": rank,
             "price": item["price"],
             "unit": "元",
-            "reason": f"归一化后销售额最高，折算销量 {item['normalizedQty']:.2f}",
+            "reason": reason,
             "confidence": _confidence(
                 evidence.get("matchedRows", 0),
                 max(evidence.get("rawPointCount", 0), total_points),

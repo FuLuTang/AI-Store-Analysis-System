@@ -87,6 +87,7 @@
                 <span>门店 AI 智能诊断 · 报告预览</span>
             </div>
             <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
@@ -138,6 +139,26 @@
     </div>
 
     <script>
+        // ========== marked 图片渲染自定义 ==========
+        const _rewriteImageSrc = function(href) {
+            if (href && (href.startsWith('./') || (!href.includes('://') && !href.startsWith('data:')))) {
+                const filename = href.replace(/^\.\//, '');
+                return `/api/reports/public/${runId}/assets/${encodeURIComponent(filename)}?sign=${encodeURIComponent(sign || '')}`;
+            }
+            return href;
+        };
+        marked.use({
+            renderer: {
+                image(token) {
+                    const href = (typeof token === 'object' && token !== null) ? token.href : token;
+                    const title = (typeof token === 'object' && token !== null) ? (token.title || '') : (arguments[1] || '');
+                    const text = (typeof token === 'object' && token !== null) ? (token.text || '') : (arguments[2] || '');
+                    const src = _rewriteImageSrc(href);
+                    return `<img src="${src}" alt="${text}" title="${title}" style="max-width:100%; height:auto; display:block; margin:1.5rem auto; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.12); border:1px solid var(--border-color);" />`;
+                }
+            }
+        });
+
         // ========== 主题切换 ==========
         window.toggleTheme = function() {
             const isDark = document.documentElement.classList.toggle('dark-theme');
@@ -190,6 +211,10 @@
                 if (!res.ok) throw new Error(`请求出错(${res.status})`);
                 
                 const data = await res.json();
+                if (data.userKey) {
+                    const disp = document.getElementById('userKeyDisplay');
+                    if (disp) disp.innerText = `所属账号: ${data.userKey}`;
+                }
                 
                 if (data.status === 'running' || data.status === 'queued') {
                     // 分析生成中

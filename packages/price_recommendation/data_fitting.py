@@ -273,11 +273,18 @@ def _build_recommendations(
     recommendations: list[dict[str, Any]] = []
     for rank, item in enumerate(scored_points[:max(1, candidate_count)], start=1):
         metric_value = item[metric_key]
-        reason = (
-            f"利润最高，利润值 {metric_value:.2f}"
-            if purchase_price is not None
-            else f"进货价缺失，按销售额最高选取，销售额 {metric_value:.2f}"
-        )
+        if rank == 1:
+            reason = (
+                f"利润最高，利润值 {metric_value:.2f}"
+                if purchase_price is not None
+                else f"进货价缺失，按销售额最高选取，销售额 {metric_value:.2f}"
+            )
+        else:
+            reason = (
+                f"利润第 {rank} 高，利润值 {metric_value:.2f}"
+                if purchase_price is not None
+                else f"进货价缺失，按销售额第 {rank} 高选取，销售额 {metric_value:.2f}"
+            )
         recommendations.append({
             "rank": rank,
             "price": item["price"],

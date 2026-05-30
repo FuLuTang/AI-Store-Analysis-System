@@ -199,7 +199,7 @@ def get_step_milestone(step_idx: int, total_steps: int) -> int:
 def get_plan_progress_info(ws) -> tuple[int, int]:
     """读取 plan.json，返回 (当前进行中/待执行步骤的索引, 总步骤数)。"""
     try:
-        plan_path = ws.resolve("output/plan.json")
+        plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return -1, 0
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -213,14 +213,22 @@ def get_plan_progress_info(ws) -> tuple[int, int]:
 
 
 def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=None) -> dict:
-    """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。"""
+    """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
+
+    emit_log(node_id, message)  —— 日志回调，message 可为 str 或 dict
+    emit_status(node_id, status) —— 节点状态回调
+    on_finish(success, text)     —— 任务结束回调
+    """
+    _emit_log = emit_log or (lambda nid, msg: None)
+    _emit_status = emit_status or (lambda nid, st: None)
+
     from .tools.impl.doc_impl import read_document_impl, extract_document_tables_impl
     from .tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
     from .tools.impl.python_impl import run_python_impl
     from .tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
     from .tools.impl.context_impl import read_context_impl
     from .tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
-    from .tools.impl.plan_check_impl import read_plan_impl, check_plan_impl
+    from .tools.impl.plan_check_impl import read_plan_impl, check_plan_impl, run_step_check
     from .tools.impl.validate_impl import validate_result_impl
 
     def _read_document(path: str) -> str:
@@ -256,13 +264,65 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
         return read_context_impl(ws, doc_name)
 
     def _read_plan() -> str:
-        plan = read_plan_impl(ws)
-        if plan is None:
+        plan_path = ws.resolve("plan.json")
+        if not plan_path.exists():
             return "(plan 尚未初始化)"
-        return json.dumps(plan, ensure_ascii=False, indent=2)
+        return json.dumps(json.loads(plan_path.read_text(encoding="utf-8")), ensure_ascii=False, indent=2)
 
     def _check_plan(step_index: int) -> str:
-        result = check_plan_impl(ws, step_index, emit_log=emit_log)
+        plan_path = ws.resolve("plan.json")
+        if not plan_path.exists():
+            return json.dumps({"error": "plan.json not found"})
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if step_index < 0 or step_index >= len(plan):
+            return json.dumps({"error": f"step_index {step_index} out of range (0-{len(plan)-1})"})
+        step = plan[step_index]
+        ok, errors = run_step_check(ws, step)
+        step["errors"] = errors
+        step["status"] = "success" if ok else "failed"
+
+        # 节点 ID 映射: step_index 0→custom_step0, 1→custom_step1 ...
+        node_id = f"custom_step{step_index}"
+        total_steps = len(plan)
+
+        if ok:
+            done_pct = get_step_milestone(step_index, total_steps)
+            _emit_status(node_id, "success")
+            # 推进下一步
+            next_idx = None
+            for i in range(step_index + 1, total_steps):
+                if plan[i]["status"] == "pending":
+                    plan[i]["status"] = "in_progress"
+                    next_idx = i
+                    break
+            if next_idx is not None:
+                next_node = f"custom_step{next_idx}"
+                _emit_status(next_node, "active")
+                _emit_log(next_node, {
+                    "level": "status",
+                    "message": f"[步骤 {next_idx + 1}/{total_steps}] {plan[next_idx].get('title', '')} 开始执行...",
+                    "step": {"index": next_idx, "title": plan[next_idx].get("title", "")},
+                    "progress": done_pct
+                })
+            else:
+                # 所有步骤完成
+                _emit_log(node_id, {
+                    "level": "status",
+                    "message": f"[步骤 {step_index + 1}/{total_steps}] 全部步骤已完成 ✅",
+                    "progress": done_pct
+                })
+        else:
+            _emit_status(node_id, "error")
+            _emit_log(node_id, {
+                "level": "error",
+                "message": f"[步骤 {step_index + 1}/{total_steps}] {step.get('title', '')} 验证失败",
+                "error_details": "; ".join(errors) if errors else "未知错误"
+            })
+
+        plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        result = {"step_index": step_index, "ok": ok, "errors": errors}
+        if ok:
+            result["advanced"] = True
         return json.dumps(result, ensure_ascii=False)
 
     def _validate_result(result_json: str) -> str:
@@ -275,7 +335,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
     def _finish_task(success: bool, text: str) -> str:
         if success:
             try:
-                plan_path = ws.resolve("output/plan.json")
+                plan_path = ws.resolve("plan.json")
                 if not plan_path.exists():
                     return "调用出错：未找到 plan.json 计划文件。"
                 plan = json.loads(plan_path.read_text(encoding="utf-8"))

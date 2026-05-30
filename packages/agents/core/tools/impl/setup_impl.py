@@ -75,36 +75,44 @@ def read_plan_short_impl(ws: Workspace) -> str:
         return "(plan 尚未初始化)"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
-    total = len(plan)
-    done = 0
-    pending = 0
-
-    lines: list[str] = []
+    done_lines = []
+    current_lines = []
+    pending_lines = []
 
     for idx, step in enumerate(plan):
         status = step["status"]
         if status == "success":
-            done += 1
-            continue  # 已完成的不展示
+            done_lines.append(f"- [已完成步骤] {step['title']}")
         elif status in ("in_progress", "partial", "failed"):
-            lines.append(f"--- 当前步骤：{step['title']} ---")
-            lines.append(f"detail: {step['detail']}")
+            current_lines.append(f"--- 当前步骤：{step['title']} ---")
+            current_lines.append(f"detail: {step['detail']}")
             check = step.get("check", "")
             if check:
-                lines.append(f"check: {check.strip().split(chr(10))[0]}")
+                current_lines.append(f"check: {check.strip().split(chr(10))[0]}")
             errors = step.get("errors", [])
             if errors:
-                lines.append(f"errors: {'; '.join(errors)}")
-            lines.append("")
-            lines.append(f"完成后调 check_plan({idx}) 验证并查看下一步。")
+                current_lines.append(f"errors: {'; '.join(errors)}")
+            current_lines.append("")
+            current_lines.append(f"完成后调 check_plan({idx}) 验证并查看下一步的detail信息。")
         elif status == "pending":
-            pending += 1
-            continue  # 不展示
+            pending_lines.append(f"- [待做步骤] {step['title']}")
 
-    if pending:
-        lines.append(f"剩余 {pending} 步待完成（已通过 check_plan 后会解锁）。")
+    final_lines = []
+    if done_lines:
+        final_lines.append("已完成步骤：")
+        final_lines.extend(done_lines)
+        final_lines.append("")
 
-    if not lines:
-        lines.append("所有步骤已完成。")
+    if current_lines:
+        final_lines.extend(current_lines)
 
-    return "\n".join(lines)
+    if pending_lines:
+        if current_lines:
+            final_lines.append("")
+        final_lines.append("后续待做步骤：")
+        final_lines.extend(pending_lines)
+
+    if not current_lines:
+        final_lines.append("所有步骤已完成。请调用 finish_task 结束任务。")
+
+    return "\n".join(final_lines)

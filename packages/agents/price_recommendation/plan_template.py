@@ -39,7 +39,7 @@ PRICE_PLAN_TEMPLATE = [
         "title": "数据整理、归一与换算",
         "detail": (
             "基于数据库，写参数&算法，把其他店面的销量数据换算成适配于本店计算的，一般来说可以考虑店铺规模，所以是直接成比例的。门店折算和本店适配销量换算。如果真的实在部分无法直接使用本店和他店共有的商品的话，可以尝试用其他商品和店间接中转的方式来算，就需要你开动脑筋了。"
-            "每个店一套points，在文件中用[x店数据,x店数据,...]放起来即可，产出 output/normalized_price_points.json。"
+            "描述所有参考的点时，每个店一套points，在json的对应字段中用[]放起来即可，产出 output/normalized_price_points.json。"
             "示例：{\"productName\":\"小葵花金银花露\",\"cost\":18.8,\"points\":[{\"store\":\"A店\",\"price&quantity\":[[35.8,66],[39.9,42]]},{...}]}"
         ),
         "status": "pending",
@@ -50,7 +50,15 @@ PRICE_PLAN_TEMPLATE = [
             "assert os.path.exists(raw), 'raw_price_points.json 不存在'\n"
             "assert os.path.exists(norm), 'normalized_price_points.json 不存在'\n"
             "data=json.load(open(norm, encoding='utf-8'))\n"
-            "assert data.get('points'), 'points 为空'\n"
+            "assert isinstance(data, dict), 'normalized_price_points.json 最外层必须是 JSON 对象 {}，不能是列表 []'\n"
+            "assert 'points' in data, 'normalized_price_points.json 中必须包含 points 字段'\n"
+            "assert isinstance(data.get('points'), list), 'points 字段必须是一个列表'\n"
+            "assert data.get('points'), 'points 不能为空'\n"
+            "for p in data['points']:\n"
+            "    assert isinstance(p, dict), 'points 列表项必须是字典对象'\n"
+            "    assert 'store' in p or 'shop' in p, '每个门店数据必须包含 store 或 shop 字段'\n"
+            "    assert 'price&quantity' in p, '每个门店数据必须包含 price&quantity 字段'\n"
+            "    assert isinstance(p['price&quantity'], list), 'price&quantity 必须是嵌套列表'\n"
         ),
         "errors": [],
     }

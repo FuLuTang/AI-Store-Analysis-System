@@ -29,10 +29,25 @@ if not logger.handlers:
 class AgentLoop:
     """薄封装：OpenAI SDK 客户端 + messages 管理 + tool 执行。"""
 
-    def __init__(self, client: OpenAI, ws: Workspace, llm_preset: dict, emit_log=None, emit_status=None, analysis_params: str = "", check_aborted=None):
+    def __init__(
+        self,
+        client: OpenAI,
+        ws: Workspace,
+        llm_preset: dict,
+        emit_log=None,
+        emit_status=None,
+        analysis_params: str = "",
+        check_aborted=None,
+        task_type: str = "diagnosis",
+        product_name: str = "",
+        candidate_count: int = 2,
+    ):
         self.ws = ws
         self.analysis_params = analysis_params
         self._check_aborted = check_aborted
+        self.task_type = task_type
+        self.product_name = product_name
+        self.candidate_count = candidate_count
         
         # Resolve 'call' settings (智能模型)
         call_cfg = llm_preset.get("call", {}) if isinstance(llm_preset, dict) else {}
@@ -62,16 +77,36 @@ class AgentLoop:
         self.tools = available_tool_call_for_agent(ws)
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
-        self.tool_map = build_tool_map(ws, emit_log=self._emit_log, emit_status=self._emit_status)
+        self._finished = False
+        self._finish_success = True
+        self._finish_text = ""
+
+        def on_finish(success: bool, text: str):
+            self._finished = True
+            self._finish_success = success
+            self._finish_text = text
+
+        self.tool_map = build_tool_map(ws, emit_log=self._emit_log, emit_status=self._emit_status, on_finish=on_finish)
         self._round = 0
         self._progress = 15  # 进度起点（pipeline 已推到 15%）
 
     def run(self) -> dict:
         """主循环：构建初始 messages → 发请求 → 处理 tool_calls → 循环直到收到最终回答。"""
         try:
+            if self.task_type == "price_recommendation":
+                from ..price_recommendation.prompt_builder import (
+                    build_system_content as build_price_sys,
+                    build_user_content as build_price_user,
+                )
+                sys_content = build_price_sys()
+                user_content = build_price_user(self.product_name, self.candidate_count)
+            else:
+                sys_content = build_system_content(self.analysis_params)
+                user_content = build_user_content(self.ws, self.analysis_params)
+
             self.messages = [
-                {"role": "system", "content": build_system_content(self.analysis_params)},
-                {"role": "user", "content": build_user_content(self.ws, self.analysis_params)},
+                {"role": "system", "content": sys_content},
+                {"role": "user", "content": user_content},
             ]
 
             self._emit_status("custom_agent", "active")
@@ -165,19 +200,18 @@ class AgentLoop:
                                 "content": result,
                             })
 
-                        # plan 全部完成后，注入收尾请求，不继续普通循环
-                        if _is_plan_done(self.ws):
-                            self._emit_log("custom_agent", {"level": "status", "message": "📋 所有步骤已完成，生成最终总结..."})
-                            self.messages.append({
-                                "role": "user",
-                                "content": "所有计划步骤已全部完成。请提供一份简洁的最终总结（约200字），包含健康状态、核心结论和交付物清单。不要调用任何工具。"
-                            })
-                            self._round += 1
-                            sr = self._call_api()
-                            self.messages.append(self._normalize_assistant_message(sr))
-                            self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
-                            self._emit_status("custom_agent", "success")
-                            return self._with_usage(self._parse_final_output(sr.content))
+                            if self._finished:
+                                break
+
+                        if self._finished:
+                            if self._finish_success:
+                                self._emit_log("custom_agent", {"level": "info", "message": f"✅ 任务成功结束"})
+                                self._emit_status("custom_agent", "success")
+                                return self._with_usage(self._parse_final_output(self._finish_text))
+                            else:
+                                self._emit_log("custom_agent", {"level": "error", "message": f"❌ 任务报错终止，原因：{self._finish_text}"})
+                                self._emit_status("custom_agent", "error")
+                                raise RuntimeError(self._finish_text)
 
             except Exception as e:
                 # 用户强制停止 → 让 PipelineAbortedError 透传

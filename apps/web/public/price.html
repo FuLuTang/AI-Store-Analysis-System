@@ -191,6 +191,44 @@
             height: 320px;
         }
 
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1rem;
+        }
+
+        @media (max-width: 900px) {
+            .chart-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .chart-card {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--placeholder-bg);
+            padding: 0.8rem;
+        }
+
+        .chart-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .chart-card-title {
+            color: var(--text);
+            font-size: 0.88rem;
+            font-weight: 700;
+        }
+
+        .chart-card-note {
+            color: var(--text-muted);
+            font-size: 0.76rem;
+        }
+
         /* Precheck validation list and items */
         .precheck-list,
         .issue-list,
@@ -473,10 +511,10 @@
 
                     <div class="chart-shell">
                         <div class="chart-head">
-                            <strong>归一化价格点</strong>
-                            <span class="chart-note">横轴为价格，纵轴为归一化销量</span>
+                            <strong>渲染后的最终图表</strong>
+                            <span class="chart-note">横轴与纵轴按图表定义显示</span>
                         </div>
-                        <div id="normalizedChart" class="chart-stage"></div>
+                        <div id="renderedCharts" class="chart-grid"></div>
                     </div>
 
                     <div class="meta-grid" id="resultMeta" style="margin-top: 1.25rem;"></div>
@@ -520,7 +558,7 @@
         const resultSubtitle = document.getElementById('resultSubtitle');
         const resultBadge = document.getElementById('resultBadge');
         const resultGrid = document.getElementById('resultGrid');
-        const normalizedChartEl = document.getElementById('normalizedChart');
+        const renderedChartsEl = document.getElementById('renderedCharts');
         const resultMeta = document.getElementById('resultMeta');
         const progressFill = document.getElementById('progressFill');
         const logPanel = document.getElementById('logPanel');
@@ -533,7 +571,7 @@
         let sseSource = null;
         let latestProgress = 0;
         let hasConnectedStream = false;
-        let normalizedChart = null;
+        let renderedChartInstances = [];
 
         function authKey() {
             return (localStorage.getItem('X-FZT-Key') || '').trim();
@@ -817,7 +855,11 @@
             currentFullResult = fullText || '';
             resultBadge.className = 'badge success';
             resultBadge.innerHTML = '<i class="fas fa-sparkles"></i> 已完成';
-            resultSubtitle.textContent = `${data.productName || '目标商品'} 的候选价格已生成。`;
+            const bestPrice = Number(data.bestPrice);
+            const metric = data.bestPriceMetric === 'profit' ? '利润' : '销售额';
+            resultSubtitle.textContent = Number.isFinite(bestPrice)
+                ? `${data.productName || '目标商品'} 的最优售价 ${formatPrice(bestPrice)} 元（按${metric}排序）`
+                : `${data.productName || '目标商品'} 的候选价格已生成。`;
 
             const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
             if (recommendations.length === 0) {
@@ -838,16 +880,19 @@
             const evidence = data.evidence || {};
             const range = data.validPriceRange || {};
             const normalizedPoints = Array.isArray(data.normalizedPoints) ? data.normalizedPoints : [];
+            const renderedFinalCharts = Array.isArray(data.renderedFinalCharts) ? data.renderedFinalCharts : [];
             resultMeta.innerHTML = [
                 metaCard('有效价格区间', `${formatPrice(range.min)} - ${formatPrice(range.max)}`),
                 metaCard('命中行数', String(evidence.matchedRows ?? 0)),
                 metaCard('观察价格数', String(evidence.observedPriceCount ?? 0)),
                 metaCard('归一化点数', String(normalizedPoints.length)),
+                metaCard('图表数量', String(renderedFinalCharts.length)),
+                metaCard('最优售价', formatPrice(data.bestPrice)),
                 metaCard('价格字段', evidence.priceField || ''),
                 metaCard('销量字段', evidence.salesField || ''),
                 metaCard('时间字段', evidence.timeField || '')
             ].join('');
-            renderNormalizedChart(normalizedPoints);
+            renderRenderedCharts(renderedFinalCharts, normalizedPoints);
         }
 
         function metaCard(label, value) {
@@ -881,89 +926,123 @@
             }
         }
 
-        function ensureNormalizedChart() {
-            if (!normalizedChartEl || !window.echarts) return null;
-            if (!normalizedChart) {
-                normalizedChart = window.echarts.init(normalizedChartEl);
-            }
-            return normalizedChart;
+        function disposeRenderedCharts() {
+            renderedChartInstances.forEach((chart) => {
+                try {
+                    chart.dispose();
+                } catch (e) {
+                    console.error(e);
+                }
+            });
+            renderedChartInstances = [];
         }
 
-        function renderNormalizedChart(points) {
-            const chart = ensureNormalizedChart();
-            if (!chart) return;
-            const source = Array.isArray(points) ? points : [];
-            const sortedPoints = source
-                .map((item) => [Number(item.price), Number(item.normalizedQty)])
-                .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
-                .sort((a, b) => a[0] - b[0]);
-
-            if (sortedPoints.length === 0) {
-                chart.clear();
-                chart.setOption({
-                    title: {
-                        text: '暂无归一化价格点',
-                        left: 'center',
-                        top: 'middle',
-                        textStyle: { color: '#94a3b8', fontSize: 14, fontWeight: 500 }
-                    }
+        function renderRenderedCharts(charts, normalizedPoints) {
+            disposeRenderedCharts();
+            if (!renderedChartsEl) return;
+            const finalCharts = Array.isArray(charts) ? charts : [];
+            const fallbackCharts = [];
+            if (finalCharts.length === 0 && Array.isArray(normalizedPoints) && normalizedPoints.length > 0) {
+                fallbackCharts.push({
+                    name: '售价-销售数',
+                    xLabel: '售价',
+                    yLabel: '销售数',
+                    points: normalizedPoints.map((item) => [Number(item.price), Number(item.normalizedQty)]),
                 });
+            }
+            const sourceCharts = finalCharts.length > 0 ? finalCharts : fallbackCharts;
+
+            if (sourceCharts.length === 0) {
+                renderedChartsEl.innerHTML = '<div class="empty-state">暂无可渲染的图表。</div>';
                 return;
             }
 
-            chart.setOption({
-                animationDuration: 500,
-                grid: { left: 52, right: 24, top: 24, bottom: 46 },
-                tooltip: {
-                    trigger: 'axis',
-                    backgroundColor: 'rgba(15, 23, 42, 0.92)',
-                    borderColor: 'rgba(148, 163, 184, 0.25)',
-                    textStyle: { color: '#e2e8f0' },
-                    formatter(params) {
-                        const point = params?.[0];
-                        if (!point) return '';
-                        const [price, qty] = point.data || [];
-                        return `价格：${formatPrice(price)} 元<br/>归一化销量：${Number(qty).toFixed(2)}`;
-                    }
-                },
-                xAxis: {
-                    type: 'value',
-                    name: '价格',
-                    nameTextStyle: { color: '#94a3b8' },
-                    axisLabel: { color: '#94a3b8', formatter: (value) => Number(value).toFixed(2) },
-                    splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
-                },
-                yAxis: {
-                    type: 'value',
-                    name: '归一化销量',
-                    nameTextStyle: { color: '#94a3b8' },
-                    axisLabel: { color: '#94a3b8' },
-                    splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
-                },
-                series: [
-                    {
-                        type: 'line',
-                        smooth: true,
-                        symbol: 'circle',
-                        symbolSize: 8,
-                        data: sortedPoints,
-                        lineStyle: { width: 3, color: '#38bdf8' },
-                        itemStyle: { color: '#0ea5e9', borderColor: '#e0f2fe', borderWidth: 1.5 },
-                        areaStyle: {
-                            color: {
-                                type: 'linear',
-                                x: 0,
-                                y: 0,
-                                x2: 0,
-                                y2: 1,
-                                colorStops: [
-                                    { offset: 0, color: 'rgba(56, 189, 248, 0.28)' },
-                                    { offset: 1, color: 'rgba(56, 189, 248, 0.03)' }
-                                ]
+            renderedChartsEl.innerHTML = sourceCharts.map((chart, index) => `
+                <div class="chart-card">
+                    <div class="chart-card-head">
+                        <div class="chart-card-title">${escapeHtml(chart.name || `图表 ${index + 1}`)}</div>
+                        <div class="chart-card-note">${escapeHtml(chart.xLabel || 'x') } / ${escapeHtml(chart.yLabel || 'y')}</div>
+                    </div>
+                    <div class="chart-stage" id="renderedChart_${index}"></div>
+                </div>
+            `).join('');
+
+            sourceCharts.forEach((chart, index) => {
+                const el = document.getElementById(`renderedChart_${index}`);
+                if (!el || !window.echarts) return;
+                const instance = window.echarts.init(el);
+                renderedChartInstances.push(instance);
+                const points = Array.isArray(chart.points) ? chart.points : [];
+                const seriesData = points
+                    .map((pair) => [Number(pair?.[0]), Number(pair?.[1])])
+                    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+                    .sort((a, b) => a[0] - b[0]);
+                if (seriesData.length === 0) {
+                    instance.setOption({
+                        title: {
+                            text: '暂无数据',
+                            left: 'center',
+                            top: 'middle',
+                            textStyle: { color: '#94a3b8', fontSize: 14, fontWeight: 500 }
+                        }
+                    });
+                    return;
+                }
+
+                instance.setOption({
+                    animationDuration: 500,
+                    grid: { left: 52, right: 24, top: 24, bottom: 46 },
+                    tooltip: {
+                        trigger: 'axis',
+                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                        borderColor: 'rgba(148, 163, 184, 0.25)',
+                        textStyle: { color: '#e2e8f0' },
+                        formatter(params) {
+                            const point = params?.[0];
+                            if (!point) return '';
+                            const [x, y] = point.data || [];
+                            return `${escapeHtml(chart.xLabel || 'X')}：${formatPrice(x)}<br/>${escapeHtml(chart.yLabel || 'Y')}：${Number(y).toFixed(2)}`;
+                        }
+                    },
+                    xAxis: {
+                        type: 'value',
+                        name: chart.xLabel || 'x',
+                        nameTextStyle: { color: '#94a3b8' },
+                        axisLabel: { color: '#94a3b8', formatter: (value) => Number(value).toFixed(2) },
+                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                    },
+                    yAxis: {
+                        type: 'value',
+                        name: chart.yLabel || 'y',
+                        nameTextStyle: { color: '#94a3b8' },
+                        axisLabel: { color: '#94a3b8' },
+                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                    },
+                    series: [
+                        {
+                            type: 'line',
+                            smooth: true,
+                            symbol: 'circle',
+                            symbolSize: 8,
+                            data: seriesData,
+                            lineStyle: { width: 3, color: '#38bdf8' },
+                            itemStyle: { color: '#0ea5e9', borderColor: '#e0f2fe', borderWidth: 1.5 },
+                            areaStyle: {
+                                color: {
+                                    type: 'linear',
+                                    x: 0,
+                                    y: 0,
+                                    x2: 0,
+                                    y2: 1,
+                                    colorStops: [
+                                        { offset: 0, color: 'rgba(56, 189, 248, 0.28)' },
+                                        { offset: 1, color: 'rgba(56, 189, 248, 0.03)' }
+                                    ]
+                                }
                             }
                         }
-                    }
-                ]
+                    ]
+                });
             });
         }
 
@@ -1108,9 +1187,7 @@
         };
         clearLogBtn.onclick = clearLogs;
         window.addEventListener('resize', () => {
-            if (normalizedChart) {
-                normalizedChart.resize();
-            }
+            renderedChartInstances.forEach((chart) => chart.resize());
         });
 
         async function init() {

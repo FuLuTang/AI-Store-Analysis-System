@@ -1056,12 +1056,15 @@ async def run_price_recommendation_task(session: SessionState, decoded_files: li
         if not ws_dir:
             raise RuntimeError("价格推荐 workspace 未初始化")
 
+        active_preset = get_llm_preset(session.config.get("reasoningEffort", "high"))
+
         result, full_result = await asyncio.to_thread(
             run_price_workflow,
             decoded_files=decoded_files,
             product_name=product_name,
             candidate_count=candidate_count,
             workspace_dir=ws_dir,
+            llm_preset=active_preset,
             emit_log=lambda nid, payload: add_log(session, nid, payload),
             check_aborted=check_aborted,
         )
@@ -1119,9 +1122,6 @@ async def start_price_recommendation(
             raise HTTPException(status_code=400, detail="任务正在运行中")
 
     decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
-    precheck = run_price_precheck(decoded_files, product_name)
-    if not precheck.get("valid"):
-        raise HTTPException(status_code=400, detail=precheck)
 
     session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort or "high")
     candidate_count = _normalize_candidate_count(candidateCount)

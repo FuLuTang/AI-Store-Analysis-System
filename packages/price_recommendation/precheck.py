@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+from collections import defaultdict
 from statistics import mean, median
 from typing import Any
 
@@ -22,6 +23,9 @@ SALES_FIELD_KEYWORDS = (
 )
 TIME_FIELD_KEYWORDS = (
     "日期", "时间", "月份", "date", "time", "day", "month"
+)
+STORE_FIELD_KEYWORDS = (
+    "门店", "店名", "店铺", "分店", "药店", "商户", "店号", "store", "shop", "branch", "pharmacy"
 )
 
 
@@ -208,6 +212,131 @@ def build_basic_recommendation(inspection: dict, product_name: str, candidate_co
             "sourceTables": [t["name"] for t in tables],
             "notes": ["当前为确定性基准推荐，尚未接入价格弹性模型"],
         },
+        "warnings": [],
+    }
+
+
+def build_price_point_artifacts(inspection: dict, product_name: str) -> dict:
+    """Build raw and normalized price points for the first price workflow."""
+    tables = inspection.get("tables", [])
+    fields = _collect_fields(tables)
+    product_fields = _match_fields(fields, PRODUCT_FIELD_KEYWORDS)
+    price_fields = _match_fields(fields, PRICE_FIELD_KEYWORDS)
+    sales_fields = _match_fields(fields, SALES_FIELD_KEYWORDS)
+    time_fields = _match_fields(fields, TIME_FIELD_KEYWORDS)
+    store_fields = _match_fields(fields, STORE_FIELD_KEYWORDS)
+    matched_entries = _find_product_entries(tables, product_name, product_fields)
+
+    raw_points: list[dict[str, Any]] = []
+    for entry in matched_entries:
+        row = entry["row"]
+        price_values = _extract_price_candidates_from_row(row, price_fields[0] if price_fields else "")
+        if not price_values:
+            continue
+        raw_qty = _extract_sales_value(row, sales_fields)
+        source_shop = _extract_store_value(row, store_fields) or entry["table"]
+        source_date = _extract_time_value(row, time_fields)
+        for price in price_values:
+            raw_points.append({
+                "price": round(price, 2),
+                "rawQty": round(raw_qty, 4),
+                "sourceShop": source_shop,
+                "sourceTable": entry["table"],
+                "sourceDate": source_date,
+            })
+
+    if not raw_points:
+        raise ValueError("目标商品没有可用的价格点数据")
+
+    normalized = _normalize_price_points(raw_points)
+    return {
+        "productName": product_name,
+        "raw": {
+            "productName": product_name,
+            "points": raw_points,
+            "fields": {
+                "productField": product_fields[0] if product_fields else "",
+                "priceField": price_fields[0] if price_fields else "",
+                "salesField": sales_fields[0] if sales_fields else "",
+                "timeField": time_fields[0] if time_fields else "",
+                "storeField": store_fields[0] if store_fields else "",
+            },
+        },
+        "normalized": normalized,
+        "evidence": {
+            "matchedRows": len(matched_entries),
+            "rawPointCount": len(raw_points),
+            "priceField": price_fields[0] if price_fields else "",
+            "salesField": sales_fields[0] if sales_fields else "",
+            "timeField": time_fields[0] if time_fields else "",
+            "storeField": store_fields[0] if store_fields else "",
+            "sourceTables": [t["name"] for t in tables],
+        },
+    }
+
+
+def build_recommendation_from_points(
+    *,
+    product_name: str,
+    normalized_points: list[dict[str, Any]],
+    evidence: dict[str, Any],
+    candidate_count: int = 2,
+) -> dict:
+    """Build the first recommendation payload from normalized discrete points."""
+    if not normalized_points:
+        raise ValueError("缺少归一化价格点")
+
+    scored_points = []
+    for point in normalized_points:
+        price = _to_number(point.get("price"))
+        qty = _to_number(point.get("normalizedQty"))
+        if price is None or qty is None:
+            continue
+        scored_points.append({
+            "price": round(price, 2),
+            "normalizedQty": round(qty, 4),
+            "score": round(price * qty, 4),
+            "sampleCount": int(_to_number(point.get("sampleCount")) or 0),
+        })
+
+    if not scored_points:
+        raise ValueError("归一化价格点缺少有效数值")
+
+    scored_points.sort(key=lambda item: (-item["score"], item["price"]))
+    recommendations = []
+    total_points = max(len(scored_points), 1)
+    for rank, item in enumerate(scored_points[:max(1, candidate_count)], start=1):
+        recommendations.append({
+            "rank": rank,
+            "price": item["price"],
+            "unit": "元",
+            "reason": f"归一化后销售额最高，折算销量 {item['normalizedQty']:.2f}",
+            "confidence": _confidence(
+                evidence.get("matchedRows", 0),
+                max(evidence.get("rawPointCount", 0), total_points),
+                bool(evidence.get("priceField")),
+                bool(evidence.get("salesField")),
+                bool(evidence.get("timeField")),
+                True,
+                product_name,
+            ),
+        })
+
+    prices = [item["price"] for item in scored_points]
+    result_evidence = dict(evidence)
+    result_evidence["observedPriceCount"] = len(scored_points)
+    result_evidence["notes"] = ["当前结果直接使用归一化后的离散点集生成"]
+    return {
+        "taskType": "price_recommendation",
+        "productName": product_name,
+        "recommendations": recommendations,
+        "normalizedPoints": normalized_points,
+        "validPriceRange": {
+            "min": round(min(prices), 2),
+            "max": round(max(prices), 2),
+            "unit": "元",
+        },
+        "evidence": result_evidence,
         "warnings": [],
     }
 
@@ -409,6 +538,26 @@ def _find_product_rows(tables: list[dict], product_name: str, product_fields: li
     return rows
 
 
+def _find_product_entries(tables: list[dict], product_name: str, product_fields: list[str]) -> list[dict]:
+    target = _normalize_text(product_name)
+    if not target:
+        return []
+    entries = []
+    search_fields = product_fields or _collect_fields(tables)
+    for table in tables:
+        table_name = table.get("name", "")
+        for row in table.get("rows", []):
+            if not isinstance(row, dict):
+                continue
+            for field in search_fields:
+                value = row.get(field)
+                text = _normalize_text(value)
+                if text and (target in text or text in target):
+                    entries.append({"table": table_name, "row": row})
+                    break
+    return entries
+
+
 def _normalize_text(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "")).lower()
 
@@ -523,3 +672,100 @@ def _extract_price_numbers_from_text(text: str) -> list[float]:
         if number is not None and number > 0:
             generic_numbers.append(number)
     return generic_numbers
+
+
+def _extract_sales_value(row: dict, sales_fields: list[str]) -> float:
+    for field in sales_fields:
+        value = _to_number(row.get(field))
+        if value is not None and value > 0:
+            return value
+    for key in ("销量", "销售数量", "销售量", "数量", "件数", "订单量", "qty", "quantity", "sales"):
+        value = _to_number(row.get(key))
+        if value is not None and value > 0:
+            return value
+    content = str(row.get("content") or "")
+    if content:
+        value = _to_number(_extract_numeric_text_value(content, SALES_FIELD_KEYWORDS))
+        if value is not None and value > 0:
+            return value
+    return 1.0
+
+
+def _extract_store_value(row: dict, store_fields: list[str]) -> str:
+    for field in store_fields:
+        value = str(row.get(field) or "").strip()
+        if value:
+            return value
+    for key in ("门店", "门店名称", "店名", "店铺", "药店", "shop", "store", "pharmacy"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _extract_time_value(row: dict, time_fields: list[str]) -> str:
+    for field in time_fields:
+        value = str(row.get(field) or "").strip()
+        if value:
+            return value
+    for key in ("日期", "时间", "月份", "date", "time", "day", "month"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _normalize_price_points(raw_points: list[dict[str, Any]]) -> dict[str, Any]:
+    shop_totals: dict[str, float] = defaultdict(float)
+    for point in raw_points:
+        shop = str(point.get("sourceShop") or "unknown")
+        qty = _to_number(point.get("rawQty")) or 0.0
+        shop_totals[shop] += max(qty, 0.0)
+
+    totals = [value for value in shop_totals.values() if value > 0]
+    baseline_qty = median(totals) if totals else 1.0
+    price_groups: dict[float, dict[str, Any]] = {}
+
+    for point in raw_points:
+        shop = str(point.get("sourceShop") or "unknown")
+        price = round(_to_number(point.get("price")) or 0.0, 2)
+        raw_qty = _to_number(point.get("rawQty")) or 0.0
+        shop_total = shop_totals.get(shop) or baseline_qty or 1.0
+        factor = baseline_qty / shop_total if shop_total > 0 else 1.0
+        normalized_qty = raw_qty * factor
+
+        bucket = price_groups.setdefault(price, {
+            "price": price,
+            "rawQty": 0.0,
+            "normalizedQty": 0.0,
+            "sampleCount": 0,
+            "sourceShops": set(),
+            "factorSum": 0.0,
+        })
+        bucket["rawQty"] += raw_qty
+        bucket["normalizedQty"] += normalized_qty
+        bucket["sampleCount"] += 1
+        bucket["sourceShops"].add(shop)
+        bucket["factorSum"] += factor
+
+    points = []
+    for price in sorted(price_groups):
+        bucket = price_groups[price]
+        sample_count = max(bucket["sampleCount"], 1)
+        points.append({
+            "price": round(bucket["price"], 2),
+            "rawQty": round(bucket["rawQty"], 4),
+            "normalizedQty": round(bucket["normalizedQty"], 4),
+            "sampleCount": sample_count,
+            "avgFactor": round(bucket["factorSum"] / sample_count, 6),
+            "sourceShops": sorted(bucket["sourceShops"]),
+        })
+
+    return {
+        "points": points,
+        "normalization": {
+            "method": "shop_scale_median",
+            "baselineQty": round(float(baseline_qty), 4),
+            "shopCount": len(shop_totals),
+        },
+    }

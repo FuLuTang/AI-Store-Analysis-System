@@ -169,19 +169,59 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
                 "required": ["result_json"],
             },
         ),
+        _make_tool(
+            name="finish_task",
+            description="结束或中止当前分析任务。如果任务成功完成，传入 success=true 和 text 总结；如果发生不可恢复的严重错误需要报错停止，传入 success=false 并提供详细的 text 原因。在传入 success=true 时，系统会校验是否所有计划步骤都已成功验证，否则会返回错误提示。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "success": {
+                        "type": "boolean",
+                        "description": "是否成功完成任务。true 表示成功结束，false 表示报错终止任务。"
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "如果 success=true，写最终总结（包含健康状态、核心结论和交付物清单）；如果 success=false，写具体的错误原因说明。"
+                    }
+                },
+                "required": ["success", "text"],
+            },
+        ),
     ]
 
 
-def build_tool_map(ws: Workspace) -> dict:
+def get_step_milestone(step_idx: int, total_steps: int) -> int:
+    if total_steps <= 0:
+        return 15
+    return min(15 + int((step_idx + 1) * 75 / total_steps), 90)
+
+
+def get_plan_progress_info(ws) -> tuple[int, int]:
+    """读取 plan.json，返回 (当前进行中/待执行步骤的索引, 总步骤数)。"""
+    try:
+        plan_path = ws.resolve("output/plan.json")
+        if not plan_path.exists():
+            return -1, 0
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        total = len(plan)
+        for idx, step in enumerate(plan):
+            if step.get("status") in ("in_progress", "pending"):
+                return idx, total
+        return total - 1, total
+    except Exception:
+        return -1, 0
+
+
+def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=None) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。"""
-    from ..tools.impl.doc_impl import read_document_impl, extract_document_tables_impl
-    from ..tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
-    from ..tools.impl.python_impl import run_python_impl
-    from ..tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
-    from ..tools.impl.context_impl import read_context_impl
-    from ..tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
-    from ..tools.impl.plan_check_impl import read_plan_impl, check_plan_impl
-    from ..tools.impl.validate_impl import validate_result_impl
+    from .tools.impl.doc_impl import read_document_impl, extract_document_tables_impl
+    from .tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
+    from .tools.impl.python_impl import run_python_impl
+    from .tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
+    from .tools.impl.context_impl import read_context_impl
+    from .tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
+    from .tools.impl.plan_check_impl import read_plan_impl, check_plan_impl
+    from .tools.impl.validate_impl import validate_result_impl
 
     def _read_document(path: str) -> str:
         return read_document_impl(ws, path)
@@ -222,7 +262,7 @@ def build_tool_map(ws: Workspace) -> dict:
         return json.dumps(plan, ensure_ascii=False, indent=2)
 
     def _check_plan(step_index: int) -> str:
-        result = check_plan_impl(ws, step_index)
+        result = check_plan_impl(ws, step_index, emit_log=emit_log)
         return json.dumps(result, ensure_ascii=False)
 
     def _validate_result(result_json: str) -> str:
@@ -231,6 +271,28 @@ def build_tool_map(ws: Workspace) -> dict:
         except json.JSONDecodeError as e:
             return json.dumps({"valid": False, "errors": f"JSON 解析失败: {e}"})
         return validate_result_impl(parsed)
+
+    def _finish_task(success: bool, text: str) -> str:
+        if success:
+            try:
+                plan_path = ws.resolve("output/plan.json")
+                if not plan_path.exists():
+                    return "调用出错：未找到 plan.json 计划文件。"
+                plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                all_done = all(s.get("status") == "success" for s in plan)
+            except Exception as e:
+                return f"调用出错：读取或解析 plan.json 失败: {str(e)}"
+
+            if not all_done:
+                return "调用出错：当前还有未完成的步骤，请先完成所有步骤并调用 check_plan 验证后，再调用 finish_task。"
+
+            if on_finish:
+                on_finish(success=True, text=text)
+            return "任务已成功结束。"
+        else:
+            if on_finish:
+                on_finish(success=False, text=text)
+            return "任务已报错终止。"
 
     return {
         "read_document": _read_document,
@@ -246,6 +308,7 @@ def build_tool_map(ws: Workspace) -> dict:
         "read_plan": _read_plan,
         "check_plan": _check_plan,
         "validate_result": _validate_result,
+        "finish_task": _finish_task,
     }
 
 

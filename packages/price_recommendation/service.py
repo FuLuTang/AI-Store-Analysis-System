@@ -24,6 +24,7 @@ def run_price_workflow(
     product_name: str,
     candidate_count: int,
     workspace_dir: Path,
+    llm_preset: dict,
     emit_log: LogCallback,
     check_aborted: AbortCallback | None = None,
 ) -> tuple[dict, str]:
@@ -32,6 +33,7 @@ def run_price_workflow(
         product_name=product_name,
         candidate_count=candidate_count,
         workspace_dir=workspace_dir,
+        llm_preset=llm_preset,
         emit_log=emit_log,
         check_aborted=check_aborted,
     )

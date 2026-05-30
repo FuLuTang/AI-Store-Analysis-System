@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Union
 
 from .precheck import (
     build_price_point_artifacts,
-    build_recommendation_from_points,
     inspect_uploaded_files,
 )
+from .data_fitting import run_data_fitting
 
 
 LogCallback = Callable[[str, dict], None]
@@ -24,15 +24,20 @@ def run_price_recommendation_workflow(
     product_name: str,
     candidate_count: int,
     workspace_dir: Path,
+    llm_preset: dict,
     emit_log: LogCallback,
     check_aborted: AbortCallback | None = None,
 ) -> tuple[dict, str]:
-    """Run the first price workflow and write the V1 artifacts."""
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    input_dir = workspace_dir / "input"
-    output_dir = workspace_dir / "output"
-    input_dir.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    """Run the price workflow with Agent and write final fitted artifacts."""
+    import copy
+    from openai import OpenAI
+    from packages.agents.core.workspace import Workspace
+    from packages.agents.core.agent_loop import AgentLoop
+    from packages.agents.core.tools.impl.setup_impl import design_plan_impl
+    from packages.agents.price_recommendation.plan_template import PRICE_PLAN_TEMPLATE
+    from packages.agents.core.tool_converter import get_plan_progress_info
+
+    ws = Workspace(base_dir=workspace_dir)
 
     def checkpoint():
         if check_aborted:
@@ -41,64 +46,135 @@ def run_price_recommendation_workflow(
     emit_log("price_init", {"level": "info", "message": "价格推荐任务初始化完成", "progress": 5})
     checkpoint()
 
+    # Save original files and unpack
     for item in decoded_files:
         filename = _safe_filename(item.get("name") or "unnamed")
-        (input_dir / filename).write_bytes(item.get("bytes") or b"")
-
-    emit_log("price_parse", {"level": "status", "message": "正在解析上传文件...", "progress": 18, "step": "price_parse"})
-    inspection = inspect_uploaded_files(decoded_files)
+        ws.write_input(filename, item.get("bytes") or b"")
+    ws.unpack_archives()
     checkpoint()
 
-    emit_log("price_product_match", {
-        "level": "info",
-        "message": "目标商品记录定位完成",
-        "progress": 30,
-        "step": "price_product_match",
-    })
+    # ── 写入 plan ──
+    plan = copy.deepcopy(PRICE_PLAN_TEMPLATE)
+    design_plan_impl(ws, json.dumps(plan, ensure_ascii=False))
+    
+    plan_path = ws.resolve("output/plan.json")
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if plan and plan[0]["status"] == "pending":
+        plan[0]["status"] = "in_progress"
+        plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     checkpoint()
 
-    emit_log("price_db", {
+    # Log initial parse
+    emit_log("price_parse", {"level": "status", "message": "正在解析上传文件...", "progress": 18})
+
+    # ── 构建 client ──
+    preset = llm_preset or {}
+    api_key = preset.get("apiKey", "")
+    base_url = preset.get("baseUrl", "https://api.deepseek.com")
+    client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+
+    # ── Log Proxy ──
+    def mapped_emit_log(node_id: str, message: Union[str, dict]):
+        curr_idx, total_steps = get_plan_progress_info(ws)
+        target_node = node_id
+        if node_id == "custom_agent":
+            if curr_idx == 0:
+                progress = 15
+                if isinstance(message, dict):
+                    progress = message.get("progress", 15)
+                if progress < 20:
+                    target_node = "price_parse"
+                elif progress < 30:
+                    target_node = "price_product_match"
+                else:
+                    target_node = "price_field_mapping"
+            elif curr_idx == 1:
+                target_node = "price_db"
+            elif curr_idx == 2:
+                target_node = "price_normalize"
+            else:
+                target_node = "price_normalize"
+        elif node_id == "plan":
+            if curr_idx == 1:
+                target_node = "price_db"
+            elif curr_idx == 2:
+                target_node = "price_normalize"
+
+        # Forward the log to standard callback
+        emit_log(target_node, message)
+
+    # ── 运行 Agent Loop ──
+    loop = AgentLoop(
+        client=client,
+        ws=ws,
+        llm_preset=preset,
+        emit_log=mapped_emit_log,
+        emit_status=None,
+        check_aborted=check_aborted,
+        task_type="price_recommendation",
+        product_name=product_name,
+        candidate_count=candidate_count,
+    )
+
+    try:
+        loop.run()
+    except Exception as e:
+        emit_log("price_done", {"level": "error", "message": f"价格推荐任务失败: {str(e)}", "error_details": str(e)})
+        raise e
+
+    checkpoint()
+
+    if not _is_plan_done(ws):
+        raise RuntimeError("Agent 价格推荐清洗与归一化步骤未全部完成")
+
+    # ── 开始数据拟合与连续搜索 ──
+    emit_log("price_curve_fit", {
         "level": "status",
-        "message": "正在整理结构化数据并写入 analysis.duckdb...",
-        "progress": 42,
-        "step": "price_db",
+        "message": "正在进行数据拟合与连续曲线生成...",
+        "progress": 86,
     })
-    artifacts = build_price_point_artifacts(inspection, product_name)
-    raw_payload = artifacts["raw"]
-    normalized_payload = dict(artifacts["normalized"])
-    normalized_payload["productName"] = product_name
-    _write_analysis_duckdb(workspace_dir / "analysis.duckdb", raw_payload["points"], normalized_payload.get("points", []))
-    checkpoint()
+    
+    norm_path = ws.resolve("output/normalized_price_points.json")
+    if not norm_path.exists():
+        raise FileNotFoundError("未找到归一化价格点文件 (output/normalized_price_points.json)")
+    
+    normalized_payload = json.loads(norm_path.read_text(encoding="utf-8"))
+    
+    raw_path = ws.resolve("output/raw_price_points.json")
+    raw_points = []
+    if raw_path.exists():
+        try:
+            raw_data = json.loads(raw_path.read_text(encoding="utf-8"))
+            if isinstance(raw_data, dict):
+                raw_points = raw_data.get("points", [])
+            elif isinstance(raw_data, list):
+                raw_points = raw_data
+        except Exception:
+            pass
 
-    emit_log("price_raw_points", {
-        "level": "status",
-        "message": "正在生成归一前价格点...",
-        "progress": 56,
-        "step": "price_raw_points",
-    })
-    _write_json(output_dir / "raw_price_points.json", raw_payload)
-    checkpoint()
-
-    emit_log("price_normalize", {
-        "level": "status",
-        "message": "正在生成归一化价格点...",
-        "progress": 72,
-        "step": "price_normalize",
-    })
-    _write_json(output_dir / "normalized_price_points.json", normalized_payload)
-    checkpoint()
+    evidence = {
+        "matchedRows": len(raw_points),
+        "rawPointCount": len(raw_points),
+        "priceField": "price",
+        "salesField": "qty",
+        "timeField": "date",
+        "storeField": "shop",
+        "sourceTables": ws.list_inputs(),
+        "notes": ["基于 Agent 清洗和归一化的价格点集进行数据拟合"],
+    }
 
     emit_log("price_recommend", {
         "level": "status",
-        "message": "正在生成最终推荐结果...",
-        "progress": 86,
-        "step": "price_recommend",
+        "message": "正在分析最优价格推荐...",
+        "progress": 90,
     })
-    result = build_recommendation_from_points(
+    
+    result = run_data_fitting(
+        normalized_payload=normalized_payload,
+        evidence=evidence,
         product_name=product_name,
-        normalized_points=normalized_payload.get("points", []),
-        evidence=artifacts["evidence"],
         candidate_count=candidate_count,
+        workspace_dir=ws.dir,
     )
     checkpoint()
 
@@ -106,14 +182,26 @@ def run_price_recommendation_workflow(
         "level": "status",
         "message": "正在校验推荐结果 JSON...",
         "progress": 94,
-        "step": "price_validate",
     })
     _validate_result(result)
-    _write_json(output_dir / "price_recommendation.json", result)
+    
+    _write_json(ws.output_dir / "price_recommendation.json", result)
     summary = _build_summary(result)
-    (workspace_dir / "summary.md").write_text(summary, encoding="utf-8")
-    emit_log("price_done", {"level": "info", "message": "价格推荐任务完成", "progress": 100, "step": "price_done"})
+    (ws.dir / "summary.md").write_text(summary, encoding="utf-8")
+    
+    emit_log("price_done", {"level": "info", "message": "价格推荐任务完成", "progress": 100})
     return result, summary
+
+
+def _is_plan_done(ws: Workspace) -> bool:
+    try:
+        plan_path = ws.resolve("output/plan.json")
+        if not plan_path.exists():
+            return False
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        return all(s.get("status") == "success" for s in plan)
+    except Exception:
+        return False
 
 
 def _validate_result(result: dict):
@@ -125,6 +213,9 @@ def _validate_result(result: dict):
     normalized_points = result.get("normalizedPoints")
     if not isinstance(normalized_points, list) or not normalized_points:
         raise ValueError("结果缺少 normalizedPoints")
+    rendered_final_charts = result.get("renderedFinalCharts")
+    if not isinstance(rendered_final_charts, list) or not rendered_final_charts:
+        raise ValueError("结果缺少 renderedFinalCharts")
     for item in recommendations:
         if not isinstance(item.get("price"), (int, float)) or item["price"] <= 0:
             raise ValueError("推荐价格必须为正数")
@@ -148,8 +239,10 @@ def _build_summary(result: dict) -> str:
         f"- 价格字段：{evidence.get('priceField', '')}",
         f"- 销售字段：{evidence.get('salesField', '')}",
         f"- 归一化价格点：{len(result.get('normalizedPoints', []))}",
+        f"- 渲染图表数：{len(result.get('renderedFinalCharts', []))}",
+        f"- 最优售价：{result.get('bestPrice', '')}",
         "",
-        "当前版本直接使用归一化后的离散点集输出结果。",
+        "当前版本先完成归一化点集，再接数据拟合层输出渲染图表和推荐售价。",
     ])
     return "\n".join(lines)
 

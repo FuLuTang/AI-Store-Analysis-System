@@ -7,7 +7,11 @@ import re
 from pathlib import Path
 from typing import Callable
 
-from .precheck import build_basic_recommendation, inspect_uploaded_files, run_precheck
+from .precheck import (
+    build_price_point_artifacts,
+    build_recommendation_from_points,
+    inspect_uploaded_files,
+)
 
 
 LogCallback = Callable[[str, dict], None]
@@ -23,7 +27,7 @@ def run_price_recommendation_workflow(
     emit_log: LogCallback,
     check_aborted: AbortCallback | None = None,
 ) -> tuple[dict, str]:
-    """Run deterministic MVP workflow and write price recommendation artifacts."""
+    """Run the first price workflow and write the V1 artifacts."""
     workspace_dir.mkdir(parents=True, exist_ok=True)
     input_dir = workspace_dir / "input"
     output_dir = workspace_dir / "output"
@@ -43,45 +47,65 @@ def run_price_recommendation_workflow(
 
     emit_log("price_parse", {"level": "status", "message": "正在解析上传文件...", "progress": 18, "step": "price_parse"})
     inspection = inspect_uploaded_files(decoded_files)
-    precheck = run_precheck(decoded_files, product_name)
-    _write_json(output_dir / "precheck.json", precheck)
     checkpoint()
-
-    if not precheck.get("valid"):
-        raise ValueError(f"价格推荐预检未通过: {precheck.get('issues', [])}")
 
     emit_log("price_product_match", {
         "level": "info",
-        "message": f"目标商品匹配完成，命中 {precheck['productDataMatch']['matchedRows']} 行",
-        "progress": 35,
+        "message": "目标商品记录定位完成",
+        "progress": 30,
         "step": "price_product_match",
     })
     checkpoint()
 
-    emit_log("price_field_mapping", {
+    emit_log("price_db", {
         "level": "status",
-        "message": "正在整理价格、销量、时间字段...",
-        "progress": 50,
-        "step": "price_field_mapping",
+        "message": "正在整理结构化数据并写入 analysis.duckdb...",
+        "progress": 42,
+        "step": "price_db",
     })
-    field_mapping = precheck.get("detectedFields", {})
-    _write_json(output_dir / "field_mapping.json", field_mapping)
+    artifacts = build_price_point_artifacts(inspection, product_name)
+    raw_payload = artifacts["raw"]
+    normalized_payload = dict(artifacts["normalized"])
+    normalized_payload["productName"] = product_name
+    _write_analysis_duckdb(workspace_dir / "analysis.duckdb", raw_payload["points"], normalized_payload.get("points", []))
+    checkpoint()
+
+    emit_log("price_raw_points", {
+        "level": "status",
+        "message": "正在生成归一前价格点...",
+        "progress": 56,
+        "step": "price_raw_points",
+    })
+    _write_json(output_dir / "raw_price_points.json", raw_payload)
+    checkpoint()
+
+    emit_log("price_normalize", {
+        "level": "status",
+        "message": "正在生成归一化价格点...",
+        "progress": 72,
+        "step": "price_normalize",
+    })
+    _write_json(output_dir / "normalized_price_points.json", normalized_payload)
     checkpoint()
 
     emit_log("price_recommend", {
         "level": "status",
-        "message": "正在生成基准推荐价格...",
-        "progress": 72,
+        "message": "正在生成最终推荐结果...",
+        "progress": 86,
         "step": "price_recommend",
     })
-    result = build_basic_recommendation(inspection, product_name, candidate_count=candidate_count)
-    _write_json(output_dir / "price_candidates.json", result.get("recommendations", []))
+    result = build_recommendation_from_points(
+        product_name=product_name,
+        normalized_points=normalized_payload.get("points", []),
+        evidence=artifacts["evidence"],
+        candidate_count=candidate_count,
+    )
     checkpoint()
 
     emit_log("price_validate", {
         "level": "status",
         "message": "正在校验推荐结果 JSON...",
-        "progress": 90,
+        "progress": 94,
         "step": "price_validate",
     })
     _validate_result(result)
@@ -98,6 +122,9 @@ def _validate_result(result: dict):
     recommendations = result.get("recommendations")
     if not isinstance(recommendations, list) or not recommendations:
         raise ValueError("结果缺少 recommendations")
+    normalized_points = result.get("normalizedPoints")
+    if not isinstance(normalized_points, list) or not normalized_points:
+        raise ValueError("结果缺少 normalizedPoints")
     for item in recommendations:
         if not isinstance(item.get("price"), (int, float)) or item["price"] <= 0:
             raise ValueError("推荐价格必须为正数")
@@ -120,8 +147,9 @@ def _build_summary(result: dict) -> str:
         f"- 命中行数：{evidence.get('matchedRows', 0)}",
         f"- 价格字段：{evidence.get('priceField', '')}",
         f"- 销售字段：{evidence.get('salesField', '')}",
+        f"- 归一化价格点：{len(result.get('normalizedPoints', []))}",
         "",
-        "当前版本为确定性基准推荐，后续可替换为价格弹性或曲线拟合模型。",
+        "当前版本直接使用归一化后的离散点集输出结果。",
     ])
     return "\n".join(lines)
 
@@ -134,3 +162,68 @@ def _write_json(path: Path, data):
 def _safe_filename(name: str) -> str:
     cleaned = re.sub(r"[\\/]+", "_", name).strip()
     return cleaned or "unnamed"
+
+
+def _write_analysis_duckdb(path: Path, raw_points: list[dict], normalized_points: list[dict]):
+    import duckdb
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(str(path))
+    try:
+        con.execute("DROP TABLE IF EXISTS raw_price_points")
+        con.execute(
+            """
+            CREATE TABLE raw_price_points (
+              price DOUBLE,
+              raw_qty DOUBLE,
+              source_shop VARCHAR,
+              source_table VARCHAR,
+              source_date VARCHAR
+            )
+            """
+        )
+        if raw_points:
+            con.executemany(
+                "INSERT INTO raw_price_points VALUES (?, ?, ?, ?, ?)",
+                [
+                    (
+                        item.get("price"),
+                        item.get("rawQty"),
+                        item.get("sourceShop"),
+                        item.get("sourceTable"),
+                        item.get("sourceDate"),
+                    )
+                    for item in raw_points
+                ],
+            )
+
+        con.execute("DROP TABLE IF EXISTS normalized_price_points")
+        con.execute(
+            """
+            CREATE TABLE normalized_price_points (
+              price DOUBLE,
+              raw_qty DOUBLE,
+              normalized_qty DOUBLE,
+              sample_count INTEGER,
+              avg_factor DOUBLE,
+              source_shops_json VARCHAR
+            )
+            """
+        )
+        if normalized_points:
+            con.executemany(
+                "INSERT INTO normalized_price_points VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        item.get("price"),
+                        item.get("rawQty"),
+                        item.get("normalizedQty"),
+                        item.get("sampleCount"),
+                        item.get("avgFactor"),
+                        json.dumps(item.get("sourceShops", []), ensure_ascii=False),
+                    )
+                    for item in normalized_points
+                ],
+            )
+    finally:
+        con.close()

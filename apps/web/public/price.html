@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="index.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@6/dist/echarts.min.js"></script>
     <style>
         /* Overrides & Layout customizations for Optimal Price Estimation */
         .dashboard-grid {
@@ -156,6 +157,38 @@
             font-weight: 700;
             font-size: 0.92rem;
             word-break: break-all;
+        }
+
+        .chart-shell {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--card-bg);
+            box-shadow: var(--shadow);
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .chart-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .chart-head strong {
+            color: var(--text);
+            font-size: 0.92rem;
+        }
+
+        .chart-note {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .chart-stage {
+            width: 100%;
+            height: 320px;
         }
 
         /* Precheck validation list and items */
@@ -328,7 +361,7 @@
                     <div class="workspace-icon"><i class="fas fa-tags"></i></div>
                     <div class="workspace-copy">
                         <h2>最优价格推算</h2>
-                        <p>上传销售明细、TXT 文本或 ZIP 压缩包，快速预检后生成两个可解释的推荐价格。</p>
+                        <p>上传销售明细、TXT 文本或 ZIP 压缩包，完成归一化换算并输出可解释的推荐价格。</p>
                     </div>
                 </div>
                 <div class="workspace-cta"><i class="fas fa-arrow-right"></i><span>当前价格工作台</span></div>
@@ -337,7 +370,7 @@
 
         <header>
             <h1>最优价格推算</h1>
-            <p class="subtitle">上传销售明细、TXT 文本或 ZIP 压缩包，快速预检后生成两个可解释的推荐价格。</p>
+            <p class="subtitle">上传销售明细、TXT 文本或 ZIP 压缩包，完成归一化换算并输出可解释的推荐价格。</p>
         </header>
 
         <div class="dashboard-grid">
@@ -349,7 +382,7 @@
                     <div id="dropZone" class="drop-zone">
                         <i class="fas fa-cloud-upload-alt"></i>
                         <p id="fileName">拖放数据文件到此处</p>
-                        <span class="upload-hint">支持 JSON / CSV / Excel / TXT / ZIP</span>
+                        <span class="upload-hint">支持 JSON / CSV / Excel / TXT / ZIP，单文件小于 100MB</span>
                         <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.txt,.zip">
                     </div>
                     <div id="fileList" class="file-list"></div>
@@ -373,9 +406,6 @@
 
 
                     <div class="action-bar flex-column" style="gap: 0.75rem; margin-bottom: 0;">
-                        <button id="precheckBtn" class="btn-secondary w-full" disabled>
-                            <i class="fas fa-shield-halved"></i> 快速预检
-                        </button>
                         <button id="startBtn" class="btn w-full" disabled>
                             <i class="fas fa-play"></i> 开始价格推算
                         </button>
@@ -411,7 +441,7 @@
                 <!-- 顶部的状态横幅 -->
                 <div class="status-banner" id="statusBanner" style="margin-bottom: 0;">
                     <i class="fas fa-circle-info"></i>
-                    <span id="statusBannerText">等待上传数据并完成预检。</span>
+                    <span id="statusBannerText">等待上传数据并启动价格推算。</span>
                 </div>
 
                 <!-- 进度条 -->
@@ -422,23 +452,6 @@
                     </div>
                     <div class="progress-track" style="margin-top: 0;">
                         <div class="progress-fill" id="progressFill"></div>
-                    </div>
-                </div>
-
-                <!-- 预检结果卡片 -->
-                <div class="card" id="precheckCard" style="padding: 1.8rem 2rem;">
-                    <div class="result-head">
-                        <div>
-                            <h3 style="margin: 0 0 0.25rem; font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
-                                <i class="fas fa-shield-halved" style="color: var(--primary);"></i> 快速预检结果
-                            </h3>
-                            <div class="result-subtitle" id="precheckSubtitle">还没有进行预检。</div>
-                        </div>
-                        <span class="badge" id="precheckBadge"><i class="fas fa-circle"></i> 未开始</span>
-                    </div>
-                    <div class="badge-row" id="precheckFlags" style="margin: 0.75rem 0;"></div>
-                    <div class="precheck-list" id="precheckList">
-                        <div class="empty-state">先选择文件并点击“快速预检”。</div>
                     </div>
                 </div>
 
@@ -456,6 +469,14 @@
 
                     <div class="result-grid" id="resultGrid" style="margin-top: 1rem;">
                         <div class="empty-state">当前还没有推算结果。</div>
+                    </div>
+
+                    <div class="chart-shell">
+                        <div class="chart-head">
+                            <strong>归一化价格点</strong>
+                            <span class="chart-note">横轴为价格，纵轴为归一化销量</span>
+                        </div>
+                        <div id="normalizedChart" class="chart-stage"></div>
                     </div>
 
                     <div class="meta-grid" id="resultMeta" style="margin-top: 1.25rem;"></div>
@@ -476,26 +497,13 @@
                     </div>
                 </div>
             </div>
-        </div>   <div class="panel">
-                <div class="result-head">
-                    <div>
-                        <h2>实时日志</h2>
-                        <div class="result-subtitle">观察 workflow 的每个阶段。</div>
-                    </div>
-                    <button id="clearLogBtn" class="btn-secondary" style="padding:0.45rem 0.75rem;font-size:0.82rem;">
-                        <i class="fas fa-broom"></i> 清空
-                    </button>
-                </div>
-                <div class="log-panel" id="logPanel">
-                    <div class="empty-state" style="color:#cbd5e1;">等待任务启动后输出日志。</div>
-                </div>
-            </div>
-        </section>
+        </div>
     </div>
 
     <script>
         const allowedDataExtensions = ['.json', '.xlsx', '.xls', '.csv', '.txt'];
         const allowedArchiveExtensions = ['.zip'];
+        const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
@@ -503,33 +511,29 @@
         const productNameInput = document.getElementById('productNameInput');
         const candidateCountSelect = document.getElementById('candidateCountSelect');
         const reasoningEffortSelect = document.getElementById('reasoningEffortSelect');
-        const precheckBtn = document.getElementById('precheckBtn');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const clearLogBtn = document.getElementById('clearLogBtn');
         const statusBannerText = document.getElementById('statusBannerText');
         const authStateText = document.getElementById('authStateText');
         const authStateHint = document.getElementById('authStateHint');
-        const precheckSubtitle = document.getElementById('precheckSubtitle');
-        const precheckBadge = document.getElementById('precheckBadge');
-        const precheckFlags = document.getElementById('precheckFlags');
-        const precheckList = document.getElementById('precheckList');
         const resultSubtitle = document.getElementById('resultSubtitle');
         const resultBadge = document.getElementById('resultBadge');
         const resultGrid = document.getElementById('resultGrid');
+        const normalizedChartEl = document.getElementById('normalizedChart');
         const resultMeta = document.getElementById('resultMeta');
         const progressFill = document.getElementById('progressFill');
         const logPanel = document.getElementById('logPanel');
 
         let selectedFiles = [];
         let selectedLabels = [];
-        let currentPrecheck = null;
         let currentResult = null;
         let currentFullResult = null;
         let pollingTimer = null;
         let sseSource = null;
         let latestProgress = 0;
         let hasConnectedStream = false;
+        let normalizedChart = null;
 
         function authKey() {
             return (localStorage.getItem('X-FZT-Key') || '').trim();
@@ -547,7 +551,7 @@
                 authStateHint.textContent = `Key: ${key.slice(0, 6)}...${key.slice(-4)}`;
             } else {
                 authStateText.textContent = '未登录';
-                authStateHint.textContent = '请先登录后再运行预检或推算。';
+                authStateHint.textContent = '请先登录后再运行推算。';
             }
         }
 
@@ -728,9 +732,9 @@
             syncButtons();
             const hasData = selectedFiles.length > 0;
             if (hasData) {
-                setStatus(`已加载 ${selectedFiles.length} 个数据文件，等待预检。`);
+                setStatus(`已加载 ${selectedFiles.length} 个数据文件，等待启动任务。`);
             } else {
-                setStatus('等待上传数据并完成预检。');
+                setStatus('等待上传数据并启动价格推算。');
             }
         };
 
@@ -757,6 +761,7 @@
             const nextFiles = [];
             const nextLabels = [];
             for (const file of Array.from(list)) {
+                assertFileSize(file);
                 const ext = getExtension(file.name);
                 if (allowedDataExtensions.includes(ext)) {
                     nextFiles.push(file);
@@ -769,6 +774,7 @@
                         throw new Error(`压缩包 ${file.name} 内没有可用的数据文件`);
                     }
                     expanded.forEach((item) => {
+                        assertFileSize(item);
                         nextFiles.push(item);
                         nextLabels.push(`来自 ${file.name}`);
                     });
@@ -790,11 +796,9 @@
                 selectedFiles = files;
                 selectedLabels = labels;
                 renderFileList();
-                const hasData = selectedFiles.length > 0;
-                precheckBtn.disabled = !hasData;
-                startBtn.disabled = !hasData;
-                if (hasData) {
-                    setStatus(`已加载 ${selectedFiles.length} 个数据文件，等待预检。`);
+                syncButtons();
+                if (selectedFiles.length > 0) {
+                    setStatus(`已加载 ${selectedFiles.length} 个数据文件，等待启动任务。`);
                 }
             } catch (e) {
                 alert(e.message || '文件处理失败');
@@ -804,108 +808,7 @@
         function syncButtons() {
             const hasFiles = selectedFiles.length > 0;
             const hasProduct = productNameInput.value.trim().length > 0;
-            precheckBtn.disabled = !(hasFiles && hasProduct);
             startBtn.disabled = !(hasFiles && hasProduct);
-        }
-
-        async function runPrecheck() {
-            if (selectedFiles.length === 0) {
-                alert('请先选择数据文件');
-                return;
-            }
-            const productName = productNameInput.value.trim();
-            if (!productName) {
-                alert('请先输入商品名称');
-                return;
-            }
-            const formData = new FormData();
-            selectedFiles.forEach((file) => formData.append('files', file));
-            formData.append('productName', productName);
-
-            precheckBtn.disabled = true;
-            setStatus('正在执行快速预检...');
-            try {
-                const resp = await fetch('/api/price-recommendations/precheck', {
-                    method: 'POST',
-                    headers: authHeaders(),
-                    body: formData
-                });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    throw new Error(data.detail ? JSON.stringify(data.detail) : '预检失败');
-                }
-                currentPrecheck = data;
-                renderPrecheck(data);
-                setStatus(data.valid ? '预检通过，可以启动推算任务。' : '预检未通过，请先修正输入。');
-                if (data.valid) {
-                    startBtn.disabled = false;
-                }
-            } catch (e) {
-                alert(`预检失败: ${e.message}`);
-                setStatus('预检失败，请检查输入。');
-            } finally {
-                syncButtons();
-            }
-        }
-
-        function renderPrecheck(data) {
-            if (!data) return;
-            const valid = !!data.valid;
-            precheckBadge.className = valid ? 'badge success' : 'badge warn';
-            precheckBadge.innerHTML = valid ? '<i class="fas fa-circle-check"></i> 通过' : '<i class="fas fa-triangle-exclamation"></i> 未通过';
-            precheckSubtitle.textContent = valid
-                ? `已识别 ${data.productDataMatch?.matchedRows || 0} 行目标商品数据。`
-                : '存在阻断项，需要先修正输入。';
-
-            const flags = [];
-            if (data.productNameQuality) {
-                flags.push(flagBadge('商品名', data.productNameQuality.status));
-            }
-            if (data.fileQuality) {
-                flags.push(flagBadge('文件', data.fileQuality.status));
-            }
-            if (data.productDataMatch) {
-                flags.push(flagBadge('命中', data.productDataMatch.status));
-            }
-            precheckFlags.innerHTML = flags.join('');
-
-            const parts = [];
-            parts.push(listItem('商品名称', data.productName || ''));
-            parts.push(listItem('命中行数', String(data.productDataMatch?.matchedRows ?? 0)));
-            parts.push(listItem('置信度', formatPercent(data.productDataMatch?.confidence)));
-            const detected = data.detectedFields || {};
-            parts.push(listItem('识别字段', [
-                `商品字段: ${joinText(detected.productFields)}`,
-                `价格字段: ${joinText(detected.priceFields)}`,
-                `销量字段: ${joinText(detected.salesFields)}`,
-                `时间字段: ${joinText(detected.timeFields)}`
-            ].join('\n')));
-            precheckList.innerHTML = parts.join('');
-            renderPrecheckIssues(data);
-        }
-
-        function renderPrecheckIssues(data) {
-            const issues = Array.isArray(data.issues) ? data.issues : [];
-            const warnings = Array.isArray(data.warnings) ? data.warnings : [];
-            const blocks = [];
-            if (issues.length > 0) {
-                blocks.push('<div class="issue-list">');
-                issues.forEach((item) => {
-                    blocks.push(`<div class="list-item err"><strong>${escapeHtml(item.code || 'issue')}</strong>${escapeHtml(item.message || '')}</div>`);
-                });
-                blocks.push('</div>');
-            }
-            if (warnings.length > 0) {
-                blocks.push('<div class="warning-list">');
-                warnings.forEach((item) => {
-                    blocks.push(`<div class="list-item warn"><strong>${escapeHtml(item.code || 'warning')}</strong>${escapeHtml(item.message || '')}</div>`);
-                });
-                blocks.push('</div>');
-            }
-            if (blocks.length === 0) {
-                blocks.push('<div class="empty-state">没有明显阻断项。</div>');
-            }
-            precheckList.insertAdjacentHTML('beforeend', blocks.join(''));
         }
 
         function renderResult(data, fullText) {
@@ -934,14 +837,17 @@
 
             const evidence = data.evidence || {};
             const range = data.validPriceRange || {};
+            const normalizedPoints = Array.isArray(data.normalizedPoints) ? data.normalizedPoints : [];
             resultMeta.innerHTML = [
                 metaCard('有效价格区间', `${formatPrice(range.min)} - ${formatPrice(range.max)}`),
                 metaCard('命中行数', String(evidence.matchedRows ?? 0)),
                 metaCard('观察价格数', String(evidence.observedPriceCount ?? 0)),
+                metaCard('归一化点数', String(normalizedPoints.length)),
                 metaCard('价格字段', evidence.priceField || ''),
                 metaCard('销量字段', evidence.salesField || ''),
                 metaCard('时间字段', evidence.timeField || '')
             ].join('');
+            renderNormalizedChart(normalizedPoints);
         }
 
         function metaCard(label, value) {
@@ -966,6 +872,99 @@
         function joinText(list) {
             if (!Array.isArray(list) || list.length === 0) return '未识别';
             return list.join('、');
+        }
+
+        function assertFileSize(file) {
+            if (file.size > MAX_FILE_SIZE_BYTES) {
+                const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+                throw new Error(`文件 ${file.name} 大小为 ${sizeMb}MB，单文件需小于 100MB`);
+            }
+        }
+
+        function ensureNormalizedChart() {
+            if (!normalizedChartEl || !window.echarts) return null;
+            if (!normalizedChart) {
+                normalizedChart = window.echarts.init(normalizedChartEl);
+            }
+            return normalizedChart;
+        }
+
+        function renderNormalizedChart(points) {
+            const chart = ensureNormalizedChart();
+            if (!chart) return;
+            const source = Array.isArray(points) ? points : [];
+            const sortedPoints = source
+                .map((item) => [Number(item.price), Number(item.normalizedQty)])
+                .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+                .sort((a, b) => a[0] - b[0]);
+
+            if (sortedPoints.length === 0) {
+                chart.clear();
+                chart.setOption({
+                    title: {
+                        text: '暂无归一化价格点',
+                        left: 'center',
+                        top: 'middle',
+                        textStyle: { color: '#94a3b8', fontSize: 14, fontWeight: 500 }
+                    }
+                });
+                return;
+            }
+
+            chart.setOption({
+                animationDuration: 500,
+                grid: { left: 52, right: 24, top: 24, bottom: 46 },
+                tooltip: {
+                    trigger: 'axis',
+                    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                    borderColor: 'rgba(148, 163, 184, 0.25)',
+                    textStyle: { color: '#e2e8f0' },
+                    formatter(params) {
+                        const point = params?.[0];
+                        if (!point) return '';
+                        const [price, qty] = point.data || [];
+                        return `价格：${formatPrice(price)} 元<br/>归一化销量：${Number(qty).toFixed(2)}`;
+                    }
+                },
+                xAxis: {
+                    type: 'value',
+                    name: '价格',
+                    nameTextStyle: { color: '#94a3b8' },
+                    axisLabel: { color: '#94a3b8', formatter: (value) => Number(value).toFixed(2) },
+                    splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                },
+                yAxis: {
+                    type: 'value',
+                    name: '归一化销量',
+                    nameTextStyle: { color: '#94a3b8' },
+                    axisLabel: { color: '#94a3b8' },
+                    splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                },
+                series: [
+                    {
+                        type: 'line',
+                        smooth: true,
+                        symbol: 'circle',
+                        symbolSize: 8,
+                        data: sortedPoints,
+                        lineStyle: { width: 3, color: '#38bdf8' },
+                        itemStyle: { color: '#0ea5e9', borderColor: '#e0f2fe', borderWidth: 1.5 },
+                        areaStyle: {
+                            color: {
+                                type: 'linear',
+                                x: 0,
+                                y: 0,
+                                x2: 0,
+                                y2: 1,
+                                colorStops: [
+                                    { offset: 0, color: 'rgba(56, 189, 248, 0.28)' },
+                                    { offset: 1, color: 'rgba(56, 189, 248, 0.03)' }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            });
         }
 
         function formatPercent(value) {
@@ -997,12 +996,6 @@
             const productName = productNameInput.value.trim();
             if (!productName) {
                 alert('请先输入商品名称');
-                return;
-            }
-
-            const precheckData = currentPrecheck || await fetchPrecheckSilently();
-            if (!precheckData || !precheckData.valid) {
-                alert('预检未通过，先修正输入再启动推算');
                 return;
             }
 
@@ -1039,24 +1032,6 @@
                 startBtn.disabled = false;
                 setStatus('启动失败，请重试。');
             }
-        }
-
-        async function fetchPrecheckSilently() {
-            const formData = new FormData();
-            selectedFiles.forEach((file) => formData.append('files', file));
-            formData.append('productName', productNameInput.value.trim());
-            const resp = await fetch('/api/price-recommendations/precheck', {
-                method: 'POST',
-                headers: authHeaders(),
-                body: formData
-            });
-            const data = await resp.json();
-            if (!resp.ok) {
-                throw new Error(typeof data.detail === 'string' ? data.detail : '预检失败');
-            }
-            currentPrecheck = data;
-            renderPrecheck(data);
-            return data;
         }
 
         async function refreshStatus() {
@@ -1121,7 +1096,6 @@
         candidateCountSelect.onchange = syncButtons;
         reasoningEffortSelect.onchange = syncButtons;
 
-        precheckBtn.onclick = runPrecheck;
         startBtn.onclick = startRecommendation;
         stopBtn.onclick = async () => {
             if (!confirm('确认要强制停止当前价格推算任务吗？')) return;
@@ -1133,6 +1107,11 @@
             }
         };
         clearLogBtn.onclick = clearLogs;
+        window.addEventListener('resize', () => {
+            if (normalizedChart) {
+                normalizedChart.resize();
+            }
+        });
 
         async function init() {
             updateAuthState();

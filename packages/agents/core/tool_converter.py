@@ -55,6 +55,31 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
             },
         ),
         _make_tool(
+            name="replace_text",
+            description="在指定文本文件中做唯一匹配替换。只有 old_text 在文件里恰好匹配 1 次时才允许替换；匹配数为 0 或大于等于 2 都会报错。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "workspace 内的相对路径"},
+                    "old_text": {"type": "string", "description": "要被替换的原始文本，要求在文件中唯一匹配"},
+                    "new_text": {"type": "string", "description": "替换后的新文本"},
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        ),
+        _make_tool(
+            name="copy_file",
+            description="复制 workspace 内的单个文件到新路径。目标父目录会自动创建，若目标已存在则覆盖。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source_path": {"type": "string", "description": "源文件在 workspace 内的相对路径"},
+                    "destination_path": {"type": "string", "description": "目标文件在 workspace 内的相对路径"},
+                },
+                "required": ["source_path", "destination_path"],
+            },
+        ),
+        _make_tool(
             name="list_files",
             description="列出 workspace 子目录下的文件列表，返回包含路径、文件名、字节大小、可读大小、后缀、文件类型和推荐工具的 JSON 数组。",
             parameters={
@@ -224,8 +249,14 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
     _emit_log = emit_log or (lambda nid, msg: None)
     _emit_status = emit_status or (lambda nid, st: None)
 
-    from .tools.impl.doc_impl import read_document_impl, read_document_structure_impl
-    from .tools.impl.file_impl import read_file_impl, write_file_impl, list_files_impl
+    from .tools.impl.doc_impl import read_document_structure_impl
+    from .tools.impl.file_impl import (
+        copy_file_impl,
+        list_files_impl,
+        read_file_impl,
+        replace_text_impl,
+        write_file_impl,
+    )
     from .tools.impl.python_impl import run_python_impl
     from .tools.impl.duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
     from .tools.impl.context_impl import read_context_impl
@@ -234,7 +265,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
     from .tools.impl.search_impl import search_files_impl
     from .tools.impl.sqlite_impl import query_sqlite_impl
 
-    def _read_document(path: str) -> str:
+    def _read_document_structure(path: str) -> str:
         return read_document_structure_impl(ws, path)
 
     def _read_file(path: str, offset: int = 0, limit: int = 2000, head: int = None, tail: int = None) -> str:
@@ -242,6 +273,12 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
 
     def _write_file(path: str, content: str, mode: str = "overwrite") -> str:
         return write_file_impl(ws, path, content, mode=mode)
+
+    def _replace_text(path: str, old_text: str, new_text: str) -> str:
+        return replace_text_impl(ws, path, old_text, new_text)
+
+    def _copy_file(source_path: str, destination_path: str) -> str:
+        return copy_file_impl(ws, source_path, destination_path)
 
     def _list_files(subdir: str = "") -> str:
         files = list_files_impl(ws, subdir)
@@ -364,10 +401,11 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
             return "任务已报错终止。"
 
     return {
-        "read_document": _read_document,
-        "read_document_structure": _read_document,
+        "read_document_structure": _read_document_structure,
         "read_file": _read_file,
         "write_file": _write_file,
+        "replace_text": _replace_text,
+        "copy_file": _copy_file,
         "list_files": _list_files,
         "search_files": _search_files,
         "run_python": _run_python,

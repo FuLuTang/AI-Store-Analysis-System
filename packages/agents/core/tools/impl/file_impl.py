@@ -1,5 +1,6 @@
 """底层纯函数：workspace 文件读写与列表侦察"""
 import json
+import shutil
 from pathlib import Path
 from ...workspace import Workspace
 
@@ -179,6 +180,71 @@ def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwri
         "path": path,
         "mode": mode,
         "bytes_written": len(content.encode("utf-8")),
+        "size": size,
+        "size_human": _format_size(size),
+    }, ensure_ascii=False)
+
+
+def replace_text_impl(ws: Workspace, path: str, old_text: str, new_text: str) -> str:
+    p = ws.resolve(path)
+    if not p.exists():
+        return json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
+    if not p.is_file():
+        return json.dumps({"error": f"不是文件: {path}"}, ensure_ascii=False)
+    if old_text == "":
+        return json.dumps({"error": "old_text 不能为空", "path": path}, ensure_ascii=False)
+
+    try:
+        content = p.read_text(encoding="utf-8")
+    except Exception as e:
+        return json.dumps({"error": f"文件读取失败: {e}", "path": path}, ensure_ascii=False)
+
+    match_count = content.count(old_text)
+    if match_count == 0:
+        return json.dumps({
+            "error": "未找到要替换的文本，要求唯一匹配但当前匹配数为 0",
+            "path": path,
+            "match_count": 0,
+        }, ensure_ascii=False)
+    if match_count >= 2:
+        return json.dumps({
+            "error": f"找到多处匹配，要求唯一匹配但当前匹配数为 {match_count}",
+            "path": path,
+            "match_count": match_count,
+        }, ensure_ascii=False)
+
+    updated = content.replace(old_text, new_text, 1)
+    tmp = p.with_name(f".{p.name}.tmp")
+    tmp.write_text(updated, encoding="utf-8")
+    tmp.replace(p)
+
+    return json.dumps({
+        "ok": True,
+        "path": path,
+        "match_count": 1,
+        "bytes_written": len(updated.encode("utf-8")),
+        "size": p.stat().st_size,
+        "size_human": _format_size(p.stat().st_size),
+    }, ensure_ascii=False)
+
+
+def copy_file_impl(ws: Workspace, source_path: str, destination_path: str) -> str:
+    src = ws.resolve(source_path)
+    dst = ws.resolve(destination_path)
+
+    if not src.exists():
+        return json.dumps({"error": f"源文件不存在: {source_path}"}, ensure_ascii=False)
+    if not src.is_file():
+        return json.dumps({"error": f"源路径不是文件: {source_path}"}, ensure_ascii=False)
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+
+    size = dst.stat().st_size
+    return json.dumps({
+        "ok": True,
+        "source_path": source_path,
+        "destination_path": destination_path,
         "size": size,
         "size_human": _format_size(size),
     }, ensure_ascii=False)

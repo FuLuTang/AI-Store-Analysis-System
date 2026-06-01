@@ -532,10 +532,11 @@ def _tool_target(name: str, args_json: str) -> str:
 
     # 按工具名返回可读的描述
     labels = {
-        "read_document": lambda a: f"读取 {a.get('path', '?')}",
         "read_document_structure": lambda a: f"读取 {a.get('path', '?')} 结构",
-        "read_file": lambda a: f"读取 {a.get('path', '?')}",
+        "read_file": lambda a: f"读取 {a.get('path', '?')} 原文",
         "write_file": lambda a: f"写入 {a.get('path', '?')}",
+        "replace_text": lambda a: f"替换 {a.get('path', '?')} 中的指定文本",
+        "copy_file": lambda a: f"复制 {a.get('source_path', '?')} 到 {a.get('destination_path', '?')}",
         "list_files": lambda a: f"列出 {a.get('subdir', '根目录')}/ 目录",
         "run_python": lambda a: f"执行 {a.get('script_path', '?')}",
         "search_files": lambda a: f"检索关键词 {a.get('pattern', '?')}",

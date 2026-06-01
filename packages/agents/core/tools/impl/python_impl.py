@@ -8,6 +8,18 @@ def run_python_impl(ws: Workspace, script_path: str, timeout: int = 300) -> str:
     script = ws.resolve(script_path)
     if not script.exists():
         raise FileNotFoundError(f"脚本不存在: {script}")
+    
+    # 自动复制旧脚本逻辑
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in script.resolve().parents:
+            import shutil
+            copied_script_path = ws.scripts_dir / script.name
+            shutil.copyfile(script, copied_script_path)
+            script = copied_script_path
+    except Exception:
+        pass
+
     if ws.scripts_dir not in script.parents and script.parent != ws.scripts_dir:
         raise ValueError(f"只能执行 scripts/ 下的 Python 脚本，收到: {script_path}")
     if script.suffix != ".py":

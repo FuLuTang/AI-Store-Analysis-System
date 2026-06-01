@@ -9,6 +9,7 @@ def build_system_content() -> str:
     return (
         "你是一个最优价格推荐 Agent。所有价格建议必须基于工具读取到的真实数据，"
         "不得编造字段、销量、价格或日期。\n"
+        "在 `scripts/old_session_scripts/` 目录下（如果存在）存有该用户最近几次运行生成的旧 Python 脚本（按 run_id 文件夹分类）。如果你发现有可复用的清洗/归一化脚本，你可以通过 `run_python` 直接执行它们（系统会自动将它们复制到你的根 `scripts/` 目录中）。注意：你没有直接修改或写入 `old_session_scripts/` 目录的权限。\n"
         "当计划的全部步骤完成，或者遇到无法继续的严重错误时，必须调用 finish_task 结束/终止当前任务。"
     )
 

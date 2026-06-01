@@ -43,6 +43,42 @@ class Workspace:
                   self._scripts_dir, self._tables_dir]:
             d.mkdir(parents=True, exist_ok=True)
         self._manifest = Manifest(report_id=self.report_id, workspace_dir=str(self._dir))
+        self._copy_old_session_scripts()
+
+    def _copy_old_session_scripts(self) -> None:
+        try:
+            import shutil
+            # self._dir is storage/accounts/{account_id}/runs/{task_type}/{run_id}/workspace
+            run_dir = self._dir.parent
+            task_runs_dir = run_dir.parent
+            if not task_runs_dir.exists() or not task_runs_dir.is_dir():
+                return
+
+            # Find sibling runs that have a workspace/scripts directory
+            siblings = []
+            for p in task_runs_dir.iterdir():
+                if p.is_dir() and p.name != run_dir.name:
+                    if (p / "workspace" / "scripts").is_dir():
+                        siblings.append(p)
+
+            # Sort by name (timestamp format ensures correct chronological sorting)
+            siblings.sort(key=lambda x: x.name, reverse=True)
+            target_runs = siblings[:3]
+
+            old_scripts_root = self._scripts_dir / "old_session_scripts"
+            if old_scripts_root.exists():
+                return
+
+            for past_run in target_runs:
+                past_scripts_dir = past_run / "workspace" / "scripts"
+                py_files = [f for f in past_scripts_dir.iterdir() if f.is_file() and f.suffix == ".py"]
+                if py_files:
+                    dest_dir = old_scripts_root / past_run.name
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    for py_file in py_files:
+                        shutil.copyfile(py_file, dest_dir / py_file.name)
+        except Exception:
+            pass
 
     @property
     def dir(self) -> Path:

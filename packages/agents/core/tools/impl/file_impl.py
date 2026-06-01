@@ -160,6 +160,12 @@ def read_file_impl(ws: Workspace, path: str, offset: int = 0, limit: int = DEFAU
 
 def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwrite") -> str:
     p = ws.resolve(path)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in p.resolve().parents or p.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {path}"}, ensure_ascii=False)
+    except Exception:
+        pass
     p.parent.mkdir(parents=True, exist_ok=True)
     mode = (mode or "overwrite").strip().lower()
     if mode not in {"overwrite", "append"}:

@@ -188,55 +188,30 @@ def _build_rendered_final_charts(points: list[dict[str, Any]], purchase_price: f
     if not points:
         return []
 
-    revenue_points = []
-    profit_points = []
-    revenue_profit_points = []
-    quantity_points = []
-    revenue_label = "销售额"
-    profit_label = "利润" if purchase_price is not None else "销售额代理"
+    dimensions = ["售价", "销量", "销售额"]
+    if purchase_price is not None:
+        dimensions.append("利润")
 
+    source = []
     for point in points:
         price = _to_number(point.get("price")) or 0.0
         qty = _to_number(point.get("normalizedQty")) or 0.0
         revenue = round(price * qty, 4)
+        row = [round(price, 2), round(qty, 4), revenue]
         if purchase_price is not None:
             profit = round((price - purchase_price) * qty, 4)
-        else:
-            profit = revenue
-        quantity_points.append([round(price, 2), round(qty, 4)])
-        revenue_points.append([round(price, 2), revenue])
-        profit_points.append([round(price, 2), profit])
-        revenue_profit_points.append([revenue, profit])
+            row.append(profit)
+        source.append(row)
 
     return [
         {
-            "name": "售价-销售数",
+            "name": "售价综合分析",
             "xLabel": "售价",
-            "yLabel": "销售数",
-            "basis": "normalizedQty",
-            "points": quantity_points,
-        },
-        {
-            "name": "售价-销售额",
-            "xLabel": "售价",
-            "yLabel": revenue_label,
-            "basis": "sales_revenue",
-            "points": revenue_points,
-        },
-        {
-            "name": f"售价-{profit_label}",
-            "xLabel": "售价",
-            "yLabel": profit_label,
-            "basis": "profit" if purchase_price is not None else "sales_revenue_proxy",
-            "points": profit_points,
-        },
-        {
-            "name": f"销售额-{profit_label}",
-            "xLabel": revenue_label,
-            "yLabel": profit_label,
-            "basis": "revenue_profit",
-            "points": revenue_profit_points,
-        },
+            "yAxisLeft": {"name": "销量", "unit": "件"},
+            "yAxisRight": {"name": "金额", "unit": "元"},
+            "dimensions": dimensions,
+            "source": source,
+        }
     ]
 
 

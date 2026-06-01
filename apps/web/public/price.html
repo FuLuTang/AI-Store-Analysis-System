@@ -952,43 +952,54 @@
             disposeRenderedCharts();
             if (!renderedChartsEl) return;
             const finalCharts = Array.isArray(charts) ? charts : [];
-            const fallbackCharts = [];
             if (finalCharts.length === 0 && Array.isArray(normalizedPoints) && normalizedPoints.length > 0) {
-                fallbackCharts.push({
-                    name: '售价-销售数',
-                    xLabel: '售价',
-                    yLabel: '销售数',
-                    points: normalizedPoints.map((item) => [Number(item.price), Number(item.normalizedQty)]),
+                finalCharts.push({
+                    name: "售价综合分析",
+                    xLabel: "售价",
+                    yAxisLeft: {"name": "销量", "unit": "件"},
+                    yAxisRight: {"name": "金额", "unit": "元"},
+                    dimensions: ["售价", "销量", "销售额"],
+                    source: normalizedPoints.map((item) => [
+                        Number(item.price),
+                        Number(item.normalizedQty),
+                        Number(item.price) * Number(item.normalizedQty)
+                    ]),
                 });
             }
-            const sourceCharts = finalCharts.length > 0 ? finalCharts : fallbackCharts;
 
-            if (sourceCharts.length === 0) {
+            if (finalCharts.length === 0) {
                 renderedChartsEl.innerHTML = '<div class="empty-state">暂无可渲染的图表。</div>';
                 return;
             }
 
-            renderedChartsEl.innerHTML = sourceCharts.map((chart, index) => `
-                <div class="chart-card">
-                    <div class="chart-card-head">
-                        <div class="chart-card-title">${escapeHtml(chart.name || `图表 ${index + 1}`)}</div>
-                        <div class="chart-card-note">${escapeHtml(chart.xLabel || 'x') } / ${escapeHtml(chart.yLabel || 'y')}</div>
+            renderedChartsEl.innerHTML = finalCharts.map((chart, index) => {
+                let note = '';
+                if (Array.isArray(chart.source)) {
+                    note = `${escapeHtml(chart.xLabel || '售价')} / ${escapeHtml(chart.yAxisLeft?.name || '销量')}、${escapeHtml(chart.yAxisRight?.name || '金额')}`;
+                } else {
+                    note = `${escapeHtml(chart.xLabel || '售价')} / ${escapeHtml(chart.yLabel || 'y')}`;
+                }
+                return `
+                    <div class="chart-card">
+                        <div class="chart-card-head">
+                            <div class="chart-card-title">${escapeHtml(chart.name || `图表 ${index + 1}`)}</div>
+                            <div class="chart-card-note">${note}</div>
+                        </div>
+                        <div class="chart-stage" id="renderedChart_${index}"></div>
                     </div>
-                    <div class="chart-stage" id="renderedChart_${index}"></div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
 
-            sourceCharts.forEach((chart, index) => {
+            finalCharts.forEach((chart, index) => {
                 const el = document.getElementById(`renderedChart_${index}`);
                 if (!el || !window.echarts) return;
                 const instance = window.echarts.init(el);
                 renderedChartInstances.push(instance);
-                const points = Array.isArray(chart.points) ? chart.points : [];
-                const seriesData = points
-                    .map((pair) => [Number(pair?.[0]), Number(pair?.[1])])
-                    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
-                    .sort((a, b) => a[0] - b[0]);
-                if (seriesData.length === 0) {
+
+                const hasSource = Array.isArray(chart.source) && chart.source.length > 0;
+                const hasPoints = Array.isArray(chart.points) && chart.points.length > 0;
+
+                if (!hasSource && !hasPoints) {
                     instance.setOption({
                         title: {
                             text: '暂无数据',
@@ -1000,10 +1011,84 @@
                     return;
                 }
 
-                instance.setOption({
+                const option = {
                     animationDuration: 500,
-                    grid: { left: 52, right: 24, top: 24, bottom: 46 },
-                    tooltip: {
+                    grid: { left: 52, right: hasSource ? 52 : 24, top: hasSource ? 40 : 24, bottom: 46 },
+                    xAxis: {
+                        type: 'value',
+                        scale: true,
+                        name: chart.xLabel || '售价',
+                        nameTextStyle: { color: '#94a3b8' },
+                        axisLabel: { color: '#94a3b8', formatter: (value) => Number(value).toFixed(2) },
+                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                    }
+                };
+
+                if (hasSource) {
+                    option.legend = {
+                        data: chart.dimensions.slice(1),
+                        textStyle: { color: '#94a3b8' },
+                        top: 0
+                    };
+                    option.tooltip = {
+                        trigger: 'axis',
+                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                        borderColor: 'rgba(148, 163, 184, 0.25)',
+                        textStyle: { color: '#e2e8f0' },
+                        formatter(params) {
+                            if (!params || params.length === 0) return '';
+                            let html = `售价：${formatPrice(params[0].value[0])} 元<br/>`;
+                            params.forEach(p => {
+                                const val = p.value[p.seriesIndex + 1];
+                                const unit = p.seriesName === '销量' ? '件' : '元';
+                                html += `${escapeHtml(p.seriesName)}：${Number(val).toFixed(2)} ${unit}<br/>`;
+                            });
+                            return html;
+                        }
+                    };
+                    option.dataset = {
+                        dimensions: chart.dimensions,
+                        source: chart.source
+                    };
+                    option.yAxis = [
+                        {
+                            type: 'value',
+                            name: chart.yAxisLeft?.name || '销量',
+                            nameTextStyle: { color: '#94a3b8' },
+                            axisLabel: { color: '#94a3b8' },
+                            splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                        },
+                        {
+                            type: 'value',
+                            name: chart.yAxisRight?.name || '金额',
+                            nameTextStyle: { color: '#94a3b8' },
+                            axisLabel: { color: '#94a3b8' },
+                            splitLine: { show: false }
+                        }
+                    ];
+                    option.series = chart.dimensions.slice(1).map((name) => {
+                        const isQty = name === '销量';
+                        return {
+                            name: name,
+                            type: 'line',
+                            smooth: true,
+                            yAxisIndex: isQty ? 0 : 1,
+                            encode: { x: '售价', y: name },
+                            symbol: 'circle',
+                            symbolSize: 8,
+                            lineStyle: { width: 3 },
+                            itemStyle: {
+                                color: name === '销量' ? '#38bdf8' : (name === '利润' ? '#10b981' : '#f59e0b')
+                            }
+                        };
+                    });
+                } else {
+                    const seriesData = chart.points
+                        .map((pair) => [Number(pair?.[0]), Number(pair?.[1])])
+                        .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+                        .sort((a, b) => a[0] - b[0]);
+
+                    option.tooltip = {
                         trigger: 'axis',
                         backgroundColor: 'rgba(15, 23, 42, 0.92)',
                         borderColor: 'rgba(148, 163, 184, 0.25)',
@@ -1012,25 +1097,17 @@
                             const point = params?.[0];
                             if (!point) return '';
                             const [x, y] = point.data || [];
-                            return `${escapeHtml(chart.xLabel || 'X')}：${formatPrice(x)}<br/>${escapeHtml(chart.yLabel || 'Y')}：${Number(y).toFixed(2)}`;
+                            return `${escapeHtml(chart.xLabel || 'X')}：${Number(x).toFixed(2)}<br/>${escapeHtml(chart.yLabel || 'Y')}：${Number(y).toFixed(2)}`;
                         }
-                    },
-                    xAxis: {
-                        type: 'value',
-                        scale: true,
-                        name: chart.xLabel || 'x',
-                        nameTextStyle: { color: '#94a3b8' },
-                        axisLabel: { color: '#94a3b8', formatter: (value) => Number(value).toFixed(2) },
-                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
-                    },
-                    yAxis: {
+                    };
+                    option.yAxis = {
                         type: 'value',
                         name: chart.yLabel || 'y',
                         nameTextStyle: { color: '#94a3b8' },
                         axisLabel: { color: '#94a3b8' },
                         splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
-                    },
-                    series: [
+                    };
+                    option.series = [
                         {
                             type: 'line',
                             smooth: true,
@@ -1053,8 +1130,10 @@
                                 }
                             }
                         }
-                    ]
-                });
+                    ];
+                }
+
+                instance.setOption(option);
             });
         }
 

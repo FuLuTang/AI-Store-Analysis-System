@@ -1064,18 +1064,21 @@ async def run_price_recommendation_task(session: SessionState, decoded_files: li
                 _save_session_json(session)
                 return
             session.status = "completed"
+        _update_run_status_in_meta(session, "completed")
         _save_session_json(session)
     except (TaskAbortedError, asyncio.CancelledError):
         add_log(session, "price_done", {"level": "error", "message": "价格推荐任务被用户强制终止。", "progress": 100})
         with session.runtime_lock:
             session.status = "aborted"
             session.error_message = "任务被用户强行终止。"
+        _update_run_status_in_meta(session, "aborted")
         _save_session_json(session)
     except Exception as e:
         add_log(session, "price_done", {"level": "error", "message": f"价格推荐任务失败: {str(e)}", "error_details": str(e)})
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
+        _update_run_status_in_meta(session, "error")
         _save_session_json(session)
 
 
@@ -1126,6 +1129,12 @@ async def start_price_recommendation(
         session.run_dir = None
 
     _ensure_run_dir(session)
+    # 记录运行历史
+    file_names = [df["name"] for df in decoded_files]
+    try:
+        _add_run_to_meta(session, file_names)
+    except Exception as e:
+        logger.error("Failed to record run metadata: %s", str(e))
     _save_session_json(session)
     session._pipeline_task = asyncio.create_task(
         run_price_recommendation_task(session, decoded_files, product_name, candidate_count)
@@ -1139,21 +1148,61 @@ async def start_price_recommendation(
 
 
 @app.get("/api/price-recommendations/status")
-def get_price_recommendation_status(x_fzt_key: Optional[str] = Header(default=None)):
+def get_price_recommendation_status(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
-    result = session.result
-    full_result = session.full_result
-    try:
-        disk_result, disk_full = read_price_service_result(session.run_dir)
-        result = disk_result if disk_result is not None else result
-        full_result = disk_full if disk_full is not None else full_result
-    except Exception:
-        pass
+    
+    target_run_id = run_id or session.run_id
+    if not target_run_id:
+        return {
+            "status": "idle",
+            "errorMessage": "",
+            "result": None,
+            "fullResult": None,
+            "runId": None
+        }
+
+    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
+    if not run_dir.exists():
+        run_dir = session.account_dir / "runs" / target_run_id
+
+    status = session.status if target_run_id == session.run_id else "completed"
+    error_msg = session.error_message if target_run_id == session.run_id else ""
+    result = session.result if target_run_id == session.run_id else None
+    full_result = session.full_result if target_run_id == session.run_id else None
+
+    if run_dir.exists():
+        session_json_path = run_dir / "session.json"
+        if session_json_path.exists():
+            try:
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                status = sdata.get("status", "completed")
+                error_msg = sdata.get("errorMessage", "")
+                result = sdata.get("result")
+                full_result = sdata.get("fullResult")
+            except Exception:
+                pass
+        try:
+            disk_result, disk_full = read_price_service_result(run_dir)
+            result = disk_result if disk_result is not None else result
+            full_result = disk_full if disk_full is not None else full_result
+        except Exception:
+            pass
+
+    safe_error = ""
+    if status == "aborted":
+        safe_error = "任务被用户强行终止。"
+    elif status == "error":
+        safe_error = f"任务执行失败: {error_msg}" if error_msg else "任务执行失败"
+
     return {
-        "status": session.status,
-        "errorMessage": session.error_message if session.status in ("error", "aborted", "interrupted") else "",
+        "status": status,
+        "errorMessage": safe_error,
         "result": result,
         "fullResult": full_result,
+        "runId": target_run_id
     }
 
 
@@ -1280,7 +1329,14 @@ async def download_report_zip(
     if not target_run_id:
         raise HTTPException(status_code=404, detail="未找到任何运行记录")
         
-    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
+    task_type = session.task_type
+    runs = _load_runs(session.account_dir)
+    for r in runs:
+        if r.get("runId") == target_run_id:
+            task_type = r.get("taskType", task_type)
+            break
+            
+    run_dir = session.account_dir / "runs" / task_type / target_run_id
     if not run_dir.exists():
         # 退化/向后兼容路径
         run_dir = session.account_dir / "runs" / target_run_id
@@ -1372,7 +1428,12 @@ async def toggle_report_public(
     share_url = f"{origin}/public.html?run_id={run_id}&sign={sign}"
     
     # Also update session.json if it exists inside the run_dir
-    run_dir = session.account_dir / "runs" / session.task_type / run_id
+    task_type = "diagnosis"
+    for r in runs:
+        if r.get("runId") == run_id:
+            task_type = r.get("taskType", task_type)
+            break
+    run_dir = session.account_dir / "runs" / task_type / run_id
     if not run_dir.exists():
         run_dir = session.account_dir / "runs" / run_id
     if run_dir.exists():
@@ -1417,7 +1478,8 @@ def delete_report(
     _save_runs(session.account_dir, runs)
     
     # Delete physically
-    run_dir = session.account_dir / "runs" / session.task_type / run_id
+    task_type = target_run.get("taskType", "diagnosis")
+    run_dir = session.account_dir / "runs" / task_type / run_id
     if not run_dir.exists():
         run_dir = session.account_dir / "runs" / run_id
         

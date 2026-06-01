@@ -1115,11 +1115,21 @@
 
         async function refreshStatus() {
             try {
-                const resp = await fetch('/api/price-recommendations/status', { headers: authHeaders() });
+                const urlParams = new URLSearchParams(window.location.search);
+                const queryRunId = urlParams.get('run_id');
+                let statusUrl = '/api/price-recommendations/status';
+                if (queryRunId) {
+                    statusUrl += '?run_id=' + encodeURIComponent(queryRunId);
+                }
+                const resp = await fetch(statusUrl, { headers: authHeaders() });
                 const data = await resp.json();
-                const terminal = !['queued', 'running'].includes(data.status);
-                if (['queued', 'running'].includes(data.status)) {
-                    setStatus(data.status === 'running' ? '任务正在运行中...' : '任务正在排队...');
+                
+                const status = data.status;
+                const isHistoryMode = !!queryRunId;
+                const terminal = !['queued', 'running'].includes(status);
+                
+                if (!isHistoryMode && ['queued', 'running'].includes(status)) {
+                    setStatus(status === 'running' ? '任务正在运行中...' : '任务正在排队...');
                     stopBtn.hidden = false;
                     startBtn.disabled = true;
                     connectStream();
@@ -1132,23 +1142,39 @@
                         pollingTimer = null;
                     }
                     stopBtn.hidden = true;
-                    startBtn.disabled = selectedFiles.length === 0 || !productNameInput.value.trim();
-                    if (data.status === 'completed') {
-                        setStatus('推算完成。');
-                    } else if (data.status === 'aborted') {
-                        setStatus('任务已停止。');
-                    } else if (data.status === 'error') {
+                    if (isHistoryMode) {
+                        startBtn.disabled = true;
+                        productNameInput.disabled = true;
+                        candidateCountSelect.disabled = true;
+                        reasoningEffortSelect.disabled = true;
+                        dropZone.style.pointerEvents = 'none';
+                        dropZone.style.opacity = '0.7';
+                    } else {
+                        startBtn.disabled = selectedFiles.length === 0 || !productNameInput.value.trim();
+                    }
+                    
+                    if (status === 'completed') {
+                        setStatus(isHistoryMode ? '正在查看历史推算记录。' : '推算完成。');
+                    } else if (status === 'aborted') {
+                        setStatus(isHistoryMode ? '历史任务已停止。' : '任务已停止。');
+                    } else if (status === 'error') {
                         setStatus(data.errorMessage ? `任务失败：${data.errorMessage}` : '任务失败。');
                     }
                 }
 
                 if (data.result) {
                     renderResult(data.result, data.fullResult || '');
+                    if (isHistoryMode && data.result.productName) {
+                        productNameInput.value = data.result.productName;
+                        if (data.result.candidateCount) {
+                            candidateCountSelect.value = String(data.result.candidateCount);
+                        }
+                    }
                 }
                 if (typeof data.result === 'object' && data.result && data.result.recommendations) {
                     currentResult = data.result;
                 }
-                if (terminal && data.status !== 'completed' && data.errorMessage) {
+                if (terminal && status !== 'completed' && data.errorMessage) {
                     resultSubtitle.textContent = data.errorMessage;
                     resultBadge.className = 'badge warn';
                     resultBadge.innerHTML = '<i class="fas fa-triangle-exclamation"></i> 失败';

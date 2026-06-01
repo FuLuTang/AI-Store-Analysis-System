@@ -74,7 +74,7 @@ class AgentLoop:
         self._total_cache_hit = 0
         self._total_cache_miss = 0
         self.messages: list[dict] = []
-        self.tools = available_tool_call_for_agent(ws)
+        self.tools = available_tool_call_for_agent(ws, task_type=self.task_type)
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
         self._finished = False
@@ -86,7 +86,13 @@ class AgentLoop:
             self._finish_success = success
             self._finish_text = text
 
-        self.tool_map = build_tool_map(ws, emit_log=self._emit_log, emit_status=self._emit_status, on_finish=on_finish)
+        self.tool_map = build_tool_map(
+            ws,
+            task_type=self.task_type,
+            emit_log=self._emit_log,
+            emit_status=self._emit_status,
+            on_finish=on_finish,
+        )
         self._round = 0
         self._progress = 15  # 进度起点（pipeline 已推到 15%）
 
@@ -104,9 +110,33 @@ class AgentLoop:
                 sys_content = build_system_content(self.analysis_params)
                 user_content = build_user_content(self.ws, self.analysis_params)
 
+            # 获取初始的工作区文件列表，预先填入对话历史中，实现 Agent 启动即知晓所有输入文件与历史脚本
+            init_files_json = self.tool_map["list_files"](subdir="")
+
             self.messages = [
                 {"role": "system", "content": sys_content},
                 {"role": "user", "content": user_content},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_init_list_files",
+                            "type": "function",
+                            "function": {
+                                "name": "list_files",
+                                "arguments": '{"subdir": ""}'
+                            }
+                        }
+                    ]
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_init_list_files",
+                    "name": "list_files",
+                    "content": init_files_json
+                }
             ]
 
             self._emit_status("custom_agent", "active")
@@ -407,8 +437,8 @@ class AgentLoop:
         """统一 assistant message 格式，处理 reasoning_content / think 标签。
 
         规则（DeepSeek 文档）：
-          - 有 tool_calls：reasoning_content 必须保留
-          - 无 tool_calls：reasoning_content 丢弃
+          - reasoning_content 只要存在就保留，避免思考链在后续轮次里丢失
+          - 有 tool_calls 时必须保留 reasoning_content，即使为空
           - content 中如果有 <think>...</think>，解析到 reasoning_content 字段
         """
         content = sr.content
@@ -422,13 +452,16 @@ class AgentLoop:
 
         saved = {"role": "assistant", "content": content}
 
+        if reasoning:
+            saved["reasoning_content"] = reasoning
+
         if sr.tool_calls:
             saved["tool_calls"] = [
                 {"id": tc["id"], "type": "function",
                  "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                 for tc in sr.tool_calls
             ]
-            # 有 tool_calls 时必须传 reasoning_content，即使为空
+            # 有 tool_calls 时必须显式带上 reasoning_content 字段
             saved["reasoning_content"] = reasoning or ""
 
         return saved

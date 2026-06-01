@@ -7,9 +7,34 @@ import json
 from ..workspace import Workspace
 
 
-def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
+TOOL_BLACKLIST_BY_TASK_TYPE: dict[str, set[str]] = {
+    "diagnosis": {
+        "read_plan",
+    },
+    "price_recommendation": {
+        "read_context",
+        "read_plan",
+    },
+}
+
+
+def _filter_tools_by_task_type(tools: list[dict], task_type: str) -> list[dict]:
+    blocked = TOOL_BLACKLIST_BY_TASK_TYPE.get(task_type, set())
+    if not blocked:
+        return tools
+    return [tool for tool in tools if tool.get("function", {}).get("name") not in blocked]
+
+
+def _filter_tool_map_by_task_type(tool_map: dict, task_type: str) -> dict:
+    blocked = TOOL_BLACKLIST_BY_TASK_TYPE.get(task_type, set())
+    if not blocked:
+        return tool_map
+    return {name: fn for name, fn in tool_map.items() if name not in blocked}
+
+
+def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -> list[dict]:
     """返回 OpenAI tools 参数列表，由已有的 _impl 函数自动拼合。"""
-    return [
+    tools = [
         # ── 文档解析 ──
         _make_tool(
             name="read_document",
@@ -207,6 +232,7 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
             },
         ),
     ]
+    return _filter_tools_by_task_type(tools, task_type)
 
 
 def get_step_milestone(step_idx: int, total_steps: int) -> int:
@@ -231,7 +257,7 @@ def get_plan_progress_info(ws) -> tuple[int, int]:
         return -1, 0
 
 
-def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=None) -> dict:
+def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, emit_status=None, on_finish=None) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
 
     emit_log(node_id, message)  —— 日志回调，message 可为 str 或 dict
@@ -376,7 +402,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
                 on_finish(success=False, text=text)
             return "任务已报错终止。"
 
-    return {
+    tool_map = {
         "read_document_structure": _read_document_structure,
         "read_file": _read_file,
         "write_file": _write_file,
@@ -392,6 +418,7 @@ def build_tool_map(ws: Workspace, emit_log=None, emit_status=None, on_finish=Non
         "check_plan": _check_plan,
         "finish_task": _finish_task,
     }
+    return _filter_tool_map_by_task_type(tool_map, task_type)
 
 
 def _make_tool(name: str, description: str, parameters: dict) -> dict:

@@ -193,6 +193,12 @@ def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwri
 
 def replace_text_impl(ws: Workspace, path: str, old_text: str, new_text: str) -> str:
     p = ws.resolve(path)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in p.resolve().parents or p.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {path}"}, ensure_ascii=False)
+    except Exception:
+        pass
     if not p.exists():
         return json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
     if not p.is_file():
@@ -237,6 +243,12 @@ def replace_text_impl(ws: Workspace, path: str, old_text: str, new_text: str) ->
 def copy_file_impl(ws: Workspace, source_path: str, destination_path: str) -> str:
     src = ws.resolve(source_path)
     dst = ws.resolve(destination_path)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in dst.resolve().parents or dst.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {destination_path}"}, ensure_ascii=False)
+    except Exception:
+        pass
 
     if not src.exists():
         return json.dumps({"error": f"源文件不存在: {source_path}"}, ensure_ascii=False)

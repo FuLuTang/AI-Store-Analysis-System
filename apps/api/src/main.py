@@ -439,8 +439,8 @@ class SessionState:
     @property
     def logs_path(self) -> Path:
         if self.run_dir:
-            return self.run_dir / "logs.json"
-        return self.account_dir / "latest_logs.json"
+            return self.run_dir / "logs.jsonl"
+        return self.account_dir / "latest_logs.jsonl"
 
     @property
     def report_path(self) -> Path:
@@ -558,12 +558,7 @@ class SessionManager:
                 rd = saved.get("_runDir")
                 if rd:
                     session.run_dir = Path(rd)
-                    logs_file = session.run_dir / "logs.json"
-                    if logs_file.exists():
-                        try:
-                            session.logs = json.loads(logs_file.read_text(encoding="utf-8"))
-                        except Exception:
-                            pass
+                    session.logs = _load_logs_from_file(session)
 
             self._sessions[cache_key] = session
             return session
@@ -608,7 +603,11 @@ def _ensure_session_dirs(session: SessionState):
 def persist_latest_logs(session: SessionState):
     _ensure_session_dirs(session)
     try:
-        session.logs_path.write_text(json.dumps(session.logs, ensure_ascii=False, indent=2), encoding="utf-8")
+        event = session.logs[-1] if session.logs else None
+        if not event:
+            return
+        with session.logs_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
@@ -628,7 +627,8 @@ def reset_events(session: SessionState):
     with session.event_lock:
         event = {"type": "reset", "time": _now_time()}
         session.logs.append(event)
-        # 不 overwrite 文件，只保留原有日志
+        persist_latest_logs(session)
+        # 不 overwrite 文件，只追加一行日志
 
 
 def add_status(session: SessionState, node_id: str, status: str):
@@ -880,9 +880,18 @@ def _load_logs_from_file(session, run_id: Optional[str] = None) -> list:
         if run_id:
             run_dir = session.account_dir / "runs" / session.task_type / run_id
         if run_dir:
-            p = run_dir / "logs.json"
-            if p.exists():
-                return json.loads(p.read_text(encoding="utf-8"))
+            jsonl_path = run_dir / "logs.jsonl"
+            if jsonl_path.exists():
+                lines = [line.strip() for line in jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                return [json.loads(line) for line in lines]
+
+            legacy_path = run_dir / "logs.json"
+            if legacy_path.exists():
+                loaded = json.loads(legacy_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    return loaded
+                if isinstance(loaded, dict):
+                    return [loaded]
     except Exception:
         pass
     return []

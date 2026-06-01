@@ -192,15 +192,25 @@ def _build_rendered_final_charts(points: list[dict[str, Any]], purchase_price: f
     if purchase_price is not None:
         dimensions.append("利润")
 
-    source = []
+    grouped: dict[float, dict[str, float]] = {}
     for point in points:
-        price = _to_number(point.get("price")) or 0.0
-        qty = _to_number(point.get("normalizedQty")) or 0.0
-        revenue = round(price * qty, 4)
-        row = [round(price, 2), round(qty, 4), revenue]
+        price = _to_number(point.get("price"))
+        qty = _to_number(point.get("normalizedQty"))
+        if price is None or qty is None:
+            continue
+        bucket_price = round(round(price / 0.1) * 0.1, 1)
+        bucket = grouped.setdefault(bucket_price, {"qty": 0.0, "revenue": 0.0, "profit": 0.0})
+        bucket["qty"] += qty
+        bucket["revenue"] += price * qty
         if purchase_price is not None:
-            profit = round((price - purchase_price) * qty, 4)
-            row.append(profit)
+            bucket["profit"] += (price - purchase_price) * qty
+
+    source = []
+    for price in sorted(grouped):
+        bucket = grouped[price]
+        row = [round(price, 1), round(bucket["qty"], 4), round(bucket["revenue"], 4)]
+        if purchase_price is not None:
+            row.append(round(bucket["profit"], 4))
         source.append(row)
 
     return [

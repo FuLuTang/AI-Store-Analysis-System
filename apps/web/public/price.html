@@ -1000,6 +1000,13 @@
                 `;
             }).join('');
 
+            // 动态布局：< 4 个图表时单列全宽，>= 4 个时两列
+            if (finalCharts.length < 4) {
+                renderedChartsEl.style.gridTemplateColumns = '1fr';
+            } else {
+                renderedChartsEl.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+            }
+
             finalCharts.forEach((chart, index) => {
                 const el = document.getElementById(`renderedChart_${index}`);
                 if (!el || !window.echarts) return;

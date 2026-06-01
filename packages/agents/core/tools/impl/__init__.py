@@ -1,4 +1,4 @@
-from .file_impl import read_file_impl, write_file_impl, list_files_impl
+from .file_impl import copy_file_impl, list_files_impl, read_file_impl, replace_text_impl, write_file_impl
 from .python_impl import run_python_impl
 from .duckdb_impl import duckdb_query_impl, duckdb_register_parquet_impl
 from .context_impl import read_context_impl

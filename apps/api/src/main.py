@@ -368,22 +368,6 @@ def generate_share_sign(run_id: str) -> str:
     h = hashlib.sha256(f"{run_id}:{SERVER_SECRET_KEY}".encode("utf-8"))
     return h.hexdigest()[:16]
 
-def _find_run_dir(account_dir: Path, run_id: str, default_task_type: str = "diagnosis") -> Path:
-    # 1. Try default task type path first
-    default_path = account_dir / "runs" / default_task_type / run_id
-    if default_path.exists() and default_path.is_dir():
-        return default_path
-    # 2. Try standard task type subdirectories
-    for t_type in ("diagnosis", "price_recommendation"):
-        p = account_dir / "runs" / t_type / run_id
-        if p.exists() and p.is_dir():
-            return p
-    # 3. Try legacy root runs path
-    root_path = account_dir / "runs" / run_id
-    if root_path.exists() and root_path.is_dir():
-        return root_path
-    return default_path
-
 def _load_runs(account_dir: Path) -> list:
     runs_file = account_dir / "runs.json"
     if runs_file.exists():
@@ -834,7 +818,7 @@ def get_status(
             "runId": None
         }
         
-    run_dir = _find_run_dir(session.account_dir, target_run_id, session.task_type)
+    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
         
     status = session.status if target_run_id == session.run_id else "completed"
     error_msg = session.error_message if target_run_id == session.run_id else ""
@@ -1181,7 +1165,7 @@ def get_price_recommendation_status(
             "runId": None
         }
 
-    run_dir = _find_run_dir(session.account_dir, target_run_id, session.task_type)
+    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
 
     status = session.status if target_run_id == session.run_id else "completed"
     error_msg = session.error_message if target_run_id == session.run_id else ""
@@ -1354,7 +1338,7 @@ async def download_report_zip(
             task_type = r.get("taskType", task_type)
             break
             
-    run_dir = _find_run_dir(session.account_dir, target_run_id, task_type)
+    run_dir = session.account_dir / "runs" / task_type / target_run_id
         
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"运行目录不存在: {target_run_id}")
@@ -1448,7 +1432,7 @@ async def toggle_report_public(
         if r.get("runId") == run_id:
             task_type = r.get("taskType", task_type)
             break
-    run_dir = _find_run_dir(session.account_dir, run_id, task_type)
+    run_dir = session.account_dir / "runs" / task_type / run_id
     if run_dir.exists():
         session_json_path = run_dir / "session.json"
         if session_json_path.exists():
@@ -1492,7 +1476,7 @@ def delete_report(
     
     # Delete physically
     task_type = target_run.get("taskType", "diagnosis")
-    run_dir = _find_run_dir(session.account_dir, run_id, task_type)
+    run_dir = session.account_dir / "runs" / task_type / run_id
         
     if run_dir.exists() and run_dir.is_dir():
         try:
@@ -1544,7 +1528,7 @@ def get_public_report_status(
         raise HTTPException(status_code=403, detail="该分析报告未公开分享")
         
     task_type = target_run.get("taskType", "diagnosis")
-    run_dir = _find_run_dir(target_account_dir, run_id, task_type)
+    run_dir = target_account_dir / "runs" / task_type / run_id
         
     session_json_path = run_dir / "session.json"
     if not session_json_path.exists():
@@ -1732,7 +1716,13 @@ def get_report_asset(
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    target_run_dir = _find_run_dir(session.account_dir, run_id)
+    task_type = "diagnosis"
+    runs = _load_runs(session.account_dir)
+    for r in runs:
+        if r.get("runId") == run_id:
+            task_type = r.get("taskType", "diagnosis")
+            break
+    target_run_dir = session.account_dir / "runs" / task_type / run_id
     if not target_run_dir.exists():
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -1791,8 +1781,8 @@ def get_public_report_asset(
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     task_type = target_run.get("taskType", "diagnosis")
-    run_dir = _find_run_dir(target_account_dir, run_id, task_type)
-
+    run_dir = target_account_dir / "runs" / task_type / run_id
+ 
     asset_path = run_dir / "workspace" / "output" / filename
     if not asset_path.exists() or not asset_path.is_file():
         raise HTTPException(status_code=404, detail="Asset not found")

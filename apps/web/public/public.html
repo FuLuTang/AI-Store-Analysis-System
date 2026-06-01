@@ -106,7 +106,7 @@
         <!-- 报告展现卡片（分析完成后显示） -->
         <div id="reportSection" style="display: none; margin-top: 1.5rem;">
             <!-- 免登录宽下载按钮区 -->
-            <div class="card" style="padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid var(--border); background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.02) 100%);">
+            <div id="downloadCard" class="card" style="padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid var(--border); background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.02) 100%);">
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.25rem;">
                     <div>
                         <h4 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.25rem; color: var(--text);"><i class="fas fa-file-archive" style="color: var(--primary); margin-right: 6px;"></i> 诊断产物包已准备就绪</h4>
@@ -532,6 +532,43 @@
             }
             cardDiv.style.display = 'block';
 
+            // Check task type based on currentReport (simplified report)
+            let isPriceTask = false;
+            try {
+                let checkData = null;
+                if (typeof currentReport === 'object' && currentReport !== null) {
+                    checkData = currentReport;
+                } else if (typeof currentReport === 'string') {
+                    let jsonStr = currentReport.trim();
+                    if (jsonStr.startsWith('```json')) {
+                        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                    } else if (jsonStr.startsWith('```')) {
+                        jsonStr = jsonStr.replace(/```/g, '').trim();
+                    }
+                    checkData = JSON.parse(jsonStr);
+                }
+                if (checkData && (checkData.recommendations !== undefined || checkData.bestPrice !== undefined)) {
+                    isPriceTask = true;
+                }
+            } catch (e) {
+                console.error("解析 checkData 失败:", e);
+            }
+
+            const downloadCard = document.getElementById('downloadCard');
+            if (downloadCard) {
+                downloadCard.style.display = isPriceTask ? 'none' : 'block';
+            }
+
+            const logoSpan = document.querySelector('.public-logo span');
+            const headerH3 = document.querySelector('#reportHeaderBar h3');
+            if (isPriceTask) {
+                if (logoSpan) logoSpan.innerText = '门店 AI 价格推荐 · 报告预览';
+                if (headerH3) headerH3.innerHTML = '<i class="fas fa-tags"></i> 门店商品最优售价推荐报告';
+            } else {
+                if (logoSpan) logoSpan.innerText = '门店 AI 智能诊断 · 报告预览';
+                if (headerH3) headerH3.innerHTML = '<i class="fas fa-poll-h"></i> 门店经营智能分析诊断报告';
+            }
+
             if (isFull) {
                 disposeRenderedCharts();
                 reportContent.innerHTML = marked.parse(rep);
@@ -551,19 +588,9 @@
                         data = JSON.parse(jsonStr);
                     }
                     
-                    if (data && (data.recommendations !== undefined || data.bestPrice !== undefined)) {
-                        const logoSpan = document.querySelector('.public-logo span');
-                        if (logoSpan) logoSpan.innerText = '门店 AI 价格推荐 · 报告预览';
-                        const headerH3 = document.querySelector('#reportHeaderBar h3');
-                        if (headerH3) headerH3.innerHTML = '<i class="fas fa-tags"></i> 门店商品最优售价推荐报告';
-                        
+                    if (isPriceTask) {
                         renderPriceReport(data);
                     } else {
-                        const logoSpan = document.querySelector('.public-logo span');
-                        if (logoSpan) logoSpan.innerText = '门店 AI 智能诊断 · 报告预览';
-                        const headerH3 = document.querySelector('#reportHeaderBar h3');
-                        if (headerH3) headerH3.innerHTML = '<i class="fas fa-poll-h"></i> 门店经营智能分析诊断报告';
-                        
                         disposeRenderedCharts();
                         renderDiagnosisReport(data);
                     }

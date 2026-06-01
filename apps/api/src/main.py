@@ -865,16 +865,22 @@ def get_status(
 
 
 @app.get("/api/logs")
-def get_logs(x_fzt_key: Optional[str] = Header(default=None)):
-    resolve_session(x_fzt_key)  # 确保 session 缓存存在
-    return {"logs": _load_logs_from_file(resolve_session(x_fzt_key))}
+def get_logs(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
+    session = resolve_session(x_fzt_key)  # 确保 session 缓存存在
+    return {"logs": _load_logs_from_file(session, run_id)}
 
 
-def _load_logs_from_file(session) -> list:
+def _load_logs_from_file(session, run_id: Optional[str] = None) -> list:
     """强制从文件加载日志，不依赖 session.logs 的内存状态。"""
     try:
-        if session.run_dir:
-            p = session.run_dir / "logs.json"
+        run_dir = session.run_dir
+        if run_id:
+            run_dir = session.account_dir / "runs" / session.task_type / run_id
+        if run_dir:
+            p = run_dir / "logs.json"
             if p.exists():
                 return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
@@ -882,9 +888,22 @@ def _load_logs_from_file(session) -> list:
     return []
 
 
-async def sse_generator(session: SessionState):
+async def sse_generator(session: SessionState, run_id: Optional[str] = None):
     """SSE 日志推送，适配前端 EventSource('/api/stream')"""
-    session.logs = _load_logs_from_file(session)
+    session.logs = _load_logs_from_file(session, run_id)
+
+    target_status = session.status
+    if run_id:
+        try:
+            run_dir = session.account_dir / "runs" / session.task_type / run_id
+            session_json_path = run_dir / "session.json"
+            if session_json_path.exists():
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                target_status = sdata.get("status", "completed")
+            else:
+                target_status = "completed"
+        except Exception:
+            target_status = "completed"
 
     last_idx = 0
     yield f"data: {json.dumps({'type': 'reset', 'time': _now_time()})}\n\n"
@@ -897,7 +916,7 @@ async def sse_generator(session: SessionState):
                 yield f"data: {json.dumps(session.logs[i], ensure_ascii=False)}\n\n"
             last_idx = len(session.logs)
 
-        if session.status in ("completed", "error", "aborted") and last_idx >= len(session.logs):
+        if target_status in ("completed", "error", "aborted") and last_idx >= len(session.logs):
             yield f"data: {json.dumps({'type': 'done', 'time': _now_time()})}\n\n"
             break
 
@@ -909,10 +928,11 @@ async def sse_generator(session: SessionState):
 
 @app.get("/api/stream")
 async def stream(
+    run_id: Optional[str] = Query(None),
     x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
 ):
     session = resolve_session(x_fzt_key)
-    return StreamingResponse(sse_generator(session), media_type="text/event-stream")
+    return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
 
 
 
@@ -1209,17 +1229,21 @@ def get_price_recommendation_status(
 
 
 @app.get("/api/price-recommendations/logs")
-def get_price_recommendation_logs(x_fzt_key: Optional[str] = Header(default=None)):
+def get_price_recommendation_logs(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
-    return {"logs": _load_logs_from_file(session)}
+    return {"logs": _load_logs_from_file(session, run_id)}
 
 
 @app.get("/api/price-recommendations/stream")
 async def stream_price_recommendation(
+    run_id: Optional[str] = Query(None),
     x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
 ):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
-    return StreamingResponse(sse_generator(session), media_type="text/event-stream")
+    return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
 
 
 @app.post("/api/price-recommendations/stop")

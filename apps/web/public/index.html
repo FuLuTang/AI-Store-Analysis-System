@@ -363,7 +363,14 @@
 
         function connectSSE() {
             if (sseSource) return;
-            sseSource = new EventSource('/api/stream?x-fzt-key=' + encodeURIComponent(localStorage.getItem('X-FZT-Key') || ''));
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            const urlParams = new URLSearchParams(window.location.search);
+            const queryRunId = urlParams.get('run_id');
+            let streamUrl = '/api/stream?x-fzt-key=' + encodeURIComponent(key);
+            if (queryRunId) {
+                streamUrl += '&run_id=' + encodeURIComponent(queryRunId);
+            }
+            sseSource = new EventSource(streamUrl);
             sseSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'log') {

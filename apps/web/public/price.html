@@ -620,13 +620,23 @@
             if (sseSource) return;
             const key = authKey();
             if (!key) return;
-            sseSource = new EventSource(`/api/price-recommendations/stream?x-fzt-key=${encodeURIComponent(key)}`);
+            const urlParams = new URLSearchParams(window.location.search);
+            const queryRunId = urlParams.get('run_id');
+            let streamUrl = `/api/price-recommendations/stream?x-fzt-key=${encodeURIComponent(key)}`;
+            if (queryRunId) {
+                streamUrl += '&run_id=' + encodeURIComponent(queryRunId);
+            }
+            sseSource = new EventSource(streamUrl);
             hasConnectedStream = true;
             sseSource.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'reset') {
                         clearLogs();
+                        return;
+                    }
+                    if (data.type === 'done') {
+                        disconnectStream();
                         return;
                     }
                     handleStreamEvent(data);
@@ -1244,6 +1254,10 @@
                         startBtn.disabled = selectedFiles.length === 0 || !productNameInput.value.trim();
                     }
                     
+                    if (status === 'completed' || status === 'error' || status === 'aborted') {
+                        if (!sseSource) connectStream();
+                    }
+
                     if (status === 'completed') {
                         setStatus(isHistoryMode ? '正在查看历史推算记录。' : '推算完成。');
                     } else if (status === 'aborted') {

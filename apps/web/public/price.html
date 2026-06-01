@@ -851,6 +851,20 @@
 
         function renderResult(data, fullText) {
             if (!data) return;
+            if (typeof data === 'string') {
+                try {
+                    let jsonStr = data.trim();
+                    if (jsonStr.startsWith('```json')) {
+                        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                    } else if (jsonStr.startsWith('```')) {
+                        jsonStr = jsonStr.replace(/```/g, '').trim();
+                    }
+                    data = JSON.parse(jsonStr);
+                } catch (e) {
+                    console.error("Failed to parse result in price.html:", e);
+                    return;
+                }
+            }
             currentResult = data;
             currentFullResult = fullText || '';
             resultBadge.className = 'badge success';

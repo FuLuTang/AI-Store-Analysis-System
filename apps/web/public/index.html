@@ -709,14 +709,26 @@
             } else {
                 // 精简报告（JSON 卡片化）
                 try {
-                    let jsonStr = rep;
-                    if (jsonStr.startsWith('```json')) {
-                        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
-                    } else if (jsonStr.startsWith('```')) {
-                        jsonStr = jsonStr.replace(/```/g, '').trim();
+                    let data = null;
+                    if (typeof rep === 'object' && rep !== null) {
+                        data = rep;
+                    } else if (typeof rep === 'string') {
+                        let jsonStr = rep.trim();
+                        if (jsonStr.startsWith('```json')) {
+                            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                        } else if (jsonStr.startsWith('```')) {
+                            jsonStr = jsonStr.replace(/```/g, '').trim();
+                        }
+                        data = JSON.parse(jsonStr);
                     }
                     
-                    const data = JSON.parse(jsonStr);
+                    if (data && (data.recommendations !== undefined || data.bestPrice !== undefined)) {
+                        const queryRunId = new URLSearchParams(window.location.search).get('run_id');
+                        if (queryRunId) {
+                            window.location.href = `price.html?run_id=${encodeURIComponent(queryRunId)}`;
+                            return;
+                        }
+                    }
                     
                     // 构建大卡片（概览）
                     const overviewHtml = `

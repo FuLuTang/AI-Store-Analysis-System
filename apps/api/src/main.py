@@ -368,6 +368,22 @@ def generate_share_sign(run_id: str) -> str:
     h = hashlib.sha256(f"{run_id}:{SERVER_SECRET_KEY}".encode("utf-8"))
     return h.hexdigest()[:16]
 
+def _find_run_dir(account_dir: Path, run_id: str, default_task_type: str = "diagnosis") -> Path:
+    # 1. Try default task type path first
+    default_path = account_dir / "runs" / default_task_type / run_id
+    if default_path.exists() and default_path.is_dir():
+        return default_path
+    # 2. Try standard task type subdirectories
+    for t_type in ("diagnosis", "price_recommendation"):
+        p = account_dir / "runs" / t_type / run_id
+        if p.exists() and p.is_dir():
+            return p
+    # 3. Try legacy root runs path
+    root_path = account_dir / "runs" / run_id
+    if root_path.exists() and root_path.is_dir():
+        return root_path
+    return default_path
+
 def _load_runs(account_dir: Path) -> list:
     runs_file = account_dir / "runs.json"
     if runs_file.exists():
@@ -818,9 +834,7 @@ def get_status(
             "runId": None
         }
         
-    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / target_run_id
+    run_dir = _find_run_dir(session.account_dir, target_run_id, session.task_type)
         
     status = session.status if target_run_id == session.run_id else "completed"
     error_msg = session.error_message if target_run_id == session.run_id else ""
@@ -853,6 +867,9 @@ def get_status(
         safe_error = f"任务执行失败: {error_msg}" if error_msg else "任务执行失败，请在后台监控流查看 system 节点日志"
     else:
         safe_error = ""
+        
+    if isinstance(result_str, (dict, list)):
+        result_str = json.dumps(result_str, ensure_ascii=False)
         
     return {
         "status": status,
@@ -1057,7 +1074,7 @@ async def run_price_recommendation_task(session: SessionState, decoded_files: li
             emit_log=lambda nid, payload: add_log(session, nid, payload),
             check_aborted=check_aborted,
         )
-        session.result = result
+        session.result = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else result
         session.full_result = full_result
         with session.runtime_lock:
             if session.force_stop or session.status == "aborted":
@@ -1164,9 +1181,7 @@ def get_price_recommendation_status(
             "runId": None
         }
 
-    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / target_run_id
+    run_dir = _find_run_dir(session.account_dir, target_run_id, session.task_type)
 
     status = session.status if target_run_id == session.run_id else "completed"
     error_msg = session.error_message if target_run_id == session.run_id else ""
@@ -1196,6 +1211,9 @@ def get_price_recommendation_status(
         safe_error = "任务被用户强行终止。"
     elif status == "error":
         safe_error = f"任务执行失败: {error_msg}" if error_msg else "任务执行失败"
+
+    if isinstance(result, (dict, list)):
+        result = json.dumps(result, ensure_ascii=False)
 
     return {
         "status": status,
@@ -1336,10 +1354,7 @@ async def download_report_zip(
             task_type = r.get("taskType", task_type)
             break
             
-    run_dir = session.account_dir / "runs" / task_type / target_run_id
-    if not run_dir.exists():
-        # 退化/向后兼容路径
-        run_dir = session.account_dir / "runs" / target_run_id
+    run_dir = _find_run_dir(session.account_dir, target_run_id, task_type)
         
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"运行目录不存在: {target_run_id}")
@@ -1433,9 +1448,7 @@ async def toggle_report_public(
         if r.get("runId") == run_id:
             task_type = r.get("taskType", task_type)
             break
-    run_dir = session.account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / run_id
+    run_dir = _find_run_dir(session.account_dir, run_id, task_type)
     if run_dir.exists():
         session_json_path = run_dir / "session.json"
         if session_json_path.exists():
@@ -1479,9 +1492,7 @@ def delete_report(
     
     # Delete physically
     task_type = target_run.get("taskType", "diagnosis")
-    run_dir = session.account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / run_id
+    run_dir = _find_run_dir(session.account_dir, run_id, task_type)
         
     if run_dir.exists() and run_dir.is_dir():
         try:
@@ -1533,9 +1544,7 @@ def get_public_report_status(
         raise HTTPException(status_code=403, detail="该分析报告未公开分享")
         
     task_type = target_run.get("taskType", "diagnosis")
-    run_dir = target_account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = target_account_dir / "runs" / run_id
+    run_dir = _find_run_dir(target_account_dir, run_id, task_type)
         
     session_json_path = run_dir / "session.json"
     if not session_json_path.exists():
@@ -1565,6 +1574,9 @@ def get_public_report_status(
             user_key = adata.get("keyMask", user_key)
         except Exception:
             pass
+
+    if isinstance(result_str, (dict, list)):
+        result_str = json.dumps(result_str, ensure_ascii=False)
 
     return {
         "status": sdata.get("status", "completed"),
@@ -1720,11 +1732,9 @@ def get_report_asset(
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    target_run_dir = session.account_dir / "runs" / "diagnosis" / run_id
+    target_run_dir = _find_run_dir(session.account_dir, run_id)
     if not target_run_dir.exists():
-        target_run_dir = session.account_dir / "runs" / run_id
-        if not target_run_dir.exists():
-            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="Run not found")
 
     asset_path = target_run_dir / "workspace" / "output" / filename
     if not asset_path.exists() or not asset_path.is_file():
@@ -1781,9 +1791,7 @@ def get_public_report_asset(
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     task_type = target_run.get("taskType", "diagnosis")
-    run_dir = target_account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = target_account_dir / "runs" / run_id
+    run_dir = _find_run_dir(target_account_dir, run_id, task_type)
 
     asset_path = run_dir / "workspace" / "output" / filename
     if not asset_path.exists() or not asset_path.is_file():

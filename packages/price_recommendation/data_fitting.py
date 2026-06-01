@@ -293,15 +293,6 @@ def _build_recommendations(
             "reason": reason,
             "metric": metric_key,
             "metricValue": round(metric_value, 4),
-            "confidence": _confidence(
-                evidence.get("matchedRows", 0),
-                max(evidence.get("rawPointCount", 0), len(scored_points)),
-                bool(evidence.get("priceField")),
-                bool(evidence.get("salesField")),
-                bool(evidence.get("timeField")),
-                True,
-                product_name,
-            ),
         })
     return recommendations
 
@@ -315,45 +306,6 @@ def _build_price_range(points: list[dict[str, Any]]) -> dict[str, Any]:
     return {"min": round(min(prices), 2), "max": round(max(prices), 2), "unit": "元"}
 
 
-def _confidence(
-    matched_rows: int,
-    total_rows: int,
-    has_price: bool,
-    has_sales: bool,
-    has_time: bool = False,
-    has_product: bool = False,
-    product_name: str = "",
-) -> float:
-    score = 0.2
-    normalized_name = _normalize_text(product_name)
-    if normalized_name:
-        if len(normalized_name) >= 12:
-            score += 0.16
-        elif len(normalized_name) >= 8:
-            score += 0.12
-        elif len(normalized_name) >= 4:
-            score += 0.08
-        else:
-            score += 0.02
-    if total_rows > 0 and matched_rows:
-        coverage = matched_rows / max(total_rows, 1)
-        score += min(0.24, coverage * 0.35)
-    elif total_rows > 0:
-        score += 0.02
-    if has_product:
-        score += 0.08
-    if has_price:
-        score += 0.16
-    if has_sales:
-        score += 0.1
-    if has_time:
-        score += 0.05
-    return round(min(max(score, 0.05), 0.95), 2)
-
-
-def _normalize_text(value: Any) -> str:
-    import re
-    return re.sub(r"\s+", "", str(value or "")).lower()
 
 
 def _to_number(value: Any) -> float | None:

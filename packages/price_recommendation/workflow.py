@@ -230,7 +230,7 @@ def _build_summary(result: dict) -> str:
         "## 推荐价格",
     ]
     for item in result.get("recommendations", []):
-        lines.append(f"- 第 {item.get('rank')} 推荐：{item.get('price')} {item.get('unit', '元')}，置信度 {item.get('confidence')}")
+        lines.append(f"- 第 {item.get('rank')} 推荐：{item.get('price')} {item.get('unit', '元')}")
     evidence = result.get("evidence", {})
     lines.extend([
         "",

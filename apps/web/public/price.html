@@ -883,9 +883,6 @@
                     <div class="price-card">
                         <div class="price-rank">TOP ${item.rank ?? ''}</div>
                         <div class="price-value">${formatPrice(item.price)} <span style="font-size:1rem;font-weight:700;color:var(--text-muted);">${escapeHtml(item.unit || '元')}</span></div>
-                        <div class="badge-row" style="margin-bottom:0.55rem;">
-                            <span class="badge success"><i class="fas fa-bullseye"></i> 置信度 ${formatPercent(item.confidence)}</span>
-                        </div>
                         <div class="price-reason">${escapeHtml(item.reason || '暂无解释')}</div>
                     </div>
                 `).join('');

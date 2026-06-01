@@ -156,10 +156,11 @@ def _merge_normalized_points(normalized_payload: dict) -> list[dict[str, Any]]:
     for price in sorted(grouped):
         bucket = grouped[price]
         avg_factor_count = bucket["avgFactorCount"] or max(bucket["sampleCount"], 1)
+        count = max(bucket["sampleCount"], 1)
         merged.append({
             "price": round(bucket["price"], 2),
-            "rawQty": round(bucket["rawQty"], 4),
-            "normalizedQty": round(bucket["normalizedQty"], 4),
+            "rawQty": round(bucket["rawQty"] / count, 4),
+            "normalizedQty": round(bucket["normalizedQty"] / count, 4),
             "sampleCount": int(bucket["sampleCount"]),
             "avgFactor": round(bucket["avgFactorSum"] / max(avg_factor_count, 1), 6) if bucket["avgFactorSum"] else 1.0,
             "sourceShops": sorted(bucket["sourceShops"]),

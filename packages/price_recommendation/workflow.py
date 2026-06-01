@@ -146,7 +146,7 @@ def run_price_recommendation_workflow(
         try:
             raw_data = json.loads(raw_path.read_text(encoding="utf-8"))
             if isinstance(raw_data, dict):
-                raw_points = raw_data.get("points", [])
+                raw_points = raw_data.get("rawPoints", raw_data.get("points", []))
             elif isinstance(raw_data, list):
                 raw_points = raw_data
         except Exception:

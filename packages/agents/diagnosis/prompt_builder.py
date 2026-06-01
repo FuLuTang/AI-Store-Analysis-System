@@ -48,6 +48,7 @@ def security_rules() -> str:
         "- duckdb_query 只能执行只读 SELECT 查询，禁止 INSERT/DROP/DELETE/ALTER\n"
         "- DuckDB 表名列名含中文或括号时需要双引号引用，如 SELECT \"毛利(元)\" FROM \"月营业数据\"，不要用反引号\n"
         "- Python 代码只能操作 workspace 内目录\n"
+        "- 在 `scripts/old_session_scripts/` 目录下（如果存在）存有该用户最近几次运行生成的旧 Python 脚本（按 run_id 文件夹分类）。如果你发现有可复用的清洗/归一化脚本，你可以通过 `run_python` 直接执行它们（系统会自动将它们复制到你的根 `scripts/` 目录中）。注意：你没有直接修改或写入 `old_session_scripts/` 目录的权限。\n"
         "- 禁止结尾写客套话"
     )
 

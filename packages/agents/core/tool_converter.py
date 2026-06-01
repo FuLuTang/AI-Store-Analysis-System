@@ -108,7 +108,11 @@ def available_tool_call_for_agent(ws: Workspace) -> list[dict]:
         # ── Python 脚本执行 ──
         _make_tool(
             name="run_python",
-            description="在 workspace 沙箱内执行一个 Python 脚本，返回 stdout。脚本须先 write_file 写入 scripts/ 目录。",
+            description=(
+                "在 workspace 沙箱内执行一个 Python 脚本，返回 stdout。脚本须先 write_file 写入 scripts/ 目录。\n"
+                "提示：可以直接对 'scripts/old_session_scripts/[run_id]/[脚本名]' 执行 run_python，"
+                "系统会自动将其复制一份到 'scripts/[脚本名]' 里面并运行，避免用 copy_file + run_python 跑两次耗时间。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {

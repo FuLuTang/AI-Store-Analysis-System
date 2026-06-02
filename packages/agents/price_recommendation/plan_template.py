@@ -27,8 +27,7 @@ PRICE_PLAN_TEMPLATE = [
         ),
         "status": "pending",
         "check": (
-            "import os, duckdb\n"
-            "assert os.path.exists('analysis.duckdb'), 'analysis.duckdb 不存在'\n"
+            "import duckdb\n"
             "con = duckdb.connect('analysis.duckdb')\n"
             "tables = con.execute(\"SELECT table_name FROM information_schema.tables WHERE table_schema='main'\").fetchall()\n"
             "assert tables, 'DuckDB 中没有表'\n"

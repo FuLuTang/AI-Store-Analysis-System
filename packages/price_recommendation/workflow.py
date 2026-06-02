@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, Union
 
@@ -71,6 +73,10 @@ def run_price_recommendation_workflow(
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     checkpoint()
 
+    # ── 预探索：Agent 启动前分析数据 ──
+    emit_log("price_parse", {"level": "info", "message": "正在进行数据预探索...", "progress": 10})
+    pre_explore_text = _run_pre_exploration(ws, product_name)
+
     # ── 构建 client ──
     preset = llm_preset or {}
     api_key = preset.get("apiKey", "")
@@ -86,6 +92,7 @@ def run_price_recommendation_workflow(
         list_files_json=json.dumps(list_files_impl(ws, "", emit_log=bootstrap_emit_log), ensure_ascii=False),
         read_document_structure_impl=read_document_structure_impl,
         emit_log=bootstrap_emit_log,
+        pre_explore_text=pre_explore_text,
     )
 
     # Log initial parse
@@ -345,6 +352,125 @@ def _write_analysis_duckdb(path: Path, raw_points: list[dict], normalized_points
         con.close()
 
 
+def _run_pre_exploration(ws, product_name: str) -> str:
+    """Run data pre-exploration before Agent starts, return printed summary."""
+    script = (
+        'import csv, json, io, sys, os\n'
+        'from collections import Counter\n'
+        'from pathlib import Path\n'
+        '\n'
+        'inputs = os.listdir("input")\n'
+        'if not inputs:\n'
+        '    print("{\\"error\\": \\"input 目录为空\\"}")\n'
+        '    sys.exit(0)\n'
+        '\n'
+        f'target = {json.dumps(product_name)}\n'
+        'csv_file = None\n'
+        'for f in inputs:\n'
+        '    if f.endswith(".csv") or f.endswith(".txt"):\n'
+        '        csv_file = f\n'
+        '        break\n'
+        'if not csv_file:\n'
+        '    # try reading first file\n'
+        '    csv_file = inputs[0]\n'
+        '\n'
+        'path = os.path.join("input", csv_file)\n'
+        'rows = []\n'
+        'with open(path, encoding="utf-8") as f:\n'
+        '    reader = csv.DictReader(f)\n'
+        '    headers = reader.fieldnames\n'
+        '    for row in reader:\n'
+        '        rows.append(row)\n'
+        '\n'
+        'print(f"文件: {csv_file}")\n'
+        'print(f"总行数: {len(rows)}")\n'
+        'print(f"列名: {headers}")\n'
+        '\n'
+        '# 查找目标商品\n'
+        'target_rows = []\n'
+        'target_col = None\n'
+        'for col in headers:\n'
+        '    if "product" in col.lower() or "name" in col.lower() or "item" in col.lower():\n'
+        '        target_col = col\n'
+        '        break\n'
+        'if target_col:\n'
+        '    target_rows = [r for r in rows if target and target.lower() in r.get(target_col, "").lower()]\n'
+        '    products = Counter(r.get(target_col, "") for r in rows)\n'
+        '    top10 = products.most_common(10)\n'
+        '    print(f"\\n商品列: {target_col}")\n'
+        '    print(f"命中目标商品行: {len(target_rows)}")\n'
+        '    print(f"Top 10 商品: {top10}")\n'
+        'else:\n'
+        '    print("\\n未识别到商品列")\n'
+        '    target_rows = rows[:]\n'
+        '\n'
+        'if not target_rows:\n'
+        '    print("\\n无目标商品数据，跳过分析")\n'
+        '    sys.exit(0)\n'
+        '\n'
+        '# 识别价格列和数量列\n'
+        'price_cols = [c for c in headers if "price" in c.lower() or "amount" in c.lower() or "sale" in c.lower()]\n'
+        'qty_cols = [c for c in headers if "qty" in c.lower() or "quantity" in c.lower() or "num" in c.lower() or "count" in c.lower()]\n'
+        'date_cols = [c for c in headers if "date" in c.lower() or "time" in c.lower()]\n'
+        'print(f"\\n候选价格列: {price_cols}")\n'
+        'print(f"候选数量列: {qty_cols}")\n'
+        'print(f"日期列: {date_cols}")\n'
+        '\n'
+        '# 尝试各价格列的分布\n'
+        'for pc in price_cols:\n'
+        '    vals = []\n'
+        '    for r in target_rows:\n'
+        '        try:\n'
+        '            v = float(r.get(pc, "").replace(",", ""))\n'
+        '            if v > 0:\n'
+        '                vals.append(v)\n'
+        '        except:\n'
+        '            pass\n'
+        '    if vals:\n'
+        '        uniq = sorted(set(round(v, 2) for v in vals))\n'
+        '        print(f"\\n价格列 [{pc}]: 共 {len(vals)} 个非零值, {len(uniq)} 个唯一价格, "  f"范围 {min(vals):.2f}-{max(vals):.2f}, 中位数 {sorted(vals)[len(vals)//2]:.2f}")\n'
+        '\n'
+        '# 识别日期列\n'
+        'date_col = None\n'
+        'for dc in headers:\n'
+        '    if "date" in dc.lower():\n'
+        '        date_col = dc\n'
+        '        break\n'
+        'if date_col:\n'
+        '    dates = list(set(r.get(date_col, "")[:10] for r in target_rows))\n'
+        '    print(f"\\n日期范围: {min(dates)} ~ {max(dates)}, 唯一日期数: {len(dates)}")\n'
+        '\n'
+        '# 数量统计\n'
+        'for qc in qty_cols:\n'
+        '    qvals = []\n'
+        '    for r in target_rows:\n'
+        '        try:\n'
+        '            v = float(r.get(qc, "0"))\n'
+        '            if v > 0:\n'
+        '                qvals.append(v)\n'
+        '        except:\n'
+        '            pass\n'
+        '    if qvals:\n'
+        '        print(f"数量列 [{qc}]: 共 {len(qvals)} 个值, 平均 {sum(qvals)/len(qvals):.2f}, 最大 {max(qvals):.0f}, 最小 {min(qvals):.0f}")\n'
+        '\n'
+        'print("\\n=== 预探索完成 ===")\n'
+    )
+    ws.write_file("scripts/pre_explore.py", script)
+    try:
+        r = subprocess.run(
+            [sys.executable, str(ws.resolve("scripts/pre_explore.py"))],
+            cwd=str(ws.dir), capture_output=True, text=True, timeout=120,
+        )
+        result = r.stdout
+        if r.returncode != 0 and r.stderr:
+            result += "\n[stderr]\n" + r.stderr
+        return result
+    except subprocess.TimeoutExpired:
+        return "[预探索超时]"
+    except Exception as e:
+        return f"[预探索异常: {e}]"
+
+
 def _build_bootstrap_messages(
     *,
     ws,
@@ -352,6 +478,7 @@ def _build_bootstrap_messages(
     list_files_json: str,
     read_document_structure_impl,
     emit_log,
+    pre_explore_text: str = "",
 ) -> list[dict]:
     """Seed the price agent with stable tool-call history before the first model round."""
 
@@ -402,5 +529,35 @@ def _build_bootstrap_messages(
             ))
         except Exception:
             continue
+
+    # Inject old session scripts so Agent doesn't need to read them one by one
+    old_scripts_dir = ws.resolve("scripts/old_session_scripts")
+    if old_scripts_dir.is_dir():
+        for session_dir in sorted(old_scripts_dir.iterdir()):
+            if not session_dir.is_dir():
+                continue
+            for script_file in sorted(session_dir.iterdir()):
+                if script_file.suffix != ".py":
+                    continue
+                try:
+                    rel = str(script_file.relative_to(ws.dir))
+                    content = script_file.read_text(encoding="utf-8")
+                    call_id = f"call_bootstrap_old_script_{script_file.stem}"
+                    if emit_log:
+                        emit_log("custom_agent", {"level": "info", "message": f"✅ bootstrap 注入: read_file {rel}"})
+                    messages.extend(tool_pair(call_id, "read_file", {"path": rel}, content))
+                except Exception:
+                    continue
+
+    # Inject pre-exploration result
+    if pre_explore_text:
+        if emit_log:
+            emit_log("custom_agent", {"level": "info", "message": "✅ bootstrap 注入: run_python (预探索)"})
+        messages.extend(tool_pair(
+            "call_bootstrap_pre_explore",
+            "run_python",
+            {"script_path": "scripts/pre_explore.py"},
+            pre_explore_text,
+        ))
 
     return messages

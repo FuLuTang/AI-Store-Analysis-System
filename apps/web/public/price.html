@@ -482,14 +482,17 @@
                     <span id="statusBannerText">等待上传数据并启动价格推算。</span>
                 </div>
 
-                <!-- 进度条 -->
-                <div class="card" id="progressCard" style="display: none; padding: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                        <span style="font-weight: 600; font-size: 0.9rem;"><i class="fas fa-spinner fa-spin"></i> 任务执行进度</span>
-                        <span id="progressPercentText" style="font-weight: bold; font-size: 0.9rem;">0%</span>
-                    </div>
-                    <div class="progress-track" style="margin-top: 0;">
-                        <div class="progress-fill" id="progressFill"></div>
+                <!-- 系统处理进度 -->
+                <div class="card" id="progressCard" style="display: none; padding: 1.8rem 2rem;">
+                    <div class="progress-section" id="progressContainer" style="display:block; border-top:none; padding:0; margin:0; max-width:100%;">
+                        <div class="progress-header">
+                            <span class="progress-header-title"><i class="fas fa-tasks"></i> 系统处理进度 <span class="progress-header-hint">(预计 3-5 分钟)</span></span>
+                            <span class="progress-text" id="progressText">0%</span>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-bar" id="progressBar"></div>
+                        </div>
+                        <div id="currentStepText"></div>
                     </div>
                 </div>
 
@@ -571,7 +574,9 @@
         const resultGrid = document.getElementById('resultGrid');
         const renderedChartsEl = document.getElementById('renderedCharts');
         const resultMeta = document.getElementById('resultMeta');
-        const progressFill = document.getElementById('progressFill');
+        const progressBar = document.getElementById('progressBar');
+        const progressContainer = document.getElementById('progressContainer');
+        const currentStepText = document.getElementById('currentStepText');
         const logPanel = document.getElementById('logPanel');
 
         let selectedFiles = [];
@@ -614,20 +619,25 @@
         function setProgress(value) {
             const next = Math.max(0, Math.min(100, Number(value) || 0));
             latestProgress = Math.max(latestProgress, next);
-            progressFill.style.width = `${latestProgress}%`;
-            const pctText = document.getElementById('progressPercentText');
+            progressBar.style.width = `${latestProgress}%`;
+            const pctText = document.getElementById('progressText');
             if (pctText) pctText.textContent = `${Math.round(latestProgress)}%`;
             const card = document.getElementById('progressCard');
             if (card && latestProgress > 0) card.style.display = 'block';
+            if (latestProgress >= 100) {
+                progressBar.classList.add('is-terminal');
+                if (currentStepText) currentStepText.setAttribute('data-terminal', 'true');
+            }
         }
 
         function resetProgress() {
             latestProgress = 0;
-            progressFill.style.width = '0%';
-            const pctText = document.getElementById('progressPercentText');
+            progressBar.style.width = '0%';
+            const pctText = document.getElementById('progressText');
             if (pctText) pctText.textContent = '0%';
             const card = document.getElementById('progressCard');
             if (card) card.style.display = 'none';
+            if (currentStepText) currentStepText.textContent = '';
         }
 
         function connectStream() {
@@ -675,15 +685,13 @@
                 setProgress(data.progress);
             }
             if (data.type === 'log') {
+                const level = (data.level || 'info').toLowerCase();
+                if (level === 'status') {
+                    if (currentStepText) currentStepText.textContent = data.message || '';
+                    return;
+                }
                 appendLog(data);
                 if (data.message) setStatus(data.message);
-            } else if (data.type === 'status') {
-                appendLog({
-                    time: data.time,
-                    level: 'status',
-                    nodeId: data.nodeId,
-                    message: data.status
-                });
             } else if (data.type === 'progress') {
                 appendLog({
                     time: data.time,

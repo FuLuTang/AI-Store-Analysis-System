@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Callable, Union
@@ -13,6 +14,7 @@ from .precheck import (
 )
 from .data_fitting import run_data_fitting
 
+logger = logging.getLogger("price_recommendation")
 
 LogCallback = Callable[[str, dict], None]
 AbortCallback = Callable[[], None]
@@ -41,6 +43,8 @@ def run_price_recommendation_workflow(
 
     ws = Workspace(base_dir=workspace_dir)
 
+    logger.info("Initialized workspace at %s", workspace_dir)
+
     def checkpoint():
         if check_aborted:
             check_aborted()
@@ -53,6 +57,7 @@ def run_price_recommendation_workflow(
         filename = _safe_filename(item.get("name") or "unnamed")
         ws.write_input(filename, item.get("bytes") or b"")
     ws.unpack_archives()
+    logger.info("Unpacked %d input files", len(decoded_files))
     checkpoint()
 
     # ── 写入 plan ──
@@ -133,14 +138,17 @@ def run_price_recommendation_workflow(
     try:
         loop.run()
     except Exception as e:
+        logger.error("Agent loop failed: %s", str(e), exc_info=True)
         emit_log("price_done", {"level": "error", "message": f"价格推荐任务失败: {str(e)}", "error_details": str(e)})
         raise e
 
     checkpoint()
 
     if not _is_plan_done(ws):
+        logger.error("Agent plan not fully completed")
         raise RuntimeError("Agent 价格推荐清洗与归一化步骤未全部完成")
 
+    logger.info("Agent plan completed, starting data fitting")
     # ── 开始数据拟合与连续搜索 ──
     emit_log("price_curve_fit", {
         "level": "status",
@@ -150,6 +158,7 @@ def run_price_recommendation_workflow(
     
     norm_path = ws.resolve("output/normalized_price_points.json")
     if not norm_path.exists():
+        logger.error("normalized_price_points.json not found at %s", norm_path)
         raise FileNotFoundError("未找到归一化价格点文件 (output/normalized_price_points.json)")
     
     normalized_payload = json.loads(norm_path.read_text(encoding="utf-8"))
@@ -180,6 +189,7 @@ def run_price_recommendation_workflow(
         "progress": 90,
     })
     
+    logger.info("Running data fitting with %d raw price points", len(raw_points))
     result = run_data_fitting(
         normalized_payload=normalized_payload,
         evidence=evidence,
@@ -187,6 +197,8 @@ def run_price_recommendation_workflow(
         candidate_count=candidate_count,
         workspace_dir=ws.dir,
     )
+    logger.info("Data fitting completed, best_price=%s, recommendations=%d",
+                result.get("bestPrice"), len(result.get("recommendations", [])))
     checkpoint()
 
     emit_log("price_validate", {
@@ -201,6 +213,7 @@ def run_price_recommendation_workflow(
     (ws.dir / "summary.md").write_text(summary, encoding="utf-8")
     
     emit_log("price_done", {"level": "info", "message": "价格推荐任务完成", "progress": 100})
+    logger.info("Price recommendation workflow completed successfully")
     return result, summary
 
 

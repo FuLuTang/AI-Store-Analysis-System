@@ -5,11 +5,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import re
 from collections import defaultdict
 from statistics import mean, median
 from typing import Any
+
+logger = logging.getLogger("price_recommendation")
 
 
 PRODUCT_FIELD_KEYWORDS = (
@@ -35,6 +38,8 @@ def run_precheck(decoded_files: list[dict], product_name: str) -> dict:
     issues: list[dict] = []
     warnings: list[dict] = []
     text_source_present = any(str(item.get("name") or "").lower().endswith(".txt") for item in decoded_files)
+
+    logger.info("Precheck: product=%s, files=%d", product_name, len(decoded_files))
 
     if not product_name:
         issues.append({"code": "missing_product_name", "message": "缺少商品名称"})

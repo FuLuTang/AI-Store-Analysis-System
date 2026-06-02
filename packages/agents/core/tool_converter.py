@@ -116,9 +116,13 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         _make_tool(
             name="run_python",
             description=(
-                "在 workspace 沙箱内执行一个 Python 脚本，返回 stdout。脚本须先 write_file 写入 scripts/ 目录。\n"
+                "在 workspace 沙箱内执行一个 Python 脚本，返回 stdout。\n"
+                "两种用法：\n"
+                "1. 只传 script_path —— 运行已有脚本（如 'scripts/foo.py'）。\n"
+                "2. 同时传 script_path + content —— 自动将 content 写入 script_path 再运行，"
+                "相当于 write_file + run_python 一步到位。\n"
                 "提示：可以直接对 'scripts/old_session_scripts/[run_id]/[脚本名]' 执行 run_python，"
-                "系统会自动将其复制一份到 'scripts/[脚本名]' 里面并运行，避免用 copy_file + run_python 跑两次耗时间。"
+                "系统会自动将其复制一份到 'scripts/[脚本名]' 里面并运行。"
             ),
             parameters={
                 "type": "object",
@@ -126,7 +130,11 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                     "script_path": {
                         "type": "string",
                         "description": "脚本路径，如 'scripts/flatten.py'",
-                    }
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "（可选）脚本代码内容。传入后自动写入 script_path 再执行，无需先调用 write_file。",
+                    },
                 },
                 "required": ["script_path"],
             },
@@ -288,8 +296,8 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         files = list_files_impl(ws, subdir, emit_log=_emit_log)
         return json.dumps(files, ensure_ascii=False)
 
-    def _run_python(script_path: str) -> str:
-        return run_python_impl(ws, script_path, emit_log=_emit_log)
+    def _run_python(script_path: str, content: str = None) -> str:
+        return run_python_impl(ws, script_path, content=content, emit_log=_emit_log)
 
     def _duckdb_query(sql: str) -> str:
         return duckdb_query_impl(ws, sql, emit_log=_emit_log)

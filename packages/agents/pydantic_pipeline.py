@@ -926,23 +926,49 @@ class PydanticPipeline(AgentPipeline):
                 return f"已写入: {p}"
 
             @agent.tool
-            async def run_python_tool(ctx: RunContext[Workspace], script_filename: str) -> str:
-                """在 workspace 沙箱内执行指定 Python 脚本，返回 stdout。"""
-                import subprocess
-                import sys
+            async def run_python_tool(ctx: RunContext[Workspace], script_filename: str, content: str = "") -> str:
+                """在 workspace 沙箱内执行指定 Python 脚本，返回 stdout。
+
+                如果传了 content，自动写入 script_filename 再执行（write_file + run_python 一步到位）。
+                """
+                import io
+                import os
+                import runpy
+                from contextlib import redirect_stdout, redirect_stderr
                 w = ctx.deps
                 script_path = w.dir / script_filename
-                if not script_path.is_file():
+                if content:
+                    script_path.parent.mkdir(parents=True, exist_ok=True)
+                    script_path.write_text(content, encoding="utf-8")
+                elif not script_path.is_file():
                     return f"脚本不存在: {script_filename}"
+
+                old_cwd = os.getcwd()
+                stdout_buf = io.StringIO()
+                stderr_buf = io.StringIO()
                 try:
-                    r = subprocess.run(
-                        [sys.executable, str(script_path)],
-                        capture_output=True, text=True, timeout=30,
-                    )
-                    logger.debug(f"[{phase}] run_python: {script_filename} → {len(r.stdout)} chars")
-                    return r.stdout or r.stderr or "(no output)"
-                except subprocess.TimeoutExpired:
-                    return "脚本执行超时 (30s)"
+                    os.chdir(str(w.dir))
+                    with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+                        try:
+                            runpy.run_path(str(script_path), run_name="__main__")
+                        except SystemExit:
+                            pass
+                except Exception as e:
+                    output = stdout_buf.getvalue()
+                    err = stderr_buf.getvalue()
+                    if err:
+                        output += "\n" + err
+                    output += f"\n脚本异常: {e}"
+                    return output
+                finally:
+                    os.chdir(old_cwd)
+
+                output = stdout_buf.getvalue()
+                err = stderr_buf.getvalue()
+                if err:
+                    output += "\n" + err
+                logger.debug(f"[{phase}] run_python: {script_filename} → {len(output)} chars")
+                return output or "(no output)"
 
         # ---- Mapping 阶段工具 ----
 

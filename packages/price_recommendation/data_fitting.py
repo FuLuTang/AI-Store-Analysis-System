@@ -17,6 +17,7 @@ def run_data_fitting(
 ) -> dict:
     normalized_points = _merge_normalized_points(normalized_payload)
     purchase_price = _infer_purchase_price(normalized_payload, evidence)
+    time_granularity = _infer_time_granularity(normalized_payload, evidence)
     rendered_final_charts = _build_rendered_final_charts(normalized_points, purchase_price)
     primary_metric = "profit" if purchase_price is not None else "sales_revenue"
     scored_points = _score_points(normalized_points, purchase_price)
@@ -37,6 +38,7 @@ def run_data_fitting(
         "productName": product_name,
         "normalizedPoints": normalized_points,
         "renderedFinalCharts": rendered_final_charts,
+        "timeGranularity": time_granularity,
         "recommendations": recommendations,
         "bestPrice": best_price,
         "bestPriceMetric": primary_metric,
@@ -47,12 +49,15 @@ def run_data_fitting(
             "mode": "rendered_points",
             "primaryMetric": primary_metric,
             "hasPurchasePrice": purchase_price is not None,
+            "purchasePrice": purchase_price,
             "chartCount": len(rendered_final_charts),
+            "timeGranularity": time_granularity,
         },
         "evidence": {
             **dict(evidence or {}),
-            "observedPriceCount": len(normalized_points),
+            "timeGranularity": time_granularity,
             "hasPurchasePrice": purchase_price is not None,
+            "purchasePrice": purchase_price,
         },
         "warnings": [],
     }
@@ -71,7 +76,7 @@ def run_data_fitting(
 def _normalize_payload_format(payload: dict) -> dict:
     if not isinstance(payload, dict):
         return {"points": []}
-    
+
     raw_points = payload.get("points")
     if not isinstance(raw_points, list):
         return payload
@@ -98,10 +103,10 @@ def _normalize_payload_format(payload: dict) -> dict:
                         qty_val = _to_number(item[1])
                         if price_val is not None and qty_val is not None:
                             price_groups[round(price_val, 2)].append(qty_val)
-                            
+
                 for price, qties in price_groups.items():
                     if qties:
-                        final_qty = qties[-1] # Choose normalized quantity
+                        final_qty = qties[-1]  # Choose normalized quantity
                         flattened_points.append({
                             "price": price,
                             "normalizedQty": final_qty,
@@ -113,7 +118,7 @@ def _normalize_payload_format(payload: dict) -> dict:
         new_payload = dict(payload)
         new_payload["points"] = flattened_points
         return new_payload
-        
+
     return payload
 
 
@@ -184,6 +189,18 @@ def _infer_purchase_price(normalized_payload: dict, evidence: dict[str, Any]) ->
     return None
 
 
+def _infer_time_granularity(normalized_payload: dict, evidence: dict[str, Any]) -> str:
+    candidates = [
+        normalized_payload.get("timeGranularity"),
+        normalized_payload.get("normalization", {}).get("timeGranularity"),
+        evidence.get("timeGranularity"),
+    ]
+    for candidate in candidates:
+        if candidate:
+            return str(candidate)
+    return "未指定"
+
+
 def _build_rendered_final_charts(points: list[dict[str, Any]], purchase_price: float | None) -> list[dict[str, Any]]:
     if not points:
         return []
@@ -198,7 +215,7 @@ def _build_rendered_final_charts(points: list[dict[str, Any]], purchase_price: f
         qty = _to_number(point.get("normalizedQty"))
         if price is None or qty is None:
             continue
-        bucket_price = round(round(price / 0.1) * 0.1, 1)
+        bucket_price = round(price, 2)
         bucket = grouped.setdefault(bucket_price, {"qty": 0.0, "revenue": 0.0, "profit": 0.0})
         bucket["qty"] += qty
         bucket["revenue"] += price * qty
@@ -208,7 +225,7 @@ def _build_rendered_final_charts(points: list[dict[str, Any]], purchase_price: f
     source = []
     for price in sorted(grouped):
         bucket = grouped[price]
-        row = [round(price, 1), round(bucket["qty"], 4), round(bucket["revenue"], 4)]
+        row = [round(price, 2), round(bucket["qty"], 4), round(bucket["revenue"], 4)]
         if purchase_price is not None:
             row.append(round(bucket["profit"], 4))
         source.append(row)

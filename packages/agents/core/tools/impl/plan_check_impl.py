@@ -27,7 +27,7 @@ def check_plan_impl(ws: Workspace, step_index: int, emit_log: Optional[Callable]
     Args:
         ws: Workspace 引用。
         step_index: plan 中步骤的 0-based 索引。
-        emit_log: 可选的回调，用于推送日志（如 smol_tools 的场景）。
+        emit_log: 可选的回调，用于推送日志。
 
     Returns:
         包含 step_index / ok / errors / next_action（可选）等字段的 dict。
@@ -43,6 +43,7 @@ def check_plan_impl(ws: Workspace, step_index: int, emit_log: Optional[Callable]
     ok, errors = run_step_check(ws, step)
     step["errors"] = errors
     step["status"] = "success" if ok else "failed"
+    all_done = False
 
     if ok:
         for i in range(step_index + 1, len(plan)):
@@ -51,10 +52,16 @@ def check_plan_impl(ws: Workspace, step_index: int, emit_log: Optional[Callable]
                 if emit_log:
                     emit_log("plan", f"Step {i} 开始: {plan[i]['title']}")
                 break
+        else:
+            all_done = True
 
     plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
     result = {"step_index": step_index, "ok": ok, "errors": errors}
+    if ok:
+        result["all_done"] = all_done
+    if ok and emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ check_plan 调用成功: step_index={step_index}"})
     if errors:
         result["next_action"] = (
             f"Step {step_index}（{step['title']}）未通过检查，"
@@ -84,7 +91,10 @@ def run_step_check(ws: Workspace, step: dict) -> tuple[bool, list[str]]:
       - check 执行成功 → (True, [])
       - check 执行失败 → (False, [错误信息])
     """
-    check = step.get("check", "").strip()
+    check = step.get("check", "")
+    if not isinstance(check, str):
+        check = ""
+    check = check.strip()
     if not check:
         return True, []
 

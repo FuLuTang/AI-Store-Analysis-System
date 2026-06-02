@@ -60,7 +60,6 @@ def security_rules() -> str:
 def build_user_content(ws, analysis_params: str = "") -> str:
     return join_parts(
         current_time(),
-        plan_progress(ws),
         workspace_summary(ws),
         user_analysis_params(analysis_params),
         task_instruction(),

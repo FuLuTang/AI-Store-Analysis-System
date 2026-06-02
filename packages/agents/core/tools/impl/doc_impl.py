@@ -6,6 +6,7 @@ import zipfile
 import sqlite3
 from pathlib import Path
 from urllib.request import pathname2url
+from typing import Callable, Optional
 from ...workspace import Workspace
 
 
@@ -326,9 +327,15 @@ def _read_sqlite_structure(db_path: Path) -> dict:
 
 # ── 公开接口实现 ──
 
-def read_document_structure_impl(ws: Workspace, path: str) -> str:
+def read_document_structure_impl(
+    ws: Workspace,
+    path: str,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     """探测指定文档的结构（元数据、列、大纲），绝不返回大文件全文，统一输出 JSON。"""
     p = ws.resolve(path)
+    if p.name == "plan.json":
+        return json.dumps({"error": f"不允许使用 read_document_structure 读取受限文件: {path}"}, ensure_ascii=False)
     if not p.exists():
         return json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
 
@@ -404,7 +411,10 @@ def read_document_structure_impl(ws: Workspace, path: str) -> str:
         "summary": summary,
         "recommended_next_tool": rec_tool
     }
-    return json.dumps(payload, ensure_ascii=False)
+    result = json.dumps(payload, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ read_document_structure 调用成功: {path}"})
+    return result
 
 
 # 为向后兼容保留的别名接口

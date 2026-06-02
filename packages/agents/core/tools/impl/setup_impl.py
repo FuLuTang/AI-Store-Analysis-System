@@ -1,5 +1,6 @@
 """底层纯函数：workspace 生命周期管理"""
 import json
+from typing import Callable, Optional
 
 from ...workspace import Workspace
 
@@ -38,7 +39,10 @@ def cleanup_workspace_impl(ws: Workspace, mode: str = "large") -> str:
         return f"workspace {ws.report_id} 大文件已清理，保留 audit trail"
 
 
-def list_tables_impl(ws: Workspace) -> str:
+def list_tables_impl(
+    ws: Workspace,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     """列出 DuckDB 中可用表"""
     import duckdb
     con = duckdb.connect(ws.duckdb_path)
@@ -47,7 +51,10 @@ def list_tables_impl(ws: Workspace) -> str:
             "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
         ).fetchall()
         names = [r[0] for r in rows]
-        return f"DuckDB 可用表 ({len(names)}): {', '.join(names)}" if names else "DuckDB 中暂无表"
+        result = f"DuckDB 可用表 ({len(names)}): {', '.join(names)}" if names else "DuckDB 中暂无表"
+        if emit_log:
+            emit_log("custom_agent", {"level": "info", "message": "✅ list_tables 调用成功"})
+        return result
     finally:
         con.close()
 
@@ -61,7 +68,10 @@ def design_plan_impl(ws: Workspace, plan_json: str) -> str:
     return f"Plan registered: {len(plan)} steps"
 
 
-def read_plan_short_impl(ws: Workspace) -> str:
+def read_plan_short_impl(
+    ws: Workspace,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     """读取 plan.json，返回简短版本。由 model wrapper 自动注入。
 
     展示规则：
@@ -86,9 +96,6 @@ def read_plan_short_impl(ws: Workspace) -> str:
         elif status in ("in_progress", "partial", "failed"):
             current_lines.append(f"--- 当前步骤：{step['title']} ---")
             current_lines.append(f"detail: {step['detail']}")
-            check = step.get("check", "")
-            if check:
-                current_lines.append(f"check: {check.strip().split(chr(10))[0]}")
             errors = step.get("errors", [])
             if errors:
                 current_lines.append(f"errors: {'; '.join(errors)}")
@@ -115,4 +122,7 @@ def read_plan_short_impl(ws: Workspace) -> str:
     if not current_lines:
         final_lines.append("所有步骤已完成。请调用 finish_task 结束任务。")
 
-    return "\n".join(final_lines)
+    result = "\n".join(final_lines)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": "✅ read_plan_short 调用成功: plan.json"})
+    return result

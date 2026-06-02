@@ -37,8 +37,8 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
     tools = [
         # ── 文档解析 ──
         _make_tool(
-            name="read_document",
-            description="读取任意文档内容（xlsx/csv/pdf/docx/txt/md/json），返回文本摘要（含 sheet 名、列名、行数和样本行）。",
+            name="read_document_structure",
+            description="读取任意文档的结构信息（xlsx/csv/pdf/docx/txt/md/json/sqlite/zip），返回表结构摘要、列名、行数和样本行。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -46,24 +46,6 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                         "type": "string",
                         "description": "workspace 内的相对路径，如 'input/report.xlsx'",
                     }
-                },
-                "required": ["path"],
-            },
-        ),
-        _make_tool(
-            name="extract_document_tables",
-            description="从文档中提取结构化表格数据，返回 JSON 行数组。支持 xlsx, csv, pdf, docx。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "workspace 内的相对路径，如 'input/sales.xlsx'",
-                    },
-                    "sheet": {
-                        "type": "string",
-                        "description": "Sheet 名称（可选），不区分大小写。留空则使用第一个 sheet",
-                    },
                 },
                 "required": ["path"],
             },
@@ -267,6 +249,12 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
     _emit_log = emit_log or (lambda nid, msg: None)
     _emit_status = emit_status or (lambda nid, st: None)
 
+    def _emit_tool_success(tool_name: str, detail: str = "") -> None:
+        message = f"✅ {tool_name} 调用成功"
+        if detail:
+            message += f": {detail}"
+        _emit_log("custom_agent", {"level": "info", "message": message})
+
     from .tools.impl.doc_impl import read_document_structure_impl
     from .tools.impl.file_impl import (
         copy_file_impl,
@@ -282,45 +270,47 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
     from .tools.impl.plan_check_impl import read_plan_impl, check_plan_impl, run_step_check
 
     def _read_document_structure(path: str) -> str:
-        return read_document_structure_impl(ws, path)
+        return read_document_structure_impl(ws, path, emit_log=_emit_log)
 
     def _read_file(path: str, offset: int = 0, limit: int = 2000, head: int = None, tail: int = None) -> str:
-        return read_file_impl(ws, path, offset=offset, limit=limit, head=head, tail=tail)
+        return read_file_impl(ws, path, offset=offset, limit=limit, head=head, tail=tail, emit_log=_emit_log)
 
     def _write_file(path: str, content: str, mode: str = "overwrite") -> str:
-        return write_file_impl(ws, path, content, mode=mode)
+        return write_file_impl(ws, path, content, mode=mode, emit_log=_emit_log)
 
     def _replace_text(path: str, old_text: str, new_text: str) -> str:
-        return replace_text_impl(ws, path, old_text, new_text)
+        return replace_text_impl(ws, path, old_text, new_text, emit_log=_emit_log)
 
     def _copy_file(source_path: str, destination_path: str) -> str:
-        return copy_file_impl(ws, source_path, destination_path)
+        return copy_file_impl(ws, source_path, destination_path, emit_log=_emit_log)
 
     def _list_files(subdir: str = "") -> str:
-        files = list_files_impl(ws, subdir)
+        files = list_files_impl(ws, subdir, emit_log=_emit_log)
         return json.dumps(files, ensure_ascii=False)
 
     def _run_python(script_path: str) -> str:
-        return run_python_impl(ws, script_path)
+        return run_python_impl(ws, script_path, emit_log=_emit_log)
 
     def _duckdb_query(sql: str) -> str:
-        return duckdb_query_impl(ws, sql)
+        return duckdb_query_impl(ws, sql, emit_log=_emit_log)
 
     def _duckdb_register_parquet(table_name: str, parquet_path: str) -> str:
-        return duckdb_register_parquet_impl(ws, table_name, parquet_path)
+        return duckdb_register_parquet_impl(ws, table_name, parquet_path, emit_log=_emit_log)
 
     def _list_tables() -> str:
-        return list_tables_impl(ws)
+        return list_tables_impl(ws, emit_log=_emit_log)
 
     def _read_context(topic: str) -> str:
         doc_name = topic if topic.endswith(".md") else f"{topic}.md"
-        return read_context_impl(ws, doc_name)
+        return read_context_impl(ws, doc_name, emit_log=_emit_log)
 
     def _read_plan() -> str:
         plan_path = ws.resolve("plan.json")
         if not plan_path.exists():
             return "(plan 尚未初始化)"
-        return json.dumps(json.loads(plan_path.read_text(encoding="utf-8")), ensure_ascii=False, indent=2)
+        result = json.dumps(json.loads(plan_path.read_text(encoding="utf-8")), ensure_ascii=False, indent=2)
+        _emit_tool_success("read_plan", "plan.json")
+        return result
 
     def _check_plan(step_index: int) -> str:
         plan_path = ws.resolve("plan.json")
@@ -376,6 +366,8 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         result = {"step_index": step_index, "ok": ok, "errors": errors}
         if ok:
             result["advanced"] = True
+            result["all_done"] = next_idx is None
+            _emit_tool_success("check_plan", f"step_index={step_index}")
         return json.dumps(result, ensure_ascii=False)
 
 
@@ -396,10 +388,12 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
 
             if on_finish:
                 on_finish(success=True, text=text)
+            _emit_tool_success("finish_task", "success=true")
             return "任务已成功结束。"
         else:
             if on_finish:
                 on_finish(success=False, text=text)
+            _emit_tool_success("finish_task", "success=false")
             return "任务已报错终止。"
 
     tool_map = {

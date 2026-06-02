@@ -185,9 +185,6 @@ def build_basic_recommendation(inspection: dict, product_name: str, candidate_co
         "evidence": {
             "matchedRows": len(matched_rows),
             "observedPriceCount": len(price_values),
-            "priceField": price_field,
-            "salesField": sales_fields[0] if sales_fields else "",
-            "timeField": time_fields[0] if time_fields else "",
             "sourceTables": [t["name"] for t in tables],
             "notes": ["当前为确定性基准推荐，尚未接入价格弹性模型"],
         },
@@ -235,9 +232,6 @@ def build_price_point_artifacts(inspection: dict, product_name: str) -> dict:
             "points": raw_points,
             "fields": {
                 "productField": product_fields[0] if product_fields else "",
-                "priceField": price_fields[0] if price_fields else "",
-                "salesField": sales_fields[0] if sales_fields else "",
-                "timeField": time_fields[0] if time_fields else "",
                 "storeField": store_fields[0] if store_fields else "",
             },
         },
@@ -245,9 +239,6 @@ def build_price_point_artifacts(inspection: dict, product_name: str) -> dict:
         "evidence": {
             "matchedRows": len(matched_entries),
             "rawPointCount": len(raw_points),
-            "priceField": price_fields[0] if price_fields else "",
-            "salesField": sales_fields[0] if sales_fields else "",
-            "timeField": time_fields[0] if time_fields else "",
             "storeField": store_fields[0] if store_fields else "",
             "sourceTables": [t["name"] for t in tables],
         },
@@ -299,7 +290,6 @@ def build_recommendation_from_points(
 
     prices = [item["price"] for item in scored_points]
     result_evidence = dict(evidence)
-    result_evidence["observedPriceCount"] = len(scored_points)
     result_evidence["notes"] = ["当前结果直接使用归一化后的离散点集生成"]
     return {
         "taskType": "price_recommendation",
@@ -703,6 +693,7 @@ def _normalize_price_points(raw_points: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "points": points,
+        "timeGranularity": "未指定",
         "normalization": {
             "method": "shop_scale_median",
             "baselineQty": round(float(baseline_qty), 4),

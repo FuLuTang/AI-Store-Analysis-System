@@ -184,17 +184,16 @@ graph TD
         "confidence": 0.76
       }
     ],
-    "validPriceRange": {
-      "min": 15.9,
-      "max": 22.9,
-      "unit": "元"
-    },
-    "evidence": {
-      "matchedRows": 128,
-      "priceField": "售价",
-      "salesField": "销量",
-      "timeField": "日期"
-    },
+  "validPriceRange": {
+    "min": 15.9,
+    "max": 22.9,
+    "unit": "元"
+  },
+  "timeGranularity": "日",
+  "evidence": {
+    "matchedRows": 128,
+    "timeGranularity": "日"
+  },
     "warnings": []
   },
   "fullResult": "Markdown 格式的完整说明，可选"
@@ -318,9 +317,7 @@ workspace/output/price_recommendation.json
   },
   "evidence": {
     "matchedRows": 128,
-    "priceField": "售价",
-    "salesField": "销量",
-    "timeField": "日期",
+    "timeGranularity": "日",
     "notes": []
   },
   "warnings": []
@@ -340,6 +337,7 @@ workspace/output/price_recommendation.json
 | `recommendations[].reason` | string | 推荐理由，必须基于数据证据 |
 | `recommendations[].confidence` | number | 0 到 1 的置信度 |
 | `validPriceRange` | object | 建议可接受价格区间 |
+| `timeGranularity` | string | 本次归一化使用的时间颗粒度 |
 | `evidence` | object | 字段匹配、样本量、关键证据 |
 | `warnings` | array | 数据不足、字段弱匹配等警告 |
 

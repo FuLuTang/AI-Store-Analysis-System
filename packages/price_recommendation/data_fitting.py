@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("price_recommendation")
 
 
 def run_data_fitting(
@@ -16,6 +19,8 @@ def run_data_fitting(
     workspace_dir: Path | None = None,
 ) -> dict:
     normalized_points = _merge_normalized_points(normalized_payload)
+    logger.info("Data fitting: product=%s, candidate_count=%d, normalized_points=%d",
+                product_name, candidate_count, len(normalized_points))
     purchase_price = _infer_purchase_price(normalized_payload, evidence)
     time_granularity = _infer_time_granularity(normalized_payload, evidence)
     rendered_final_charts = _build_rendered_final_charts(normalized_points, purchase_price)
@@ -70,6 +75,9 @@ def run_data_fitting(
             encoding="utf-8",
         )
 
+    logger.info("Data fitting result: best_price=%s, primary_metric=%s, charts=%d",
+                result.get("bestPrice"), result.get("bestPriceMetric"),
+                len(result.get("renderedFinalCharts", [])))
     return result
 
 

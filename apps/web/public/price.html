@@ -193,7 +193,7 @@
 
         .chart-grid {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: 1fr;
             gap: 1rem;
         }
 
@@ -512,7 +512,18 @@
                     <div class="chart-shell">
                         <div class="chart-head">
                             <strong>渲染后的最终图表</strong>
-                            <span class="chart-note">横轴与纵轴按图表定义显示</span>
+                            <div class="chart-controls" style="display: flex; align-items: center; gap: 0.5rem;">
+                                <label for="binWidthSelect" style="font-size: 0.8rem; color: var(--text-muted); cursor: pointer;">价格聚合颗粒度:</label>
+                                <select id="binWidthSelect" class="form-select" style="padding: 0.2rem 0.5rem; font-size: 0.78rem; width: auto; height: auto; margin: 0; line-height: 1.2; border-radius: var(--radius-sm); background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
+                                    <option value="0.01">原始价格 (0.01元)</option>
+                                    <option value="0.1">0.1 元</option>
+                                    <option value="0.2">0.2 元</option>
+                                    <option value="0.5" selected>0.5 元</option>
+                                    <option value="1.0">1.0 元</option>
+                                    <option value="2.0">2.0 元</option>
+                                    <option value="5.0">5.0 元</option>
+                                </select>
+                            </div>
                         </div>
                         <div id="renderedCharts" class="chart-grid"></div>
                     </div>
@@ -572,6 +583,9 @@
         let latestProgress = 0;
         let hasConnectedStream = false;
         let renderedChartInstances = [];
+        let currentNormalizedPoints = [];
+        let currentPurchasePrice = null;
+        let currentCharts = [];
 
         function authKey() {
             return (localStorage.getItem('X-FZT-Key') || '').trim();
@@ -902,18 +916,145 @@
             const range = data.validPriceRange || {};
             const normalizedPoints = Array.isArray(data.normalizedPoints) ? data.normalizedPoints : [];
             const renderedFinalCharts = Array.isArray(data.renderedFinalCharts) ? data.renderedFinalCharts : [];
+            const timeGranularity = data.timeGranularity || data.dataFitting?.timeGranularity || '未指定';
             resultMeta.innerHTML = [
                 metaCard('有效价格区间', `${formatPrice(range.min)} - ${formatPrice(range.max)}`),
                 metaCard('命中行数', String(evidence.matchedRows ?? 0)),
-                metaCard('观察价格数', String(evidence.observedPriceCount ?? 0)),
                 metaCard('归一化点数', String(normalizedPoints.length)),
+                metaCard('时间颗粒度', timeGranularity),
                 metaCard('图表数量', String(renderedFinalCharts.length)),
                 metaCard('最优售价', formatPrice(data.bestPrice)),
-                metaCard('价格字段', evidence.priceField || ''),
-                metaCard('销量字段', evidence.salesField || ''),
-                metaCard('时间字段', evidence.timeField || '')
             ].join('');
-            renderRenderedCharts(renderedFinalCharts, normalizedPoints);
+
+            // 缓存全局数据以便动态重算分桶
+            currentNormalizedPoints = normalizedPoints;
+            currentPurchasePrice = data.dataFitting?.purchasePrice ?? data.evidence?.purchasePrice ?? null;
+            currentCharts = renderedFinalCharts;
+
+            const selectEl = document.getElementById('binWidthSelect');
+            const binWidth = selectEl ? parseFloat(selectEl.value) : 0.5;
+            updateCharts(binWidth);
+        }
+
+        function updateCharts(binWidth) {
+            if (!currentNormalizedPoints || currentNormalizedPoints.length === 0) {
+                if (renderedChartsEl) {
+                    renderedChartsEl.innerHTML = '<div class="empty-state">暂无可渲染的图表。</div>';
+                }
+                return;
+            }
+
+            // 按设定的价格区间分桶
+            const grouped = {};
+            currentNormalizedPoints.forEach(p => {
+                const price = Number(p.price);
+                const qty = Number(p.normalizedQty ?? p.rawQty ?? 0);
+                if (!Number.isFinite(price) || !Number.isFinite(qty)) return;
+
+                let bucketPrice;
+                if (binWidth <= 0.01) {
+                    bucketPrice = Math.round(price * 100) / 100;
+                } else {
+                    bucketPrice = Math.round(price / binWidth) * binWidth;
+                    bucketPrice = Math.round(bucketPrice * 100) / 100; // 避免 JS 浮点数精度问题
+                }
+
+                if (!grouped[bucketPrice]) {
+                    grouped[bucketPrice] = { qtySum: 0, count: 0 };
+                }
+                grouped[bucketPrice].qtySum += qty;
+                grouped[bucketPrice].count += 1;
+            });
+
+            const sortedPrices = Object.keys(grouped).map(Number).sort((a, b) => a - b);
+            const binnedPoints = sortedPrices.map(price => {
+                const g = grouped[price];
+                return {
+                    price: price,
+                    normalizedQty: g.qtySum / g.count // 使用周销售量的均值
+                };
+            });
+
+            const hasPurchasePrice = currentPurchasePrice !== null && currentPurchasePrice !== undefined && currentPurchasePrice > 0;
+            const updatedCharts = [];
+
+            if (currentCharts && currentCharts.length > 0) {
+                currentCharts.forEach(origChart => {
+                    if (origChart.source) {
+                        // 维度数据源风格（售价、销量、销售额、利润综合单图表）
+                        const source = [];
+                        binnedPoints.forEach(item => {
+                            const p = item.price;
+                            const q = item.normalizedQty;
+                            const rev = p * q;
+                            const row = [p, q, rev];
+                            if (hasPurchasePrice) {
+                                row.push((p - currentPurchasePrice) * q);
+                            }
+                            source.push(row);
+                        });
+
+                        const dims = ["售价", "销量", "销售额"];
+                        if (hasPurchasePrice) {
+                            dims.push("利润");
+                        }
+
+                        updatedCharts.push({
+                            ...origChart,
+                            dimensions: dims,
+                            source: source
+                        });
+                    } else if (origChart.points) {
+                        // 点集风格（多个拆分折线图）
+                        const points = [];
+                        binnedPoints.forEach(item => {
+                            const p = item.price;
+                            const q = item.normalizedQty;
+                            const rev = p * q;
+                            const prof = hasPurchasePrice ? (p - currentPurchasePrice) * q : rev;
+
+                            if (origChart.basis === "normalizedQty") {
+                                points.push([p, q]);
+                            } else if (origChart.basis === "sales_revenue") {
+                                points.push([p, rev]);
+                            } else if (origChart.basis === "profit" || origChart.basis === "sales_revenue_proxy") {
+                                points.push([p, prof]);
+                            } else if (origChart.basis === "revenue_profit") {
+                                points.push([rev, prof]);
+                            } else {
+                                points.push([p, q]);
+                            }
+                        });
+                        updatedCharts.push({
+                            ...origChart,
+                            points: points
+                        });
+                    }
+                });
+            } else {
+                // 默认售价综合分析备用图表
+                const source = [];
+                binnedPoints.forEach(item => {
+                    const p = item.price;
+                    const q = item.normalizedQty;
+                    const rev = p * q;
+                    const row = [p, q, rev];
+                    if (hasPurchasePrice) {
+                        row.push((p - currentPurchasePrice) * q);
+                    }
+                    source.push(row);
+                });
+                updatedCharts.push({
+                    name: "售价综合分析",
+                    xLabel: "售价",
+                    yAxisLeft: {"name": "销量", "unit": "件"},
+                    yAxisRight: {"name": "金额", "unit": "元"},
+                    dimensions: hasPurchasePrice ? ["售价", "销量", "销售额", "利润"] : ["售价", "销量", "销售额"],
+                    source: source,
+                });
+            }
+
+            renderRenderedCharts(updatedCharts, []);
         }
 
         function metaCard(label, value) {
@@ -999,13 +1140,6 @@
                     </div>
                 `;
             }).join('');
-
-            // 动态布局：< 4 个图表时单列全宽，>= 4 个时两列
-            if (finalCharts.length < 4) {
-                renderedChartsEl.style.gridTemplateColumns = '1fr';
-            } else {
-                renderedChartsEl.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
-            }
 
             finalCharts.forEach((chart, index) => {
                 const el = document.getElementById(`renderedChart_${index}`);
@@ -1324,6 +1458,12 @@
             }
         };
         clearLogBtn.onclick = clearLogs;
+        const binWidthSelect = document.getElementById('binWidthSelect');
+        if (binWidthSelect) {
+            binWidthSelect.onchange = (e) => {
+                updateCharts(parseFloat(e.target.value));
+            };
+        }
         window.addEventListener('resize', () => {
             renderedChartInstances.forEach((chart) => chart.resize());
         });

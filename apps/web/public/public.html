@@ -318,6 +318,7 @@
             const range = data.validPriceRange || {};
             const normalizedPoints = Array.isArray(data.normalizedPoints) ? data.normalizedPoints : [];
             const renderedFinalCharts = Array.isArray(data.renderedFinalCharts) ? data.renderedFinalCharts : [];
+            const timeGranularity = data.timeGranularity || data.dataFitting?.timeGranularity || '未指定';
             
             const metaCard = (label, val) => `<div class="meta-card"><div class="label">${label}</div><div class="value">${val}</div></div>`;
             
@@ -326,13 +327,10 @@
                 <div class="meta-grid">
                     ${metaCard('有效价格区间', `${Number(range.min).toFixed(2)} - ${Number(range.max).toFixed(2)}`)}
                     ${metaCard('命中行数', String(evidence.matchedRows ?? 0))}
-                    ${metaCard('观察价格数', String(evidence.observedPriceCount ?? 0))}
                     ${metaCard('归一化点数', String(normalizedPoints.length))}
+                    ${metaCard('时间颗粒度', timeGranularity)}
                     ${metaCard('图表数量', String(renderedFinalCharts.length))}
                     ${metaCard('最优售价', Number.isFinite(bestPrice) ? bestPrice.toFixed(2) : 'N/A')}
-                    ${metaCard('价格字段', evidence.priceField || '未识别')}
-                    ${metaCard('销量字段', evidence.salesField || '未识别')}
-                    ${metaCard('时间字段', evidence.timeField || '未识别')}
                 </div>
             `;
 

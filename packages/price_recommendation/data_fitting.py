@@ -47,12 +47,14 @@ def run_data_fitting(
             "mode": "rendered_points",
             "primaryMetric": primary_metric,
             "hasPurchasePrice": purchase_price is not None,
+            "purchasePrice": purchase_price,
             "chartCount": len(rendered_final_charts),
         },
         "evidence": {
             **dict(evidence or {}),
             "observedPriceCount": len(normalized_points),
             "hasPurchasePrice": purchase_price is not None,
+            "purchasePrice": purchase_price,
         },
         "warnings": [],
     }

@@ -425,6 +425,16 @@
                     </div>
                     <div id="fileList" class="file-list"></div>
 
+                    <div id="uploadProgressArea" style="display:none; margin-bottom: 0.75rem;">
+                        <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.25rem; display:flex; justify-content:space-between;">
+                            <span><i class="fas fa-upload"></i> 上传进度</span>
+                            <span id="uploadProgressText">0%</span>
+                        </div>
+                        <div class="progress-track" style="height:6px;">
+                            <div class="progress-bar" id="uploadProgressBar" style="animation:none; background:var(--primary); background-size:100%;"></div>
+                        </div>
+                    </div>
+
                     <div class="form-group">
                         <label>商品名称</label>
                         <input id="productNameInput" type="text" class="form-input" placeholder="例如：阿莫西林胶囊 0.25g*24粒">
@@ -779,6 +789,7 @@
                 else if (ext === '.txt') { iconClass = 'fa-file-lines'; iconStyle = 'color: #0f766e;'; }
 
                 item.innerHTML = `
+                    <div class="file-progress-fill"></div>
                     <span class="file-info" title="${file.name}">
                         <i class="fas ${iconClass}" style="${iconStyle}"></i>
                         <span class="file-name">${file.name}</span>
@@ -1317,7 +1328,31 @@
                 .replaceAll("'", '&#39;');
         }
 
-        async function startRecommendation() {
+        function setUploadProgress(pct) {
+            const bar = document.getElementById('uploadProgressBar');
+            const text = document.getElementById('uploadProgressText');
+            const area = document.getElementById('uploadProgressArea');
+            if (bar) bar.style.width = Math.round(pct) + '%';
+            if (text) text.textContent = Math.round(pct) + '%';
+            if (area) area.style.display = 'block';
+            document.querySelectorAll('.file-item').forEach(el => {
+                el.classList.add('uploading');
+                const fill = el.querySelector('.file-progress-fill');
+                if (fill) fill.style.width = Math.round(pct) + '%';
+            });
+        }
+
+        function hideUploadProgress() {
+            const area = document.getElementById('uploadProgressArea');
+            if (area) area.style.display = 'none';
+            document.querySelectorAll('.file-item').forEach(el => {
+                el.classList.remove('uploading');
+                const fill = el.querySelector('.file-progress-fill');
+                if (fill) fill.style.width = '0%';
+            });
+        }
+
+        function startRecommendation() {
             if (selectedFiles.length === 0) {
                 alert('请先选择数据文件');
                 return;
@@ -1337,30 +1372,64 @@
             startBtn.disabled = true;
             stopBtn.hidden = false;
             resetProgress();
-            setStatus('正在提交价格推算任务...');
-            connectStream();
+            setUploadProgress(0);
+            setStatus('正在上传数据文件...');
 
-            try {
-                const resp = await fetch('/api/price-recommendations', {
-                    method: 'POST',
-                    headers: authHeaders(),
-                    body: formData
-                });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data));
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/price-recommendations');
+
+            const headers = authHeaders();
+            for (const [k, v] of Object.entries(headers)) {
+                xhr.setRequestHeader(k, v);
+            }
+
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    setUploadProgress(pct);
+                    setStatus(pct < 100 ? `正在上传数据文件... ${pct}%` : '上传完成，等待后端处理...');
                 }
-                setStatus('任务已提交，正在后台运行...');
-                if (!pollingTimer) {
-                    pollingTimer = setInterval(refreshStatus, 2000);
+            };
+
+            xhr.onload = function () {
+                hideUploadProgress();
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        setStatus('任务已提交，正在运行...');
+                        connectStream();
+                        if (!pollingTimer) {
+                            pollingTimer = setInterval(refreshStatus, 2000);
+                        }
+                        refreshStatus();
+                    } catch (e) {
+                        alert('解析响应失败: ' + e.message);
+                        stopBtn.hidden = true;
+                        startBtn.disabled = false;
+                        setStatus('启动失败，请重试。');
+                    }
+                } else {
+                    let msg = xhr.responseText;
+                    try {
+                        const errData = JSON.parse(xhr.responseText);
+                        msg = typeof errData.detail === 'string' ? errData.detail : JSON.stringify(errData.detail || errData);
+                    } catch (_) {}
+                    alert('启动失败: ' + msg);
+                    stopBtn.hidden = true;
+                    startBtn.disabled = false;
+                    setStatus('启动失败，请重试。');
                 }
-                await refreshStatus();
-            } catch (e) {
-                alert(`启动失败: ${e.message}`);
+            };
+
+            xhr.onerror = function () {
+                hideUploadProgress();
+                alert('网络错误，启动失败');
                 stopBtn.hidden = true;
                 startBtn.disabled = false;
                 setStatus('启动失败，请重试。');
-            }
+            };
+
+            xhr.send(formData);
         }
 
         async function refreshStatus() {

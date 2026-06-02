@@ -579,6 +579,30 @@ nav a.active {
     background: rgba(239, 68, 68, 0.1);
 }
 
+.file-item.uploading {
+    position: relative;
+    overflow: hidden;
+}
+
+.file-item .file-progress-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 0%;
+    background: var(--primary-glow);
+    opacity: 0.35;
+    transition: width 0.3s ease;
+    pointer-events: none;
+    border-radius: var(--radius-sm);
+}
+
+.file-item .file-info,
+.file-item .file-remove-btn {
+    position: relative;
+    z-index: 1;
+}
+
 /* Spinner & Loading */
 .spinner {
     width: 24px;

@@ -517,6 +517,7 @@ nav a.active {
 }
 
 .file-item {
+    position: relative;
     background: var(--placeholder-bg);
     padding: 0.35rem 0.5rem;
     font-size: 0.75rem;
@@ -580,7 +581,6 @@ nav a.active {
 }
 
 .file-item.uploading {
-    position: relative;
     overflow: hidden;
 }
 

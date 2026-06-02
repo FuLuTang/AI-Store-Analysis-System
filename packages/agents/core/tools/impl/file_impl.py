@@ -1,6 +1,7 @@
 """底层纯函数：workspace 文件读写与列表侦察"""
 import json
 import shutil
+from typing import Callable, Optional
 from pathlib import Path
 from ...workspace import Workspace
 
@@ -8,6 +9,7 @@ from ...workspace import Workspace
 DEFAULT_READ_LINES = 2000
 MAX_READ_LINES = 2000
 MAX_READ_BYTES = 500 * 1024  # 500KB
+FORBIDDEN_READ_BASENAMES = {"plan.json"}
 
 
 def _format_size(size: int) -> str:
@@ -29,9 +31,22 @@ def _is_binary_sample(sample: bytes) -> bool:
         return True
 
 
-def read_file_impl(ws: Workspace, path: str, offset: int = 0, limit: int = DEFAULT_READ_LINES, head: int = None, tail: int = None) -> str:
+def read_file_impl(
+    ws: Workspace,
+    path: str,
+    offset: int = 0,
+    limit: int = DEFAULT_READ_LINES,
+    head: int = None,
+    tail: int = None,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     """读取文件内容，支持分页(offset/limit)以及首尾快捷读取(head/tail)。"""
     p = ws.resolve(path)
+    if p.name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({
+            "error": f"不允许使用 read_file 读取受限文件: {path}",
+            "path": path,
+        }, ensure_ascii=False)
     if not p.exists():
         return json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
     if not p.is_file():
@@ -156,11 +171,22 @@ def read_file_impl(ws: Workspace, path: str, offset: int = 0, limit: int = DEFAU
         payload["note"] = f"已通过 head/tail 截断，共省略了 {skipped_count} 行。"
         payload["truncated"] = True
 
-    return json.dumps(payload, ensure_ascii=False)
+    result = json.dumps(payload, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ read_file 调用成功: {path}"})
+    return result
 
 
-def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwrite") -> str:
+def write_file_impl(
+    ws: Workspace,
+    path: str,
+    content: str,
+    mode: str = "overwrite",
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     p = ws.resolve(path)
+    if p.name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({"error": f"不允许使用 write_file 修改受限文件: {path}"}, ensure_ascii=False)
     old_scripts_dir = ws.scripts_dir / "old_session_scripts"
     try:
         if old_scripts_dir.resolve() in p.resolve().parents or p.resolve() == old_scripts_dir.resolve():
@@ -181,7 +207,7 @@ def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwri
         tmp.replace(p)
 
     size = p.stat().st_size
-    return json.dumps({
+    result = json.dumps({
         "ok": True,
         "path": path,
         "mode": mode,
@@ -189,10 +215,27 @@ def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwri
         "size": size,
         "size_human": _format_size(size),
     }, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ write_file 调用成功: {path}"})
+    return result
 
 
-def replace_text_impl(ws: Workspace, path: str, old_text: str, new_text: str) -> str:
+def replace_text_impl(
+    ws: Workspace,
+    path: str,
+    old_text: str,
+    new_text: str,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     p = ws.resolve(path)
+    if p.name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({"error": f"不允许使用 replace_text 修改受限文件: {path}"}, ensure_ascii=False)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in p.resolve().parents or p.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {path}"}, ensure_ascii=False)
+    except Exception:
+        pass
     if not p.exists():
         return json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
     if not p.is_file():
@@ -224,7 +267,7 @@ def replace_text_impl(ws: Workspace, path: str, old_text: str, new_text: str) ->
     tmp.write_text(updated, encoding="utf-8")
     tmp.replace(p)
 
-    return json.dumps({
+    result = json.dumps({
         "ok": True,
         "path": path,
         "match_count": 1,
@@ -232,11 +275,27 @@ def replace_text_impl(ws: Workspace, path: str, old_text: str, new_text: str) ->
         "size": p.stat().st_size,
         "size_human": _format_size(p.stat().st_size),
     }, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ replace_text 调用成功: {path}"})
+    return result
 
 
-def copy_file_impl(ws: Workspace, source_path: str, destination_path: str) -> str:
+def copy_file_impl(
+    ws: Workspace,
+    source_path: str,
+    destination_path: str,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
+    if Path(destination_path).name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({"error": f"不允许将文件复制到受限文件名: {destination_path}"}, ensure_ascii=False)
     src = ws.resolve(source_path)
     dst = ws.resolve(destination_path)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in dst.resolve().parents or dst.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {destination_path}"}, ensure_ascii=False)
+    except Exception:
+        pass
 
     if not src.exists():
         return json.dumps({"error": f"源文件不存在: {source_path}"}, ensure_ascii=False)
@@ -247,16 +306,26 @@ def copy_file_impl(ws: Workspace, source_path: str, destination_path: str) -> st
     shutil.copyfile(src, dst)
 
     size = dst.stat().st_size
-    return json.dumps({
+    result = json.dumps({
         "ok": True,
         "source_path": source_path,
         "destination_path": destination_path,
         "size": size,
         "size_human": _format_size(size),
     }, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {
+            "level": "info",
+            "message": f"✅ copy_file 调用成功: {source_path} -> {destination_path}"
+        })
+    return result
 
 
-def list_files_impl(ws: Workspace, subdir: str = "") -> list[dict]:
+def list_files_impl(
+    ws: Workspace,
+    subdir: str = "",
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> list[dict]:
     target = ws.resolve(subdir) if subdir else ws.dir.resolve()
     ws_dir_abs = ws.dir.resolve()
     files = []
@@ -316,4 +385,6 @@ def list_files_impl(ws: Workspace, subdir: str = "") -> list[dict]:
             "kind": kind,
             "recommended_tool": rec_tool
         })
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ list_files 调用成功: {subdir or '.'}"})
     return files

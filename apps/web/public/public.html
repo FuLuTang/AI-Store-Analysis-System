@@ -106,7 +106,7 @@
         <!-- 报告展现卡片（分析完成后显示） -->
         <div id="reportSection" style="display: none; margin-top: 1.5rem;">
             <!-- 免登录宽下载按钮区 -->
-            <div class="card" style="padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid var(--border); background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.02) 100%);">
+            <div id="downloadCard" class="card" style="padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid var(--border); background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.02) 100%);">
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.25rem;">
                     <div>
                         <h4 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 0.25rem; color: var(--text);"><i class="fas fa-file-archive" style="color: var(--primary); margin-right: 6px;"></i> 诊断产物包已准备就绪</h4>
@@ -269,85 +269,429 @@
             renderReport();
         });
 
+        let renderedChartInstances = [];
+        function disposeRenderedCharts() {
+            renderedChartInstances.forEach((chart) => {
+                try { chart.dispose(); } catch (e) {}
+            });
+            renderedChartInstances = [];
+        }
+
+        function renderPriceReport(data) {
+            const bestPrice = Number(data.bestPrice);
+            const metric = data.bestPriceMetric === 'profit' ? '利润' : '销售额';
+            const subtitleText = Number.isFinite(bestPrice)
+                ? `${data.productName || '目标商品'} 的最优售价 ${bestPrice.toFixed(2)} 元（按${metric}排序）`
+                : `${data.productName || '目标商品'} 的候选价格已生成。`;
+
+            const overviewHtml = `
+                <div class="dashboard-overview" style="margin-bottom:1.5rem; border-left-color:var(--success);">
+                    <h2>
+                        <i class="fas fa-tags" style="color:var(--success);"></i> 最优价格推荐：${Number.isFinite(bestPrice) ? bestPrice.toFixed(2) + ' 元' : '已生成'}
+                    </h2>
+                    <p>${subtitleText}</p>
+                </div>
+            `;
+
+            const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
+            let recsHtml = '';
+            if (recommendations.length === 0) {
+                recsHtml = '<div class="empty-state">没有生成推算结果。</div>';
+            } else {
+                const cards = recommendations.map((item) => `
+                    <div class="price-card">
+                        <div class="price-rank">TOP ${item.rank ?? ''}</div>
+                        <div class="price-value">${Number(item.price).toFixed(2)} <span style="font-size:1rem;font-weight:700;color:var(--text-muted);">${item.unit || '元'}</span></div>
+                        <div class="badge-row" style="margin-bottom:0.55rem;">
+                            <span class="badge completed" style="padding:0.25rem 0.6rem;"><i class="fas fa-bullseye"></i> 置信度 ${(Number(item.confidence) * 100).toFixed(0)}%</span>
+                        </div>
+                        <div class="price-reason">${item.reason || '暂无解释'}</div>
+                    </div>
+                `).join('');
+                recsHtml = `
+                    <h4 style="font-size: 1.1rem; font-weight:600; margin:1.5rem 0 1rem;"><i class="fas fa-list-ol"></i> 售价推荐候选列表</h4>
+                    <div class="result-grid">${cards}</div>
+                `;
+            }
+
+            const evidence = data.evidence || {};
+            const range = data.validPriceRange || {};
+            const normalizedPoints = Array.isArray(data.normalizedPoints) ? data.normalizedPoints : [];
+            const renderedFinalCharts = Array.isArray(data.renderedFinalCharts) ? data.renderedFinalCharts : [];
+            const timeGranularity = data.timeGranularity || data.dataFitting?.timeGranularity || '未指定';
+            
+            const metaCard = (label, val) => `<div class="meta-card"><div class="label">${label}</div><div class="value">${val}</div></div>`;
+            
+            const metaHtml = `
+                <h4 style="font-size: 1.1rem; font-weight:600; margin:2rem 0 1rem;"><i class="fas fa-database"></i> 拟合数据源及参数分析</h4>
+                <div class="meta-grid">
+                    ${metaCard('有效价格区间', `${Number(range.min).toFixed(2)} - ${Number(range.max).toFixed(2)}`)}
+                    ${metaCard('命中行数', String(evidence.matchedRows ?? 0))}
+                    ${metaCard('归一化点数', String(normalizedPoints.length))}
+                    ${metaCard('时间颗粒度', timeGranularity)}
+                    ${metaCard('图表数量', String(renderedFinalCharts.length))}
+                    ${metaCard('最优售价', Number.isFinite(bestPrice) ? bestPrice.toFixed(2) : 'N/A')}
+                </div>
+            `;
+
+            let chartsHtml = '';
+            if (renderedFinalCharts.length > 0 || normalizedPoints.length > 0) {
+                chartsHtml = `
+                    <h4 style="font-size: 1.1rem; font-weight:600; margin:2rem 0 1rem;"><i class="fas fa-chart-area"></i> 价格-销量关系拟合曲线</h4>
+                    <div id="renderedCharts" class="chart-grid"></div>
+                `;
+            }
+
+            reportContent.className = '';
+            reportContent.innerHTML = overviewHtml + recsHtml + metaHtml + chartsHtml;
+
+            if (renderedFinalCharts.length > 0 || normalizedPoints.length > 0) {
+                if (!window.echarts) {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdn.jsdelivr.net/npm/echarts@6/dist/echarts.min.js';
+                    script.onload = () => {
+                        renderRenderedChartsInPublic(renderedFinalCharts, normalizedPoints);
+                    };
+                    document.head.appendChild(script);
+                } else {
+                    renderRenderedChartsInPublic(renderedFinalCharts, normalizedPoints);
+                }
+            }
+        }
+
+        function renderRenderedChartsInPublic(charts, normalizedPoints) {
+            disposeRenderedCharts();
+            const renderedChartsEl = document.getElementById('renderedCharts');
+            if (!renderedChartsEl) return;
+
+            function escapeHtml(str) {
+                if (typeof str !== 'string') return str;
+                return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+            }
+
+            const finalCharts = Array.isArray(charts) ? charts : [];
+            if (finalCharts.length === 0 && Array.isArray(normalizedPoints) && normalizedPoints.length > 0) {
+                finalCharts.push({
+                    name: "售价综合分析",
+                    xLabel: "售价",
+                    yAxisLeft: {"name": "销量", "unit": "件"},
+                    yAxisRight: {"name": "金额", "unit": "元"},
+                    dimensions: ["售价", "销量", "销售额"],
+                    source: normalizedPoints.map((item) => [
+                        Number(item.price),
+                        Number(item.normalizedQty),
+                        Number(item.price) * Number(item.normalizedQty)
+                    ]),
+                });
+            }
+
+            if (finalCharts.length === 0) {
+                renderedChartsEl.innerHTML = '<div class="empty-state">暂无可渲染的图表。</div>';
+                return;
+            }
+
+            renderedChartsEl.innerHTML = finalCharts.map((chart, index) => {
+                let note = '';
+                if (Array.isArray(chart.source)) {
+                    note = `${escapeHtml(chart.xLabel || '售价')} / ${escapeHtml(chart.yAxisLeft?.name || '销量')}、${escapeHtml(chart.yAxisRight?.name || '金额')}`;
+                } else {
+                    note = `${escapeHtml(chart.xLabel || '售价')} / ${escapeHtml(chart.yLabel || 'y')}`;
+                }
+                return `
+                    <div class="chart-card" style="border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); box-shadow: var(--shadow); padding: 1rem;">
+                        <div class="chart-card-head" style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+                            <div class="chart-card-title" style="color: var(--text); font-size: 0.92rem; font-weight: bold;">${escapeHtml(chart.name || `图表 ${index + 1}`)}</div>
+                            <div class="chart-card-note" style="color: var(--text-muted); font-size: 0.8rem;">${escapeHtml(note)}</div>
+                        </div>
+                        <div class="chart-stage" id="renderedChart_${index}" style="width: 100%; height: 320px;"></div>
+                    </div>
+                `;
+            }).join('');
+
+            finalCharts.forEach((chart, index) => {
+                const el = document.getElementById(`renderedChart_${index}`);
+                if (!el || !window.echarts) return;
+                const instance = window.echarts.init(el);
+                renderedChartInstances.push(instance);
+
+                const hasSource = Array.isArray(chart.source) && chart.source.length > 0;
+                const hasPoints = Array.isArray(chart.points) && chart.points.length > 0;
+
+                if (!hasSource && !hasPoints) {
+                    instance.setOption({
+                        title: {
+                            text: '暂无数据',
+                            left: 'center',
+                            top: 'middle',
+                            textStyle: { color: '#94a3b8', fontSize: 14, fontWeight: 500 }
+                        }
+                    });
+                    return;
+                }
+
+                const option = {
+                    animationDuration: 500,
+                    grid: { left: 52, right: hasSource ? 52 : 24, top: hasSource ? 40 : 24, bottom: 46 },
+                    xAxis: {
+                        type: 'value',
+                        scale: true,
+                        name: chart.xLabel || '售价',
+                        nameTextStyle: { color: '#94a3b8' },
+                        axisLabel: { color: '#94a3b8', formatter: (value) => Number(value).toFixed(2) },
+                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                    }
+                };
+
+                if (hasSource) {
+                    option.legend = {
+                        data: chart.dimensions.slice(1),
+                        textStyle: { color: '#94a3b8' },
+                        top: 0
+                    };
+                    option.tooltip = {
+                        trigger: 'axis',
+                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                        borderColor: 'rgba(148, 163, 184, 0.25)',
+                        textStyle: { color: '#e2e8f0' },
+                        formatter(params) {
+                            if (!params || params.length === 0) return '';
+                            let html = `售价：${Number(params[0].value[0]).toFixed(2)} 元<br/>`;
+                            params.forEach(p => {
+                                const val = p.value[p.seriesIndex + 1];
+                                const unit = p.seriesName === '销量' ? '件' : '元';
+                                html += `${escapeHtml(p.seriesName)}：${Number(val).toFixed(2)} ${unit}<br/>`;
+                            });
+                            return html;
+                        }
+                    };
+                    option.dataset = {
+                        dimensions: chart.dimensions,
+                        source: chart.source
+                    };
+                    option.yAxis = [
+                        {
+                            type: 'value',
+                            name: chart.yAxisLeft?.name || '销量',
+                            nameTextStyle: { color: '#94a3b8' },
+                            axisLabel: { color: '#94a3b8' },
+                            splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                        },
+                        {
+                            type: 'value',
+                            name: chart.yAxisRight?.name || '金额',
+                            nameTextStyle: { color: '#94a3b8' },
+                            axisLabel: { color: '#94a3b8' },
+                            splitLine: { show: false }
+                        }
+                    ];
+                    option.series = chart.dimensions.slice(1).map((name) => {
+                        const isQty = name === '销量';
+                        return {
+                            name: name,
+                            type: 'line',
+                            smooth: true,
+                            yAxisIndex: isQty ? 0 : 1,
+                            encode: { x: '售价', y: name },
+                            symbol: 'circle',
+                            symbolSize: 8,
+                            lineStyle: { width: 3 },
+                            itemStyle: {
+                                color: name === '销量' ? '#38bdf8' : (name === '利润' ? '#10b981' : '#f59e0b')
+                            }
+                        };
+                    });
+                } else {
+                    const seriesData = chart.points
+                        .map((pair) => [Number(pair?.[0]), Number(pair?.[1])])
+                        .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+                        .sort((a, b) => a[0] - b[0]);
+
+                    option.tooltip = {
+                        trigger: 'axis',
+                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                        borderColor: 'rgba(148, 163, 184, 0.25)',
+                        textStyle: { color: '#e2e8f0' },
+                        formatter(params) {
+                            const point = params?.[0];
+                            if (!point) return '';
+                            const [x, y] = point.data || [];
+                            return `${escapeHtml(chart.xLabel || 'X')}：${Number(x).toFixed(2)}<br/>${escapeHtml(chart.yLabel || 'Y')}：${Number(y).toFixed(2)}`;
+                        }
+                    };
+                    option.yAxis = {
+                        type: 'value',
+                        name: chart.yLabel || 'y',
+                        nameTextStyle: { color: '#94a3b8' },
+                        axisLabel: { color: '#94a3b8' },
+                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                    };
+                    option.series = [
+                        {
+                            type: 'line',
+                            smooth: true,
+                            symbol: 'circle',
+                            symbolSize: 8,
+                            data: seriesData,
+                            lineStyle: { width: 3, color: '#38bdf8' },
+                            itemStyle: { color: '#0ea5e9', borderColor: '#e0f2fe', borderWidth: 1.5 },
+                            areaStyle: {
+                                color: {
+                                    type: 'linear',
+                                    x: 0,
+                                    y: 0,
+                                    x2: 0,
+                                    y2: 1,
+                                    colorStops: [
+                                        { offset: 0, color: 'rgba(56, 189, 248, 0.28)' },
+                                        { offset: 1, color: 'rgba(56, 189, 248, 0.03)' }
+                                    ]
+                                }
+                            }
+                        }
+                    ];
+                }
+
+                instance.setOption(option);
+            });
+        }
+
+        function renderDiagnosisReport(data) {
+            const overviewHtml = `
+                <div class="dashboard-overview">
+                    <h2>
+                        <i class="fas fa-heartbeat"></i> 经营状态：${data.health_status || '未知'}
+                    </h2>
+                    <p>${data.overview_text || '暂无概览信息'}</p>
+                </div>
+            `;
+
+            let cardsHtml = '';
+            if (data.cards && data.cards.length > 0) {
+                const cardsList = data.cards.map(c => {
+                    let icon = 'fa-info-circle';
+                    let iconColor = 'var(--primary)';
+                    if (c.color === 'red') { icon = 'fa-exclamation-triangle'; iconColor = 'var(--error)'; }
+                    if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = 'var(--warning)'; }
+                    if (c.color === 'green') { icon = 'fa-check-circle'; iconColor = 'var(--success)'; }
+                    if (c.color === 'pink') { icon = 'fa-question-circle'; iconColor = '#ff6b9d'; }
+
+                    const evidenceHtml = c.evidence ? `
+                        <div class="evidence-wrapper">
+                            <i class="fas fa-chart-line evidence-icon"></i>
+                            <div class="evidence-tooltip markdown-body">${marked.parse(c.evidence || '')}</div>
+                        </div>
+                    ` : '';
+
+                    return `
+                        <div class="issue-card" data-color="${c.color || 'blue'}">
+                            <div class="issue-title">
+                                <i class="fas ${icon}" style="color: ${iconColor};"></i>
+                                <span>${c.title}</span>
+                            </div>
+                            <div class="issue-explanation">${c.explanation}</div>
+                            <div class="issue-suggestion">
+                                <i class="fas fa-lightbulb"></i>
+                                <span>${c.suggestion}</span>
+                            </div>
+                            ${evidenceHtml}
+                        </div>
+                    `;
+                }).join('');
+                cardsHtml = `<div class="masonry-grid">${cardsList}</div>`;
+            }
+
+            reportContent.className = '';
+            reportContent.innerHTML = overviewHtml + cardsHtml;
+        }
+
         function renderReport() {
             if (currentReport === null || currentFullReport === null) return;
             const isFull = reportToggle.checked;
             const rep = isFull ? currentFullReport : currentReport;
             const cardDiv = reportContent.closest('.report-card');
             
-            if (!rep || rep.trim() === '') {
+            if (!rep || (typeof rep === 'string' && rep.trim() === '')) {
                 cardDiv.style.display = 'none';
                 return;
             }
             cardDiv.style.display = 'block';
 
-            if (isFull) {
-                reportContent.innerHTML = marked.parse(rep);
-                reportContent.className = 'markdown-body';
-            } else {
-                try {
-                    let jsonStr = rep;
+            // Check task type based on currentReport (simplified report)
+            let isPriceTask = false;
+            try {
+                let checkData = null;
+                if (typeof currentReport === 'object' && currentReport !== null) {
+                    checkData = currentReport;
+                } else if (typeof currentReport === 'string') {
+                    let jsonStr = currentReport.trim();
                     if (jsonStr.startsWith('```json')) {
                         jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
                     } else if (jsonStr.startsWith('```')) {
                         jsonStr = jsonStr.replace(/```/g, '').trim();
                     }
-                    
-                    const data = JSON.parse(jsonStr);
-                    const overviewHtml = `
-                        <div class="dashboard-overview">
-                            <h2>
-                                <i class="fas fa-heartbeat"></i> 经营状态：${data.health_status || '未知'}
-                            </h2>
-                            <p>${data.overview_text || '暂无概览信息'}</p>
-                        </div>
-                    `;
+                    checkData = JSON.parse(jsonStr);
+                }
+                if (checkData && (checkData.recommendations !== undefined || checkData.bestPrice !== undefined)) {
+                    isPriceTask = true;
+                }
+            } catch (e) {
+                console.error("解析 checkData 失败:", e);
+            }
 
-                    let cardsHtml = '';
-                    if (data.cards && data.cards.length > 0) {
-                        const cardsList = data.cards.map(c => {
-                            let icon = 'fa-info-circle';
-                            let iconColor = 'var(--primary)';
-                            if (c.color === 'red') { icon = 'fa-exclamation-triangle'; iconColor = 'var(--error)'; }
-                            if (c.color === 'yellow') { icon = 'fa-bolt'; iconColor = 'var(--warning)'; }
-                            if (c.color === 'green') { icon = 'fa-check-circle'; iconColor = 'var(--success)'; }
-                            if (c.color === 'pink') { icon = 'fa-question-circle'; iconColor = '#ff6b9d'; }
+            const downloadCard = document.getElementById('downloadCard');
+            if (downloadCard) {
+                downloadCard.style.display = isPriceTask ? 'none' : 'block';
+            }
 
-                            const evidenceHtml = c.evidence ? `
-                                <div class="evidence-wrapper">
-                                    <i class="fas fa-chart-line evidence-icon"></i>
-                                    <div class="evidence-tooltip markdown-body">${marked.parse(c.evidence || '')}</div>
-                                </div>
-                            ` : '';
+            const logoSpan = document.querySelector('.public-logo span');
+            const headerH3 = document.querySelector('#reportHeaderBar h3');
+            if (isPriceTask) {
+                if (logoSpan) logoSpan.innerText = '门店 AI 价格推荐 · 报告预览';
+                if (headerH3) headerH3.innerHTML = '<i class="fas fa-tags"></i> 门店商品最优售价推荐报告';
+            } else {
+                if (logoSpan) logoSpan.innerText = '门店 AI 智能诊断 · 报告预览';
+                if (headerH3) headerH3.innerHTML = '<i class="fas fa-poll-h"></i> 门店经营智能分析诊断报告';
+            }
 
-                            return `
-                                <div class="issue-card" data-color="${c.color || 'blue'}">
-                                    <div class="issue-title">
-                                        <i class="fas ${icon}" style="color: ${iconColor};"></i>
-                                        <span>${c.title}</span>
-                                    </div>
-                                    <div class="issue-explanation">${c.explanation}</div>
-                                    <div class="issue-suggestion">
-                                        <i class="fas fa-lightbulb"></i>
-                                        <span>${c.suggestion}</span>
-                                    </div>
-                                    ${evidenceHtml}
-                                </div>
-                            `;
-                        }).join('');
-                        cardsHtml = `<div class="masonry-grid">${cardsList}</div>`;
+            if (isFull) {
+                disposeRenderedCharts();
+                reportContent.innerHTML = marked.parse(rep);
+                reportContent.className = 'markdown-body';
+            } else {
+                try {
+                    let data = null;
+                    if (typeof rep === 'object' && rep !== null) {
+                        data = rep;
+                    } else if (typeof rep === 'string') {
+                        let jsonStr = rep.trim();
+                        if (jsonStr.startsWith('```json')) {
+                            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                        } else if (jsonStr.startsWith('```')) {
+                            jsonStr = jsonStr.replace(/```/g, '').trim();
+                        }
+                        data = JSON.parse(jsonStr);
                     }
-
-                    reportContent.className = '';
-                    reportContent.innerHTML = overviewHtml + cardsHtml;
-
+                    
+                    if (isPriceTask) {
+                        renderPriceReport(data);
+                    } else {
+                        disposeRenderedCharts();
+                        renderDiagnosisReport(data);
+                    }
                 } catch (e) {
                     console.error("JSON 解析失败:", e);
+                    disposeRenderedCharts();
                     reportContent.className = 'markdown-body';
-                    reportContent.innerHTML = `<h3><i class="fas fa-exclamation-triangle" style="color:orange;"></i> 数据解析异常</h3><p>AI 返回格式与预期不符，以下为原始内容：</p><br>` + marked.parse(rep);
+                    reportContent.innerHTML = `<h3><i class="fas fa-exclamation-triangle" style="color:orange;"></i> 数据解析异常</h3><p>AI 返回格式与预期不符，以下为原始内容：</p><br>` + marked.parse(typeof rep === 'object' ? JSON.stringify(rep, null, 2) : rep);
                 }
             }
         }
+
+        window.addEventListener('resize', () => {
+            renderedChartInstances.forEach((chart) => {
+                try { chart.resize(); } catch(e) {}
+            });
+        });
 
         // ========== 下载事件 ==========
         downloadBtn.onclick = () => {

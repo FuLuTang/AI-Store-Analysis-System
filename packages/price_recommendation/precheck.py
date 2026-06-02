@@ -87,17 +87,6 @@ def run_precheck(decoded_files: list[dict], product_name: str) -> dict:
         warnings.append({"code": "time_field_missing", "message": "未识别到日期或时间字段，后续趋势判断会受限"})
 
     valid = not issues
-    match_confidence = _confidence(
-        matched_row_count,
-        total_rows,
-        bool(price_fields),
-        bool(sales_fields),
-        bool(time_fields),
-        bool(product_fields),
-        product_name,
-    )
-    if text_source_present:
-        match_confidence = min(match_confidence, 0.72 if matched_row_count else 0.55)
 
     return {
         "status": "ok" if valid else "failed",
@@ -114,7 +103,6 @@ def run_precheck(decoded_files: list[dict], product_name: str) -> dict:
         "productDataMatch": {
             "status": "ok" if matched_row_count > 0 else ("warning" if text_source_present else "failed"),
             "matchedRows": matched_row_count,
-            "confidence": match_confidence,
         },
         "detectedFields": {
             "productFields": product_fields,
@@ -183,15 +171,6 @@ def build_basic_recommendation(inspection: dict, product_name: str, candidate_co
             "price": price,
             "unit": "元",
             "reason": "基于目标商品历史价格分布生成的基准推荐，后续可替换为价格弹性或曲线拟合模型",
-            "confidence": _confidence(
-                len(matched_rows),
-                sum(len(t["rows"]) for t in tables),
-                bool(price_values),
-                bool(sales_fields),
-                bool(time_fields),
-                bool(product_fields),
-                product_name,
-            ),
         })
 
     return {
@@ -206,9 +185,6 @@ def build_basic_recommendation(inspection: dict, product_name: str, candidate_co
         "evidence": {
             "matchedRows": len(matched_rows),
             "observedPriceCount": len(price_values),
-            "priceField": price_field,
-            "salesField": sales_fields[0] if sales_fields else "",
-            "timeField": time_fields[0] if time_fields else "",
             "sourceTables": [t["name"] for t in tables],
             "notes": ["当前为确定性基准推荐，尚未接入价格弹性模型"],
         },
@@ -256,9 +232,6 @@ def build_price_point_artifacts(inspection: dict, product_name: str) -> dict:
             "points": raw_points,
             "fields": {
                 "productField": product_fields[0] if product_fields else "",
-                "priceField": price_fields[0] if price_fields else "",
-                "salesField": sales_fields[0] if sales_fields else "",
-                "timeField": time_fields[0] if time_fields else "",
                 "storeField": store_fields[0] if store_fields else "",
             },
         },
@@ -266,9 +239,6 @@ def build_price_point_artifacts(inspection: dict, product_name: str) -> dict:
         "evidence": {
             "matchedRows": len(matched_entries),
             "rawPointCount": len(raw_points),
-            "priceField": price_fields[0] if price_fields else "",
-            "salesField": sales_fields[0] if sales_fields else "",
-            "timeField": time_fields[0] if time_fields else "",
             "storeField": store_fields[0] if store_fields else "",
             "sourceTables": [t["name"] for t in tables],
         },
@@ -316,20 +286,10 @@ def build_recommendation_from_points(
             "price": item["price"],
             "unit": "元",
             "reason": reason,
-            "confidence": _confidence(
-                evidence.get("matchedRows", 0),
-                max(evidence.get("rawPointCount", 0), total_points),
-                bool(evidence.get("priceField")),
-                bool(evidence.get("salesField")),
-                bool(evidence.get("timeField")),
-                True,
-                product_name,
-            ),
         })
 
     prices = [item["price"] for item in scored_points]
     result_evidence = dict(evidence)
-    result_evidence["observedPriceCount"] = len(scored_points)
     result_evidence["notes"] = ["当前结果直接使用归一化后的离散点集生成"]
     return {
         "taskType": "price_recommendation",
@@ -582,41 +542,6 @@ def _to_number(value: Any) -> float | None:
         return None
 
 
-def _confidence(
-    matched_rows: int,
-    total_rows: int,
-    has_price: bool,
-    has_sales: bool,
-    has_time: bool = False,
-    has_product: bool = False,
-    product_name: str = "",
-) -> float:
-    score = 0.2
-    normalized_name = _normalize_text(product_name)
-    if normalized_name:
-        if len(normalized_name) >= 12:
-            score += 0.16
-        elif len(normalized_name) >= 8:
-            score += 0.12
-        elif len(normalized_name) >= 4:
-            score += 0.08
-        else:
-            score += 0.02
-    if total_rows > 0 and matched_rows:
-        coverage = matched_rows / max(total_rows, 1)
-        score += min(0.24, coverage * 0.35)
-    elif total_rows > 0:
-        score += 0.02
-    if has_product:
-        score += 0.08
-    if has_price:
-        score += 0.16
-    if has_sales:
-        score += 0.1
-    if has_time:
-        score += 0.05
-    return round(min(max(score, 0.05), 0.95), 2)
-
 
 def _dedupe_prices(values: list[float]) -> list[float]:
     result: list[float] = []
@@ -768,6 +693,7 @@ def _normalize_price_points(raw_points: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "points": points,
+        "timeGranularity": "未指定",
         "normalization": {
             "method": "shop_scale_median",
             "baselineQty": round(float(baseline_qty), 4),

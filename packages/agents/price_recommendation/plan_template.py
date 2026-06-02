@@ -40,10 +40,11 @@ PRICE_PLAN_TEMPLATE = [
         "detail": (
             "基于数据库，写参数&算法，把其他店面的销量数据换算成适配于本店计算的，一般来说可以考虑店铺规模，所以是直接成比例的。门店折算和本店适配销量换算。如果真的实在部分无法直接使用本店和他店共有的商品的话，可以尝试用其他商品和店间接中转的方式来算，就需要你开动脑筋了。"
             "统计时 不算入折扣价格和优惠券。"
-            "在归一时，需要先统一时间颗粒度，也就是确定是以周/月/x天为时间颗粒度来计算（你来找合适的单位，主要是考虑最后是否容易观测出数据之间的关系，更具有统计性，所以如果过小的颗粒度会导致购买量过于稀疏导致难以分析，便需要使用更大的时间颗粒度来统计）否则会出现长时间同价格销售数叠加导致的统计出现偏差。（其中比如某个价格在某家店只卖了4天，但如果按照周颗粒度来算，那销售数量得* 7/4 才是正常的“周颗粒度”）"
+            "在归一时，需要先统一时间颗粒度，也就是确定是以周/月/x天为时间颗粒度来计算（你来找合适的单位，主要是考虑最后是否容易观测出数据之间的关系，更具有统计性，所以如果过小的颗粒度会导致购买量过于稀疏导致难以分析，便需要使用更大的时间颗粒度来统计）否则会出现长时间同价格销售数叠加导致的统计出现偏差。（其中比如某个价格在某家店只卖了4天，但如果按照周颗粒度来算，那销售数量得* 7/4 才是正常的"周颗粒度"）"
             "然后再尝试通过店铺规模对其他店铺的销售表现进行换算，比如另一家店规模是当前店的三倍，或者是对面店可能是某种药的专卖店，于是都需要在换算/归一时对那家店的销售表现进行变幻。"
             "描述所有参考的点时，每个店一套points，在json的对应字段中用[]放起来即可，产出 output/normalized_price_points.json。"
-            "示例：{\"productName\":\"小葵花金银花露\",\"timesteps\":\"周/月/x天..\",\"cost\":18.8,\"points\":[{\"store\":\"A店\",\"price&quantity\":[[35.8,66],[39.9,42]]},{...}]}"
+            "同时写清楚本次归一化用的时间颗粒度，字段名为 timeGranularity，取值例如 日 / 周 / 月。"
+            "示例：{\"productName\":\"小葵花金银花露\",\"cost\":18.8,\"timeGranularity\":\"日\",\"points\":[{\"store\":\"A店\",\"price&quantity\":[[35.8,66],[39.9,42]]},{...}]}"
         ),
         "status": "pending",
         "check": (
@@ -56,6 +57,7 @@ PRICE_PLAN_TEMPLATE = [
             "norm_data=json.load(open(norm, encoding='utf-8'))\n"
             "assert isinstance(norm_data, dict), 'normalized_price_points.json 最外层必须是 JSON 对象 {}，不能是列表 []'\n"
             "assert 'points' in norm_data, 'normalized_price_points.json 中必须包含 points 字段'\n"
+            "assert 'timeGranularity' in norm_data, 'normalized_price_points.json 中必须包含 timeGranularity 字段'\n"
             "assert isinstance(norm_data.get('points'), list), 'points 字段必须是一个列表'\n"
             "assert norm_data.get('points'), 'points 不能为空'\n"
             "cost=norm_data.get('cost') or raw_data.get('cost')\n"
@@ -68,12 +70,28 @@ PRICE_PLAN_TEMPLATE = [
             "        for item in p['price&quantity']:\n"
             "            price = item[0]\n"
             "            assert cost * 0.5 <= price <= cost * 4.0, f'价格 {price} 与商品成本 {cost} 不匹配，请确保 points 中只包含目标商品的价格点，不要混入其他商品（如泰诺等）的价格'\n"
-            "    if 'rawPoints' in raw_data:\n"
-            "        for p in raw_data['rawPoints']:\n"
-            "            price = p.get('price')\n"
-            "            if price is not None:\n"
-            "                assert cost * 0.5 <= price <= cost * 4.0, f'原始价格 {price} 与成本 {cost} 不匹配，请确保 rawPoints 只包含目标商品的价格点'\n"
+            "    total_pairs=0\n"
+            "    low_qty_pairs=0\n"
+            "    for p in norm_data['points']:\n"
+            "        price_qty = p.get('price&quantity', [])\n"
+            "        for item in price_qty:\n"
+            "            if isinstance(item, list) and len(item) >= 2:\n"
+            "                qty = item[1]\n"
+            "                try:\n"
+            "                    qty_val = float(qty)\n"
+            "                except Exception:\n"
+            "                    continue\n"
+            "                total_pairs += 1\n"
+            "                if qty_val < 2.0:\n"
+            "                    low_qty_pairs += 1\n"
+            "    assert total_pairs > 0, 'normalized_price_points.json 中没有可用于统计的 price&quantity 点'\n"
+            "    assert low_qty_pairs / total_pairs <= 0.3, f'低销量点占比过高：{low_qty_pairs}/{total_pairs}，超过 30% 时不允许通过检查，请使用更大的时间颗粒度'\n"
+            "if 'rawPoints' in raw_data:\n"
+            "    for p in raw_data['rawPoints']:\n"
+            "        price = p.get('price')\n"
+            "        if price is not None:\n"
+            "            assert cost * 0.5 <= price <= cost * 4.0, f'原始价格 {price} 与成本 {cost} 不匹配，请确保 rawPoints 只包含目标商品的价格点'\n"
         ),
         "errors": [],
-    }
+    },
 ]

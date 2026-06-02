@@ -439,8 +439,8 @@ class SessionState:
     @property
     def logs_path(self) -> Path:
         if self.run_dir:
-            return self.run_dir / "logs.json"
-        return self.account_dir / "latest_logs.json"
+            return self.run_dir / "logs.jsonl"
+        return self.account_dir / "latest_logs.jsonl"
 
     @property
     def report_path(self) -> Path:
@@ -558,12 +558,7 @@ class SessionManager:
                 rd = saved.get("_runDir")
                 if rd:
                     session.run_dir = Path(rd)
-                    logs_file = session.run_dir / "logs.json"
-                    if logs_file.exists():
-                        try:
-                            session.logs = json.loads(logs_file.read_text(encoding="utf-8"))
-                        except Exception:
-                            pass
+                    session.logs = _load_logs_from_file(session)
 
             self._sessions[cache_key] = session
             return session
@@ -608,7 +603,11 @@ def _ensure_session_dirs(session: SessionState):
 def persist_latest_logs(session: SessionState):
     _ensure_session_dirs(session)
     try:
-        session.logs_path.write_text(json.dumps(session.logs, ensure_ascii=False, indent=2), encoding="utf-8")
+        event = session.logs[-1] if session.logs else None
+        if not event:
+            return
+        with session.logs_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
@@ -628,7 +627,8 @@ def reset_events(session: SessionState):
     with session.event_lock:
         event = {"type": "reset", "time": _now_time()}
         session.logs.append(event)
-        # 不 overwrite 文件，只保留原有日志
+        persist_latest_logs(session)
+        # 不 overwrite 文件，只追加一行日志
 
 
 def add_status(session: SessionState, node_id: str, status: str):
@@ -819,8 +819,6 @@ def get_status(
         }
         
     run_dir = session.account_dir / "runs" / session.task_type / target_run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / target_run_id
         
     status = session.status if target_run_id == session.run_id else "completed"
     error_msg = session.error_message if target_run_id == session.run_id else ""
@@ -854,6 +852,9 @@ def get_status(
     else:
         safe_error = ""
         
+    if isinstance(result_str, (dict, list)):
+        result_str = json.dumps(result_str, ensure_ascii=False)
+        
     return {
         "status": status,
         "errorMessage": safe_error,
@@ -864,26 +865,54 @@ def get_status(
 
 
 @app.get("/api/logs")
-def get_logs(x_fzt_key: Optional[str] = Header(default=None)):
-    resolve_session(x_fzt_key)  # 确保 session 缓存存在
-    return {"logs": _load_logs_from_file(resolve_session(x_fzt_key))}
+def get_logs(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
+    session = resolve_session(x_fzt_key)  # 确保 session 缓存存在
+    return {"logs": _load_logs_from_file(session, run_id)}
 
 
-def _load_logs_from_file(session) -> list:
+def _load_logs_from_file(session, run_id: Optional[str] = None) -> list:
     """强制从文件加载日志，不依赖 session.logs 的内存状态。"""
     try:
-        if session.run_dir:
-            p = session.run_dir / "logs.json"
-            if p.exists():
-                return json.loads(p.read_text(encoding="utf-8"))
+        run_dir = session.run_dir
+        if run_id:
+            run_dir = session.account_dir / "runs" / session.task_type / run_id
+        if run_dir:
+            jsonl_path = run_dir / "logs.jsonl"
+            if jsonl_path.exists():
+                lines = [line.strip() for line in jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                return [json.loads(line) for line in lines]
+
+            legacy_path = run_dir / "logs.json"
+            if legacy_path.exists():
+                loaded = json.loads(legacy_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    return loaded
+                if isinstance(loaded, dict):
+                    return [loaded]
     except Exception:
         pass
     return []
 
 
-async def sse_generator(session: SessionState):
+async def sse_generator(session: SessionState, run_id: Optional[str] = None):
     """SSE 日志推送，适配前端 EventSource('/api/stream')"""
-    session.logs = _load_logs_from_file(session)
+    session.logs = _load_logs_from_file(session, run_id)
+
+    target_status = session.status
+    if run_id:
+        try:
+            run_dir = session.account_dir / "runs" / session.task_type / run_id
+            session_json_path = run_dir / "session.json"
+            if session_json_path.exists():
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                target_status = sdata.get("status", "completed")
+            else:
+                target_status = "completed"
+        except Exception:
+            target_status = "completed"
 
     last_idx = 0
     yield f"data: {json.dumps({'type': 'reset', 'time': _now_time()})}\n\n"
@@ -896,7 +925,7 @@ async def sse_generator(session: SessionState):
                 yield f"data: {json.dumps(session.logs[i], ensure_ascii=False)}\n\n"
             last_idx = len(session.logs)
 
-        if session.status in ("completed", "error", "aborted") and last_idx >= len(session.logs):
+        if target_status in ("completed", "error", "aborted") and last_idx >= len(session.logs):
             yield f"data: {json.dumps({'type': 'done', 'time': _now_time()})}\n\n"
             break
 
@@ -908,10 +937,11 @@ async def sse_generator(session: SessionState):
 
 @app.get("/api/stream")
 async def stream(
+    run_id: Optional[str] = Query(None),
     x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
 ):
     session = resolve_session(x_fzt_key)
-    return StreamingResponse(sse_generator(session), media_type="text/event-stream")
+    return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
 
 
 
@@ -1057,25 +1087,28 @@ async def run_price_recommendation_task(session: SessionState, decoded_files: li
             emit_log=lambda nid, payload: add_log(session, nid, payload),
             check_aborted=check_aborted,
         )
-        session.result = result
+        session.result = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else result
         session.full_result = full_result
         with session.runtime_lock:
             if session.force_stop or session.status == "aborted":
                 _save_session_json(session)
                 return
             session.status = "completed"
+        _update_run_status_in_meta(session, "completed")
         _save_session_json(session)
     except (TaskAbortedError, asyncio.CancelledError):
         add_log(session, "price_done", {"level": "error", "message": "价格推荐任务被用户强制终止。", "progress": 100})
         with session.runtime_lock:
             session.status = "aborted"
             session.error_message = "任务被用户强行终止。"
+        _update_run_status_in_meta(session, "aborted")
         _save_session_json(session)
     except Exception as e:
         add_log(session, "price_done", {"level": "error", "message": f"价格推荐任务失败: {str(e)}", "error_details": str(e)})
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
+        _update_run_status_in_meta(session, "error")
         _save_session_json(session)
 
 
@@ -1126,6 +1159,12 @@ async def start_price_recommendation(
         session.run_dir = None
 
     _ensure_run_dir(session)
+    # 记录运行历史
+    file_names = [df["name"] for df in decoded_files]
+    try:
+        _add_run_to_meta(session, file_names)
+    except Exception as e:
+        logger.error("Failed to record run metadata: %s", str(e))
     _save_session_json(session)
     session._pipeline_task = asyncio.create_task(
         run_price_recommendation_task(session, decoded_files, product_name, candidate_count)
@@ -1139,36 +1178,81 @@ async def start_price_recommendation(
 
 
 @app.get("/api/price-recommendations/status")
-def get_price_recommendation_status(x_fzt_key: Optional[str] = Header(default=None)):
+def get_price_recommendation_status(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
-    result = session.result
-    full_result = session.full_result
-    try:
-        disk_result, disk_full = read_price_service_result(session.run_dir)
-        result = disk_result if disk_result is not None else result
-        full_result = disk_full if disk_full is not None else full_result
-    except Exception:
-        pass
+    
+    target_run_id = run_id or session.run_id
+    if not target_run_id:
+        return {
+            "status": "idle",
+            "errorMessage": "",
+            "result": None,
+            "fullResult": None,
+            "runId": None
+        }
+
+    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
+
+    status = session.status if target_run_id == session.run_id else "completed"
+    error_msg = session.error_message if target_run_id == session.run_id else ""
+    result = session.result if target_run_id == session.run_id else None
+    full_result = session.full_result if target_run_id == session.run_id else None
+
+    if run_dir.exists():
+        session_json_path = run_dir / "session.json"
+        if session_json_path.exists():
+            try:
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                status = sdata.get("status", "completed")
+                error_msg = sdata.get("errorMessage", "")
+                result = sdata.get("result")
+                full_result = sdata.get("fullResult")
+            except Exception:
+                pass
+        try:
+            disk_result, disk_full = read_price_service_result(run_dir)
+            result = disk_result if disk_result is not None else result
+            full_result = disk_full if disk_full is not None else full_result
+        except Exception:
+            pass
+
+    safe_error = ""
+    if status == "aborted":
+        safe_error = "任务被用户强行终止。"
+    elif status == "error":
+        safe_error = f"任务执行失败: {error_msg}" if error_msg else "任务执行失败"
+
+    if isinstance(result, (dict, list)):
+        result = json.dumps(result, ensure_ascii=False)
+
     return {
-        "status": session.status,
-        "errorMessage": session.error_message if session.status in ("error", "aborted", "interrupted") else "",
+        "status": status,
+        "errorMessage": safe_error,
         "result": result,
         "fullResult": full_result,
+        "runId": target_run_id
     }
 
 
 @app.get("/api/price-recommendations/logs")
-def get_price_recommendation_logs(x_fzt_key: Optional[str] = Header(default=None)):
+def get_price_recommendation_logs(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
-    return {"logs": _load_logs_from_file(session)}
+    return {"logs": _load_logs_from_file(session, run_id)}
 
 
 @app.get("/api/price-recommendations/stream")
 async def stream_price_recommendation(
+    run_id: Optional[str] = Query(None),
     x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
 ):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
-    return StreamingResponse(sse_generator(session), media_type="text/event-stream")
+    return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
 
 
 @app.post("/api/price-recommendations/stop")
@@ -1280,10 +1364,14 @@ async def download_report_zip(
     if not target_run_id:
         raise HTTPException(status_code=404, detail="未找到任何运行记录")
         
-    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
-    if not run_dir.exists():
-        # 退化/向后兼容路径
-        run_dir = session.account_dir / "runs" / target_run_id
+    task_type = session.task_type
+    runs = _load_runs(session.account_dir)
+    for r in runs:
+        if r.get("runId") == target_run_id:
+            task_type = r.get("taskType", task_type)
+            break
+            
+    run_dir = session.account_dir / "runs" / task_type / target_run_id
         
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"运行目录不存在: {target_run_id}")
@@ -1372,9 +1460,12 @@ async def toggle_report_public(
     share_url = f"{origin}/public.html?run_id={run_id}&sign={sign}"
     
     # Also update session.json if it exists inside the run_dir
-    run_dir = session.account_dir / "runs" / session.task_type / run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / run_id
+    task_type = "diagnosis"
+    for r in runs:
+        if r.get("runId") == run_id:
+            task_type = r.get("taskType", task_type)
+            break
+    run_dir = session.account_dir / "runs" / task_type / run_id
     if run_dir.exists():
         session_json_path = run_dir / "session.json"
         if session_json_path.exists():
@@ -1417,9 +1508,8 @@ def delete_report(
     _save_runs(session.account_dir, runs)
     
     # Delete physically
-    run_dir = session.account_dir / "runs" / session.task_type / run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / run_id
+    task_type = target_run.get("taskType", "diagnosis")
+    run_dir = session.account_dir / "runs" / task_type / run_id
         
     if run_dir.exists() and run_dir.is_dir():
         try:
@@ -1472,8 +1562,6 @@ def get_public_report_status(
         
     task_type = target_run.get("taskType", "diagnosis")
     run_dir = target_account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = target_account_dir / "runs" / run_id
         
     session_json_path = run_dir / "session.json"
     if not session_json_path.exists():
@@ -1503,6 +1591,9 @@ def get_public_report_status(
             user_key = adata.get("keyMask", user_key)
         except Exception:
             pass
+
+    if isinstance(result_str, (dict, list)):
+        result_str = json.dumps(result_str, ensure_ascii=False)
 
     return {
         "status": sdata.get("status", "completed"),
@@ -1658,11 +1749,15 @@ def get_report_asset(
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    target_run_dir = session.account_dir / "runs" / "diagnosis" / run_id
+    task_type = "diagnosis"
+    runs = _load_runs(session.account_dir)
+    for r in runs:
+        if r.get("runId") == run_id:
+            task_type = r.get("taskType", "diagnosis")
+            break
+    target_run_dir = session.account_dir / "runs" / task_type / run_id
     if not target_run_dir.exists():
-        target_run_dir = session.account_dir / "runs" / run_id
-        if not target_run_dir.exists():
-            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="Run not found")
 
     asset_path = target_run_dir / "workspace" / "output" / filename
     if not asset_path.exists() or not asset_path.is_file():
@@ -1720,9 +1815,7 @@ def get_public_report_asset(
 
     task_type = target_run.get("taskType", "diagnosis")
     run_dir = target_account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = target_account_dir / "runs" / run_id
-
+ 
     asset_path = run_dir / "workspace" / "output" / filename
     if not asset_path.exists() or not asset_path.is_file():
         raise HTTPException(status_code=404, detail="Asset not found")

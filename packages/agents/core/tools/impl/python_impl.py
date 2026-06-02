@@ -1,10 +1,16 @@
 """底层纯函数：在 workspace 沙箱中执行 Python 脚本"""
 import subprocess
 import sys
+from typing import Callable, Optional
 from ...workspace import Workspace
 
 
-def run_python_impl(ws: Workspace, script_path: str, timeout: int = 300) -> str:
+def run_python_impl(
+    ws: Workspace,
+    script_path: str,
+    timeout: int = 300,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     script = ws.resolve(script_path)
     if not script.exists():
         raise FileNotFoundError(f"脚本不存在: {script}")
@@ -29,4 +35,7 @@ def run_python_impl(ws: Workspace, script_path: str, timeout: int = 300) -> str:
         capture_output=True, text=True, timeout=timeout,
         cwd=str(ws.dir),
     )
-    return result.stdout + "\n" + result.stderr if result.stderr else result.stdout
+    output = result.stdout + "\n" + result.stderr if result.stderr else result.stdout
+    if result.returncode == 0 and emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ run_python 调用成功: {script_path}"})
+    return output

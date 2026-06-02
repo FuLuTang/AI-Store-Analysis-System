@@ -17,6 +17,7 @@ def run_data_fitting(
 ) -> dict:
     normalized_points = _merge_normalized_points(normalized_payload)
     purchase_price = _infer_purchase_price(normalized_payload, evidence)
+    time_granularity = _infer_time_granularity(normalized_payload, evidence)
     rendered_final_charts = _build_rendered_final_charts(normalized_points, purchase_price)
     primary_metric = "profit" if purchase_price is not None else "sales_revenue"
     scored_points = _score_points(normalized_points, purchase_price)
@@ -37,6 +38,7 @@ def run_data_fitting(
         "productName": product_name,
         "normalizedPoints": normalized_points,
         "renderedFinalCharts": rendered_final_charts,
+        "timeGranularity": time_granularity,
         "recommendations": recommendations,
         "bestPrice": best_price,
         "bestPriceMetric": primary_metric,
@@ -49,10 +51,11 @@ def run_data_fitting(
             "hasPurchasePrice": purchase_price is not None,
             "purchasePrice": purchase_price,
             "chartCount": len(rendered_final_charts),
+            "timeGranularity": time_granularity,
         },
         "evidence": {
             **dict(evidence or {}),
-            "observedPriceCount": len(normalized_points),
+            "timeGranularity": time_granularity,
             "hasPurchasePrice": purchase_price is not None,
             "purchasePrice": purchase_price,
         },
@@ -73,7 +76,7 @@ def run_data_fitting(
 def _normalize_payload_format(payload: dict) -> dict:
     if not isinstance(payload, dict):
         return {"points": []}
-    
+
     raw_points = payload.get("points")
     if not isinstance(raw_points, list):
         return payload
@@ -100,10 +103,10 @@ def _normalize_payload_format(payload: dict) -> dict:
                         qty_val = _to_number(item[1])
                         if price_val is not None and qty_val is not None:
                             price_groups[round(price_val, 2)].append(qty_val)
-                            
+
                 for price, qties in price_groups.items():
                     if qties:
-                        final_qty = qties[-1] # Choose normalized quantity
+                        final_qty = qties[-1]  # Choose normalized quantity
                         flattened_points.append({
                             "price": price,
                             "normalizedQty": final_qty,
@@ -115,7 +118,7 @@ def _normalize_payload_format(payload: dict) -> dict:
         new_payload = dict(payload)
         new_payload["points"] = flattened_points
         return new_payload
-        
+
     return payload
 
 
@@ -186,59 +189,56 @@ def _infer_purchase_price(normalized_payload: dict, evidence: dict[str, Any]) ->
     return None
 
 
+def _infer_time_granularity(normalized_payload: dict, evidence: dict[str, Any]) -> str:
+    candidates = [
+        normalized_payload.get("timeGranularity"),
+        normalized_payload.get("normalization", {}).get("timeGranularity"),
+        evidence.get("timeGranularity"),
+    ]
+    for candidate in candidates:
+        if candidate:
+            return str(candidate)
+    return "未指定"
+
+
 def _build_rendered_final_charts(points: list[dict[str, Any]], purchase_price: float | None) -> list[dict[str, Any]]:
     if not points:
         return []
 
-    revenue_points = []
-    profit_points = []
-    revenue_profit_points = []
-    quantity_points = []
-    revenue_label = "销售额"
-    profit_label = "利润" if purchase_price is not None else "销售额代理"
+    dimensions = ["售价", "销量", "销售额"]
+    if purchase_price is not None:
+        dimensions.append("利润")
 
+    grouped: dict[float, dict[str, float]] = {}
     for point in points:
-        price = _to_number(point.get("price")) or 0.0
-        qty = _to_number(point.get("normalizedQty")) or 0.0
-        revenue = round(price * qty, 4)
+        price = _to_number(point.get("price"))
+        qty = _to_number(point.get("normalizedQty"))
+        if price is None or qty is None:
+            continue
+        bucket_price = round(price, 2)
+        bucket = grouped.setdefault(bucket_price, {"qty": 0.0, "revenue": 0.0, "profit": 0.0})
+        bucket["qty"] += qty
+        bucket["revenue"] += price * qty
         if purchase_price is not None:
-            profit = round((price - purchase_price) * qty, 4)
-        else:
-            profit = revenue
-        quantity_points.append([round(price, 2), round(qty, 4)])
-        revenue_points.append([round(price, 2), revenue])
-        profit_points.append([round(price, 2), profit])
-        revenue_profit_points.append([revenue, profit])
+            bucket["profit"] += (price - purchase_price) * qty
+
+    source = []
+    for price in sorted(grouped):
+        bucket = grouped[price]
+        row = [round(price, 2), round(bucket["qty"], 4), round(bucket["revenue"], 4)]
+        if purchase_price is not None:
+            row.append(round(bucket["profit"], 4))
+        source.append(row)
 
     return [
         {
-            "name": "售价-销售数",
+            "name": "售价综合分析",
             "xLabel": "售价",
-            "yLabel": "销售数",
-            "basis": "normalizedQty",
-            "points": quantity_points,
-        },
-        {
-            "name": "售价-销售额",
-            "xLabel": "售价",
-            "yLabel": revenue_label,
-            "basis": "sales_revenue",
-            "points": revenue_points,
-        },
-        {
-            "name": f"售价-{profit_label}",
-            "xLabel": "售价",
-            "yLabel": profit_label,
-            "basis": "profit" if purchase_price is not None else "sales_revenue_proxy",
-            "points": profit_points,
-        },
-        {
-            "name": f"销售额-{profit_label}",
-            "xLabel": revenue_label,
-            "yLabel": profit_label,
-            "basis": "revenue_profit",
-            "points": revenue_profit_points,
-        },
+            "yAxisLeft": {"name": "销量", "unit": "件"},
+            "yAxisRight": {"name": "金额", "unit": "元"},
+            "dimensions": dimensions,
+            "source": source,
+        }
     ]
 
 
@@ -295,15 +295,6 @@ def _build_recommendations(
             "reason": reason,
             "metric": metric_key,
             "metricValue": round(metric_value, 4),
-            "confidence": _confidence(
-                evidence.get("matchedRows", 0),
-                max(evidence.get("rawPointCount", 0), len(scored_points)),
-                bool(evidence.get("priceField")),
-                bool(evidence.get("salesField")),
-                bool(evidence.get("timeField")),
-                True,
-                product_name,
-            ),
         })
     return recommendations
 
@@ -317,45 +308,6 @@ def _build_price_range(points: list[dict[str, Any]]) -> dict[str, Any]:
     return {"min": round(min(prices), 2), "max": round(max(prices), 2), "unit": "元"}
 
 
-def _confidence(
-    matched_rows: int,
-    total_rows: int,
-    has_price: bool,
-    has_sales: bool,
-    has_time: bool = False,
-    has_product: bool = False,
-    product_name: str = "",
-) -> float:
-    score = 0.2
-    normalized_name = _normalize_text(product_name)
-    if normalized_name:
-        if len(normalized_name) >= 12:
-            score += 0.16
-        elif len(normalized_name) >= 8:
-            score += 0.12
-        elif len(normalized_name) >= 4:
-            score += 0.08
-        else:
-            score += 0.02
-    if total_rows > 0 and matched_rows:
-        coverage = matched_rows / max(total_rows, 1)
-        score += min(0.24, coverage * 0.35)
-    elif total_rows > 0:
-        score += 0.02
-    if has_product:
-        score += 0.08
-    if has_price:
-        score += 0.16
-    if has_sales:
-        score += 0.1
-    if has_time:
-        score += 0.05
-    return round(min(max(score, 0.05), 0.95), 2)
-
-
-def _normalize_text(value: Any) -> str:
-    import re
-    return re.sub(r"\s+", "", str(value or "")).lower()
 
 
 def _to_number(value: Any) -> float | None:

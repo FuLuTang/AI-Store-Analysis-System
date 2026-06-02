@@ -33,7 +33,9 @@ def run_price_recommendation_workflow(
     from openai import OpenAI
     from packages.agents.core.workspace import Workspace
     from packages.agents.core.agent_loop import AgentLoop
-    from packages.agents.core.tools.impl.setup_impl import design_plan_impl
+    from packages.agents.core.tools.impl.setup_impl import design_plan_impl, read_plan_short_impl
+    from packages.agents.core.tools.impl.file_impl import list_files_impl
+    from packages.agents.core.tools.impl.doc_impl import read_document_structure_impl
     from packages.agents.price_recommendation.plan_template import PRICE_PLAN_TEMPLATE
     from packages.agents.core.tool_converter import get_plan_progress_info
 
@@ -64,14 +66,25 @@ def run_price_recommendation_workflow(
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     checkpoint()
 
-    # Log initial parse
-    emit_log("price_parse", {"level": "status", "message": "正在解析上传文件...", "progress": 18})
-
     # ── 构建 client ──
     preset = llm_preset or {}
     api_key = preset.get("apiKey", "")
     base_url = preset.get("baseUrl", "https://api.deepseek.com")
     client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+
+    def bootstrap_emit_log(node_id: str, message: Union[str, dict]):
+        emit_log("price_parse", message)
+
+    bootstrap_messages = _build_bootstrap_messages(
+        ws=ws,
+        plan_short_text=read_plan_short_impl(ws, emit_log=bootstrap_emit_log),
+        list_files_json=json.dumps(list_files_impl(ws, "", emit_log=bootstrap_emit_log), ensure_ascii=False),
+        read_document_structure_impl=read_document_structure_impl,
+        emit_log=bootstrap_emit_log,
+    )
+
+    # Log initial parse
+    emit_log("price_parse", {"level": "status", "message": "正在解析上传文件...", "progress": 18})
 
     # ── Log Proxy ──
     def mapped_emit_log(node_id: str, message: Union[str, dict]):
@@ -111,6 +124,7 @@ def run_price_recommendation_workflow(
         emit_log=mapped_emit_log,
         emit_status=None,
         check_aborted=check_aborted,
+        bootstrap_messages=bootstrap_messages,
         task_type="price_recommendation",
         product_name=product_name,
         candidate_count=candidate_count,
@@ -155,9 +169,6 @@ def run_price_recommendation_workflow(
     evidence = {
         "matchedRows": len(raw_points),
         "rawPointCount": len(raw_points),
-        "priceField": "price",
-        "salesField": "qty",
-        "timeField": "date",
         "storeField": "shop",
         "sourceTables": ws.list_inputs(),
         "notes": ["基于 Agent 清洗和归一化的价格点集进行数据拟合"],
@@ -230,15 +241,14 @@ def _build_summary(result: dict) -> str:
         "## 推荐价格",
     ]
     for item in result.get("recommendations", []):
-        lines.append(f"- 第 {item.get('rank')} 推荐：{item.get('price')} {item.get('unit', '元')}，置信度 {item.get('confidence')}")
+        lines.append(f"- 第 {item.get('rank')} 推荐：{item.get('price')} {item.get('unit', '元')}")
     evidence = result.get("evidence", {})
     lines.extend([
         "",
         "## 数据证据",
         f"- 命中行数：{evidence.get('matchedRows', 0)}",
-        f"- 价格字段：{evidence.get('priceField', '')}",
-        f"- 销售字段：{evidence.get('salesField', '')}",
         f"- 归一化价格点：{len(result.get('normalizedPoints', []))}",
+        f"- 时间颗粒度：{result.get('timeGranularity', result.get('dataFitting', {}).get('timeGranularity', '未指定'))}",
         f"- 渲染图表数：{len(result.get('renderedFinalCharts', []))}",
         f"- 最优售价：{result.get('bestPrice', '')}",
         "",
@@ -320,3 +330,64 @@ def _write_analysis_duckdb(path: Path, raw_points: list[dict], normalized_points
             )
     finally:
         con.close()
+
+
+def _build_bootstrap_messages(
+    *,
+    ws,
+    plan_short_text: str,
+    list_files_json: str,
+    read_document_structure_impl,
+    emit_log,
+) -> list[dict]:
+    """Seed the price agent with stable tool-call history before the first model round."""
+
+    def tool_pair(call_id: str, name: str, arguments: dict, content: str) -> list[dict]:
+        return [
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(arguments, ensure_ascii=False),
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": content,
+            },
+        ]
+
+    messages: list[dict] = []
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": "✅ bootstrap 注入: list_files"})
+    messages.extend(tool_pair("call_bootstrap_list_files", "list_files", {"subdir": ""}, list_files_json))
+
+    if plan_short_text and plan_short_text.strip():
+        if emit_log:
+            emit_log("custom_agent", {"level": "info", "message": "✅ bootstrap 注入: read_plan_short"})
+        messages.extend(tool_pair("call_bootstrap_read_plan_short", "read_plan_short", {}, plan_short_text))
+
+    for idx, rel_path in enumerate(ws.list_inputs()[:3]):
+        try:
+            if emit_log:
+                emit_log("custom_agent", {"level": "info", "message": f"✅ bootstrap 注入: read_document_structure {rel_path}"})
+            messages.extend(tool_pair(
+                f"call_bootstrap_read_document_structure_{idx}",
+                "read_document_structure",
+                {"path": f"input/{rel_path}"},
+                read_document_structure_impl(ws, f"input/{rel_path}", emit_log=emit_log),
+            ))
+        except Exception:
+            continue
+
+    return messages

@@ -26,7 +26,7 @@
     <div class="container">
         <nav>
             <a href="index.html" class="active">用户工作台</a>
-            <a href="history.html">历史诊断记录</a>
+            <a href="history.html">历史记录</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
@@ -363,7 +363,14 @@
 
         function connectSSE() {
             if (sseSource) return;
-            sseSource = new EventSource('/api/stream?x-fzt-key=' + encodeURIComponent(localStorage.getItem('X-FZT-Key') || ''));
+            const key = localStorage.getItem('X-FZT-Key') || '';
+            const urlParams = new URLSearchParams(window.location.search);
+            const queryRunId = urlParams.get('run_id');
+            let streamUrl = '/api/stream?x-fzt-key=' + encodeURIComponent(key);
+            if (queryRunId) {
+                streamUrl += '&run_id=' + encodeURIComponent(queryRunId);
+            }
+            sseSource = new EventSource(streamUrl);
             sseSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'log') {
@@ -709,14 +716,26 @@
             } else {
                 // 精简报告（JSON 卡片化）
                 try {
-                    let jsonStr = rep;
-                    if (jsonStr.startsWith('```json')) {
-                        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
-                    } else if (jsonStr.startsWith('```')) {
-                        jsonStr = jsonStr.replace(/```/g, '').trim();
+                    let data = null;
+                    if (typeof rep === 'object' && rep !== null) {
+                        data = rep;
+                    } else if (typeof rep === 'string') {
+                        let jsonStr = rep.trim();
+                        if (jsonStr.startsWith('```json')) {
+                            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                        } else if (jsonStr.startsWith('```')) {
+                            jsonStr = jsonStr.replace(/```/g, '').trim();
+                        }
+                        data = JSON.parse(jsonStr);
                     }
                     
-                    const data = JSON.parse(jsonStr);
+                    if (data && (data.recommendations !== undefined || data.bestPrice !== undefined)) {
+                        const queryRunId = new URLSearchParams(window.location.search).get('run_id');
+                        if (queryRunId) {
+                            window.location.href = `price.html?run_id=${encodeURIComponent(queryRunId)}`;
+                            return;
+                        }
+                    }
                     
                     // 构建大卡片（概览）
                     const overviewHtml = `

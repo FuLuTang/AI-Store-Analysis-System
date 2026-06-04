@@ -7,7 +7,7 @@ from ...workspace import Workspace
 
 def query_sqlite_impl(ws: Workspace, path: str, sql: str) -> str:
     """对指定的 SQLite 数据库执行只读 SELECT 查询，返回 JSON。"""
-    p = ws.resolve(path)
+    p = ws.resolve_read(path)
     if not p.exists():
         return json.dumps({"error": f"数据库文件不存在: {path}"}, ensure_ascii=False)
     if not p.is_file():

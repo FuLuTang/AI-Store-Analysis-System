@@ -41,7 +41,7 @@ def read_file_impl(
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> str:
     """读取文件内容，支持分页(offset/limit)以及首尾快捷读取(head/tail)。"""
-    p = ws.resolve(path)
+    p = ws.resolve_read(path)
     if p.name in FORBIDDEN_READ_BASENAMES:
         return json.dumps({
             "error": f"不允许使用 read_file 读取受限文件: {path}",
@@ -184,7 +184,7 @@ def write_file_impl(
     mode: str = "overwrite",
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> str:
-    p = ws.resolve(path)
+    p = ws.resolve_write(path)
     if p.name in FORBIDDEN_READ_BASENAMES:
         return json.dumps({"error": f"不允许使用 write_file 修改受限文件: {path}"}, ensure_ascii=False)
     old_scripts_dir = ws.scripts_dir / "old_session_scripts"
@@ -227,7 +227,7 @@ def replace_text_impl(
     new_text: str,
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> str:
-    p = ws.resolve(path)
+    p = ws.resolve_write(path)
     if p.name in FORBIDDEN_READ_BASENAMES:
         return json.dumps({"error": f"不允许使用 replace_text 修改受限文件: {path}"}, ensure_ascii=False)
     old_scripts_dir = ws.scripts_dir / "old_session_scripts"
@@ -288,8 +288,8 @@ def copy_file_impl(
 ) -> str:
     if Path(destination_path).name in FORBIDDEN_READ_BASENAMES:
         return json.dumps({"error": f"不允许将文件复制到受限文件名: {destination_path}"}, ensure_ascii=False)
-    src = ws.resolve(source_path)
-    dst = ws.resolve(destination_path)
+    src = ws.resolve_read(source_path)
+    dst = ws.resolve_write(destination_path)
     old_scripts_dir = ws.scripts_dir / "old_session_scripts"
     try:
         if old_scripts_dir.resolve() in dst.resolve().parents or dst.resolve() == old_scripts_dir.resolve():
@@ -326,8 +326,8 @@ def list_files_impl(
     subdir: str = "",
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> list[dict]:
-    target = ws.resolve(subdir) if subdir else ws.dir.resolve()
-    ws_dir_abs = ws.dir.resolve()
+    target = ws.resolve_read(subdir) if subdir else ws.read_root.resolve()
+    ws_dir_abs = ws.read_root.resolve()
     files = []
     for p in sorted(target.rglob("*")):
         if not p.is_file():

@@ -26,7 +26,15 @@ ARTIFACTS_ROOT = Path("storage/artifacts")
 
 class Workspace:
 
-    def __init__(self, label: str = "", report_id: Optional[str] = None, base_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        label: str = "",
+        report_id: Optional[str] = None,
+        base_dir: Optional[Path] = None,
+        read_root: Optional[Path] = None,
+        write_root: Optional[Path] = None,
+        script_root: Optional[Path] = None,
+    ):
         self.label = label
         if base_dir:
             self._dir = Path(base_dir)
@@ -34,19 +42,38 @@ class Workspace:
         else:
             self.report_id = report_id or f"{label}_{_short_uuid()}"
             self._dir = Path(ARTIFACTS_ROOT) / self.report_id
-        self._input_dir = self._dir / "input"
-        self._output_dir = self._dir / "output"
-        self._context_dir = self._dir / "context"
-        self._scripts_dir = self._dir / "scripts"
-        self._tables_dir = self._dir / "tables"
-        for d in [self._input_dir, self._output_dir, self._context_dir,
-                  self._scripts_dir, self._tables_dir]:
-            d.mkdir(parents=True, exist_ok=True)
-        self._manifest = Manifest(report_id=self.report_id, workspace_dir=str(self._dir))
+        self._read_root = Path(read_root) if read_root else self._dir
+        self._write_root = Path(write_root) if write_root else self._dir
+        self._input_dir = self._write_root / "input"
+        self._output_dir = self._write_root / "output"
+        self._context_dir = self._write_root / "context"
+        self._scripts_dir = self._write_root / "scripts"
+        self._tables_dir = self._write_root / "tables"
+        self._script_root = Path(script_root) if script_root else self._scripts_dir
+
+        for d in [
+            self._dir,
+            self._read_root,
+            self._write_root,
+            self._input_dir,
+            self._output_dir,
+            self._context_dir,
+            self._scripts_dir,
+            self._tables_dir,
+            self._script_root,
+        ]:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+
+        self._manifest = Manifest(report_id=self.report_id, workspace_dir=str(self._write_root))
         self._copy_old_session_scripts()
 
     def _copy_old_session_scripts(self) -> None:
         try:
+            if self._script_root.resolve() != self._scripts_dir.resolve():
+                return
             import shutil
             # self._dir is storage/accounts/{account_id}/runs/{task_type}/{run_id}/workspace
             run_dir = self._dir.parent
@@ -105,8 +132,20 @@ class Workspace:
         return self._tables_dir
 
     @property
+    def read_root(self) -> Path:
+        return self._read_root
+
+    @property
+    def write_root(self) -> Path:
+        return self._write_root
+
+    @property
+    def script_root(self) -> Path:
+        return self._script_root
+
+    @property
     def duckdb_path(self) -> str:
-        return str(self._dir / "analysis.duckdb")
+        return str(self._write_root / "analysis.duckdb")
 
     # ---- 输入输出 ----
 
@@ -172,12 +211,24 @@ class Workspace:
         return p
 
     def resolve(self, rel: str) -> Path:
-        resolved = (self._dir / rel).resolve()
+        return self.resolve_read(rel)
+
+    def _resolve_from(self, root: Path, rel: str) -> Path:
+        resolved = (root / rel).resolve()
         try:
-            resolved.relative_to(self._dir.resolve())
+            resolved.relative_to(root.resolve())
         except ValueError:
             raise ValueError(f"路径越界: {rel}")
         return resolved
+
+    def resolve_read(self, rel: str) -> Path:
+        return self._resolve_from(self._read_root, rel)
+
+    def resolve_write(self, rel: str) -> Path:
+        return self._resolve_from(self._write_root, rel)
+
+    def resolve_script(self, rel: str) -> Path:
+        return self._resolve_from(self._script_root, rel)
 
     def list_inputs(self) -> list[str]:
         return [p.name for p in self._input_dir.iterdir() if p.is_file()]
@@ -232,15 +283,16 @@ class Workspace:
     # ---- 文本文件 ----
 
     def write_file(self, filename: str, content: str) -> Path:
-        p = self._dir / filename
+        p = self.resolve_write(filename)
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return p
 
     def read_file(self, filename: str) -> str:
-        return (self._dir / filename).read_text(encoding="utf-8")
+        return self.resolve_read(filename).read_text(encoding="utf-8")
 
     def list_files(self) -> list[str]:
-        return [p.name for p in self._dir.iterdir() if p.is_file()]
+        return [p.name for p in self._read_root.iterdir() if p.is_file()]
 
     # ---- manifest ----
 

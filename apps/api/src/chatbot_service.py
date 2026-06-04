@@ -2,14 +2,19 @@ import json
 import logging
 import sys
 import time
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Callable, Optional
 
-import httpx
+from openai import OpenAI
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+from packages.agents.core.agent_loop import AgentLoop
+from packages.agents.core.workspace import Workspace
+from packages.agents.chatbot.prompt_builder import build_system_content as build_chatbot_system_content
 
 logger = logging.getLogger("app.chatbot_service")
 if not logger.handlers:
@@ -22,6 +27,7 @@ logger.propagate = False
 
 CHATBOT_DIRNAME = "chatbot"
 CHATBOT_HISTORY_FILENAME = "chat.jsonl"
+CHATBOT_WORKSPACE_DIRNAME = "workspace"
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 MODEL_MESSAGE_KEYS = {
     "role",
@@ -152,52 +158,54 @@ class ChatbotHistoryStore:
 history_store = ChatbotHistoryStore()
 
 
-def _build_model_messages(history: list[dict], content: str) -> list[dict]:
-    messages = [_normalize_message_for_model(item) for item in history]
-    messages.append({"role": "user", "content": content})
-    return messages
+def _chatbot_root(account_dir: Path) -> Path:
+    return account_dir / CHATBOT_DIRNAME
 
 
-async def _stream_chat_completion(base_url: str, api_key: str, payload: dict):
-    url = base_url.rstrip("/") + "/chat/completions"
-    buffer = ""
+def _build_chatbot_workspace(account_dir: Path) -> Workspace:
+    root = _chatbot_root(account_dir)
+    workspace_dir = root / CHATBOT_WORKSPACE_DIRNAME
+    return Workspace(
+        base_dir=root,
+        read_root=root,
+        write_root=workspace_dir,
+        script_root=workspace_dir,
+    )
 
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                json=payload,
-            ) as response:
-                if response.status_code != 200:
-                    error_bytes = await response.aread()
-                    message = error_bytes.decode("utf-8", errors="ignore")[:500]
-                    raise ChatbotStreamError(f"AI 对话调用失败: {message}")
 
-                async for chunk in response.aiter_text():
-                    buffer += chunk
-                    lines = buffer.split("\n")
-                    buffer = lines.pop()
-                    for line in lines:
-                        raw = line.strip()
-                        if not raw.startswith("data:"):
-                            continue
-                        data_str = raw[5:].strip()
-                        if not data_str or data_str == "[DONE]":
-                            continue
-                        try:
-                            data_obj = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue
-                        yield data_obj
-    except ChatbotStreamError:
-        raise
-    except Exception as exc:
-        raise ChatbotStreamError(f"对话流转发失败: {str(exc)}")
+def _build_initial_messages(history: list[dict], content: str) -> tuple[list[dict], list[dict]]:
+    initial_messages: list[dict] = []
+    prefix_to_persist: list[dict] = []
+
+    has_system = any(str(item.get("role", "")).strip().lower() == "system" for item in history)
+    if not has_system:
+        system_message = {"role": "system", "content": build_chatbot_system_content()}
+        initial_messages.append(system_message)
+        prefix_to_persist.append(system_message)
+
+    initial_messages.extend(_normalize_message_for_model(item) for item in history)
+
+    user_message = {"role": "user", "content": content, "datetime": _now_iso()}
+    initial_messages.append(_normalize_message_for_model(user_message))
+    prefix_to_persist.append(user_message)
+    return initial_messages, prefix_to_persist
+
+
+def _extract_final_text(result: dict) -> str:
+    full_report = str(result.get("full_report") or "").strip()
+    if full_report:
+        return full_report
+    compact = {k: v for k, v in result.items() if k != "_token_usage"}
+    return json.dumps(compact, ensure_ascii=False)
+
+
+def _history_delta(initial_messages: list[dict], final_messages: list[dict]) -> list[dict]:
+    if len(final_messages) <= len(initial_messages):
+        return []
+    persisted: list[dict] = []
+    for message in final_messages[len(initial_messages):]:
+        persisted.append(_clone_message_fields(message, include_datetime=True))
+    return persisted
 
 
 def register_chatbot_routes(
@@ -240,22 +248,16 @@ def register_chatbot_routes(
             raise HTTPException(status_code=500, detail="LLM 配置不完整")
 
         history = history_store.load_messages(session.account_dir)
-        user_message = {"role": "user", "content": content, "datetime": _now_iso()}
-        history_store.append_messages(session.account_dir, [user_message])
-
-        upstream_messages = _build_model_messages(history, content)
-        upstream_payload = {
-            "model": model,
-            "messages": upstream_messages,
-            "stream": True,
-        }
+        initial_messages, prefix_to_persist = _build_initial_messages(history, content)
+        history_store.append_messages(session.account_dir, prefix_to_persist)
+        ws = _build_chatbot_workspace(session.account_dir)
 
         logger.info(
             "[chatbot] stage=web_to_server_received request_id=%s remote=%s model=%s messages=%d",
             request_id,
             getattr(request.client, "host", "-"),
             model,
-            len(upstream_messages),
+            len(initial_messages),
         )
         logger.info(
             "[chatbot] request_id=%s history_chars=%d content_preview=%s",
@@ -265,81 +267,53 @@ def register_chatbot_routes(
         )
 
         async def _logged_stream():
-            content_parts: list[str] = []
-            reasoning_parts: list[str] = []
-            tool_call_buffers: dict[int, dict] = {}
-            finish_reason = "stop"
-            usage = None
-
             try:
                 logger.info(
-                    "[chatbot] stage=server_to_llm_prepare request_id=%s model=%s upstream_messages=%d base_url=%s",
+                    "[chatbot] stage=server_to_llm_prepare request_id=%s model=%s upstream_messages=%d base_url=%s workspace=%s",
                     request_id,
                     model,
-                    len(upstream_messages),
+                    len(initial_messages),
                     base_url,
+                    ws.dir,
                 )
-                async for data_obj in _stream_chat_completion(base_url, api_key, upstream_payload):
-                    choices = data_obj.get("choices", []) if isinstance(data_obj, dict) else []
-                    if not choices:
-                        continue
-                    choice = choices[0] or {}
-                    delta = choice.get("delta", {}) or {}
-                    if choice.get("finish_reason"):
-                        finish_reason = choice.get("finish_reason")
-
-                    reasoning_content = delta.get("reasoning_content")
-                    if reasoning_content:
-                        reasoning_parts.append(reasoning_content)
-
-                    content_delta = delta.get("content")
-                    if content_delta:
-                        content_parts.append(content_delta)
-                        yield content_delta.encode("utf-8")
-
-                    if delta.get("tool_calls"):
-                        for tc_delta in delta.get("tool_calls"):
-                            idx = tc_delta.get("index", 0)
-                            if idx not in tool_call_buffers:
-                                tool_call_buffers[idx] = {
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                }
-                            if tc_delta.get("id"):
-                                tool_call_buffers[idx]["id"] = tc_delta["id"]
-                            fn = tc_delta.get("function") or {}
-                            if fn.get("name"):
-                                tool_call_buffers[idx]["function"]["name"] = fn["name"]
-                            if fn.get("arguments"):
-                                tool_call_buffers[idx]["function"]["arguments"] += fn["arguments"]
-
-                    if data_obj.get("usage"):
-                        usage = data_obj["usage"]
-
-                assistant_content = "".join(content_parts)
-                assistant_reasoning = "".join(reasoning_parts)
-                tool_calls = [tool_call_buffers[i] for i in sorted(tool_call_buffers.keys())] if tool_call_buffers else None
-                assistant_record: dict = {
-                    "role": "assistant",
-                    "content": assistant_content if assistant_content or not tool_calls else None,
-                    "datetime": _now_iso(),
+                llm_preset = {
+                    "model": model,
+                    "baseUrl": base_url,
+                    "apiKey": api_key,
                 }
-                if assistant_reasoning or tool_calls:
-                    assistant_record["reasoning_content"] = assistant_reasoning
-                if tool_calls:
-                    assistant_record["tool_calls"] = tool_calls
-                if assistant_record.get("content") is None and not assistant_record.get("tool_calls"):
-                    assistant_record["content"] = ""
-
-                history_store.append_messages(session.account_dir, [assistant_record])
+                client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+                loop = AgentLoop(
+                    client=client,
+                    ws=ws,
+                    llm_preset=llm_preset,
+                    emit_log=lambda nid, msg: logger.info(
+                        "[chatbot-agent] request_id=%s node=%s message=%s",
+                        request_id,
+                        nid,
+                        json.dumps(msg, ensure_ascii=False) if isinstance(msg, dict) else str(msg),
+                    ),
+                    emit_status=lambda nid, st: logger.info(
+                        "[chatbot-agent] request_id=%s node=%s status=%s",
+                        request_id,
+                        nid,
+                        st,
+                    ),
+                    task_type="chatbot",
+                    initial_messages=initial_messages,
+                )
+                result = await asyncio.to_thread(loop.run)
+                delta_messages = _history_delta(initial_messages, loop.messages)
+                history_store.append_messages(session.account_dir, delta_messages)
+                final_text = _extract_final_text(result)
+                if final_text:
+                    yield final_text.encode("utf-8")
                 elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
                 logger.info(
-                    "[chatbot] stage=server_to_web_done request_id=%s elapsed_ms=%s output_chars=%d finish_reason=%s",
+                    "[chatbot] stage=server_to_web_done request_id=%s elapsed_ms=%s output_chars=%d new_messages=%d",
                     request_id,
                     elapsed_ms,
-                    len(assistant_content),
-                    finish_reason,
+                    len(final_text),
+                    len(delta_messages),
                 )
                 logger.info(
                     json.dumps(
@@ -349,12 +323,11 @@ def register_chatbot_routes(
                             "model": model,
                             "input_messages": [
                                 {"role": item.get("role"), "chars": len(str(item.get("content", "") or ""))}
-                                for item in upstream_messages
+                                for item in initial_messages
                             ],
-                            "output_chars": len(assistant_content),
-                            "reasoning_chars": len(assistant_reasoning),
-                            "tool_calls": len(tool_calls or []),
-                            "usage": usage,
+                            "output_chars": len(final_text),
+                            "new_messages": len(delta_messages),
+                            "usage": result.get("_token_usage", {}),
                             "elapsed_ms": elapsed_ms,
                         },
                         ensure_ascii=False,
@@ -374,6 +347,11 @@ def register_chatbot_routes(
                     request_id,
                     _preview_text(error_text),
                 )
+                history_store.append_messages(session.account_dir, [{
+                    "role": "assistant",
+                    "content": error_text,
+                    "datetime": _now_iso(),
+                }])
                 yield error_text.encode("utf-8")
             except Exception as exc:
                 elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -389,6 +367,11 @@ def register_chatbot_routes(
                     request_id,
                     _preview_text(error_text),
                 )
+                history_store.append_messages(session.account_dir, [{
+                    "role": "assistant",
+                    "content": error_text,
+                    "datetime": _now_iso(),
+                }])
                 yield error_text.encode("utf-8")
 
         return StreamingResponse(_logged_stream(), media_type="text/plain; charset=utf-8")

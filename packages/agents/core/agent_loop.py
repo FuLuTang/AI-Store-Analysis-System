@@ -15,6 +15,7 @@ import time
 from openai import OpenAI
 
 from .workspace import Workspace
+from ..chatbot.prompt_builder import build_system_content as build_chatbot_system_content
 from ..diagnosis.prompt_builder import build_system_content, build_user_content
 from .tool_converter import available_tool_call_for_agent, build_tool_map, get_step_milestone, get_plan_progress_info
 
@@ -42,6 +43,7 @@ class AgentLoop:
         product_name: str = "",
         candidate_count: int = 2,
         bootstrap_messages: list[dict] | None = None,
+        initial_messages: list[dict] | None = None,
     ):
         self.ws = ws
         self.analysis_params = analysis_params
@@ -82,6 +84,7 @@ class AgentLoop:
         self._finish_success = True
         self._finish_text = ""
         self.bootstrap_messages = bootstrap_messages or []
+        self.initial_messages = list(initial_messages or [])
 
         def on_finish(success: bool, text: str):
             self._finished = True
@@ -101,49 +104,90 @@ class AgentLoop:
     def run(self) -> dict:
         """主循环：构建初始 messages → 发请求 → 处理 tool_calls → 循环直到收到最终回答。"""
         try:
-            if self.task_type == "price_recommendation":
+            if self.initial_messages:
+                self.messages = list(self.initial_messages)
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
+            elif self.task_type == "price_recommendation":
                 from ..price_recommendation.prompt_builder import (
                     build_system_content as build_price_sys,
                     build_user_content as build_price_user,
                 )
                 sys_content = build_price_sys()
                 user_content = build_price_user(self.product_name, self.candidate_count)
+                self.messages = [
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_content},
+                ]
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
+                else:
+                    # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
+                    init_files_json = self.tool_map["list_files"](subdir="")
+                    self.messages.extend([
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_init_list_files",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_files",
+                                        "arguments": '{"subdir": ""}'
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call_init_list_files",
+                            "name": "list_files",
+                            "content": init_files_json
+                        },
+                    ])
+            elif self.task_type == "chatbot":
+                self.messages = [
+                    {"role": "system", "content": build_chatbot_system_content()},
+                ]
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
             else:
                 sys_content = build_system_content(self.analysis_params)
                 user_content = build_user_content(self.ws, self.analysis_params)
-
-            self.messages = [
-                {"role": "system", "content": sys_content},
-                {"role": "user", "content": user_content},
-            ]
-            if self.bootstrap_messages:
-                self.messages.extend(self.bootstrap_messages)
-            else:
-                # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
-                init_files_json = self.tool_map["list_files"](subdir="")
-                self.messages.extend([
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "reasoning_content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call_init_list_files",
-                                "type": "function",
-                                "function": {
-                                    "name": "list_files",
-                                    "arguments": '{"subdir": ""}'
+                self.messages = [
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_content},
+                ]
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
+                else:
+                    # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
+                    init_files_json = self.tool_map["list_files"](subdir="")
+                    self.messages.extend([
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_init_list_files",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_files",
+                                        "arguments": '{"subdir": ""}'
+                                    }
                                 }
-                            }
-                        ]
-                    },
-                    {
-                        "role": "tool",
-                        "tool_call_id": "call_init_list_files",
-                        "name": "list_files",
-                        "content": init_files_json
-                    },
-                ])
+                            ]
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call_init_list_files",
+                            "name": "list_files",
+                            "content": init_files_json
+                        },
+                    ])
 
             self._emit_status("custom_agent", "active")
             self._emit_log("custom_agent", {"level": "info", "message": f"🚀 启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个"})
@@ -241,6 +285,7 @@ class AgentLoop:
                             self.messages.append({
                                 "role": "tool",
                                 "tool_call_id": tc["id"],
+                                "name": tc["name"],
                                 "content": result,
                             })
 

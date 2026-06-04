@@ -22,7 +22,7 @@ def search_files_impl(ws: Workspace, pattern: str, path: str = None, regex: bool
     max_matches = max(1, min(int(max_matches or 50), 200))
     
     if path:
-        target_path = ws.resolve(path)
+        target_path = ws.resolve_read(path)
         if not target_path.exists():
             return json.dumps({"error": f"路径不存在: {path}"}, ensure_ascii=False)
         if not target_path.is_file():
@@ -30,10 +30,10 @@ def search_files_impl(ws: Workspace, pattern: str, path: str = None, regex: bool
         files = [target_path]
     else:
         files = []
-        for p in sorted(ws.dir.rglob("*")):
+        for p in sorted(ws.read_root.rglob("*")):
             if not p.is_file():
                 continue
-            rel_parts = p.relative_to(ws.dir).parts
+            rel_parts = p.relative_to(ws.read_root).parts
             # 排除隐藏文件/目录（如 .git, .gemini 等）
             if any(part.startswith(".") for part in rel_parts):
                 continue
@@ -62,7 +62,7 @@ def search_files_impl(ws: Workspace, pattern: str, path: str = None, regex: bool
         if _is_binary(p):
             continue
 
-        rel_path = str(p.relative_to(ws.dir))
+        rel_path = str(p.relative_to(ws.read_root))
         file_matches = []
 
         try:

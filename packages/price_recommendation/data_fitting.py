@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .chart_builder import build_rendered_final_charts
+
 logger = logging.getLogger("price_recommendation")
 
 
@@ -18,12 +20,13 @@ def run_data_fitting(
     candidate_count: int,
     workspace_dir: Path | None = None,
 ) -> dict:
+    # 流程A - 点群A - 无优惠点的坐标
     normalized_points = _merge_normalized_points(normalized_payload)
     logger.info("Data fitting: product=%s, candidate_count=%d, normalized_points=%d",
                 product_name, candidate_count, len(normalized_points))
     purchase_price = _infer_purchase_price(normalized_payload, evidence)
     time_granularity = _infer_time_granularity(normalized_payload, evidence)
-    rendered_final_charts = _build_rendered_final_charts(normalized_points, purchase_price)
+    rendered_final_charts = build_rendered_final_charts(normalized_points, purchase_price)
     primary_metric = "profit" if purchase_price is not None else "sales_revenue"
     scored_points = _score_points(normalized_points, purchase_price)
     recommendations = _build_recommendations(
@@ -82,6 +85,7 @@ def run_data_fitting(
 
 
 def _normalize_payload_format(payload: dict) -> dict:
+    # 流程A - 点群A - 无优惠点的坐标
     if not isinstance(payload, dict):
         return {"points": []}
 
@@ -110,18 +114,25 @@ def _normalize_payload_format(payload: dict) -> dict:
                         price_val = _to_number(item[0])
                         qty_val = _to_number(item[1])
                         if price_val is not None and qty_val is not None:
-                            price_groups[round(price_val, 2)].append(qty_val)
+                            price_groups[round(price_val, 2)].append((qty_val, "false"))
+                    elif isinstance(item, dict):
+                        price_val = _to_number(item.get("price"))
+                        qty_val = _to_number(item.get("qty") or item.get("quantity") or item.get("normalizedQty"))
+                        promo_val = item.get("promotion", "false")
+                        if price_val is not None and qty_val is not None:
+                            price_groups[round(price_val, 2)].append((qty_val, promo_val))
 
                 for price, qties in price_groups.items():
                     if qties:
-                        final_qty = qties[-1]  # Choose normalized quantity
+                        final_qty, final_promo = qties[-1]  # Choose normalized quantity
                         flattened_points.append({
                             "price": price,
                             "normalizedQty": final_qty,
                             "rawQty": final_qty,
                             "sampleCount": 1,
                             "avgFactor": 1.0,
-                            "sourceShops": [store]
+                            "sourceShops": [store],
+                            "promotion": final_promo
                         })
         new_payload = dict(payload)
         new_payload["points"] = flattened_points
@@ -131,10 +142,20 @@ def _normalize_payload_format(payload: dict) -> dict:
 
 
 def _merge_normalized_points(normalized_payload: dict) -> list[dict[str, Any]]:
+    # 流程A - 点群A - 无优惠点的坐标
     normalized_payload = _normalize_payload_format(normalized_payload)
     raw_points = normalized_payload.get("points") if isinstance(normalized_payload, dict) else normalized_payload
     if not isinstance(raw_points, list):
         return []
+
+    # 只取无优惠的点进行计算
+    filtered_points = []
+    for point in raw_points:
+        promo = point.get("promotion")
+        is_promo = str(promo).lower() == "true" or promo is True
+        if not is_promo:
+            filtered_points.append(point)
+    raw_points = filtered_points
 
     grouped: dict[float, dict[str, Any]] = {}
     for point in raw_points:
@@ -209,48 +230,8 @@ def _infer_time_granularity(normalized_payload: dict, evidence: dict[str, Any]) 
     return "未指定"
 
 
-def _build_rendered_final_charts(points: list[dict[str, Any]], purchase_price: float | None) -> list[dict[str, Any]]:
-    if not points:
-        return []
-
-    dimensions = ["售价", "销量", "销售额"]
-    if purchase_price is not None:
-        dimensions.append("利润")
-
-    grouped: dict[float, dict[str, float]] = {}
-    for point in points:
-        price = _to_number(point.get("price"))
-        qty = _to_number(point.get("normalizedQty"))
-        if price is None or qty is None:
-            continue
-        bucket_price = round(price, 2)
-        bucket = grouped.setdefault(bucket_price, {"qty": 0.0, "revenue": 0.0, "profit": 0.0})
-        bucket["qty"] += qty
-        bucket["revenue"] += price * qty
-        if purchase_price is not None:
-            bucket["profit"] += (price - purchase_price) * qty
-
-    source = []
-    for price in sorted(grouped):
-        bucket = grouped[price]
-        row = [round(price, 2), round(bucket["qty"], 4), round(bucket["revenue"], 4)]
-        if purchase_price is not None:
-            row.append(round(bucket["profit"], 4))
-        source.append(row)
-
-    return [
-        {
-            "name": "售价综合分析",
-            "xLabel": "售价",
-            "yAxisLeft": {"name": "销量", "unit": "件"},
-            "yAxisRight": {"name": "金额", "unit": "元"},
-            "dimensions": dimensions,
-            "source": source,
-        }
-    ]
-
-
 def _score_points(points: list[dict[str, Any]], purchase_price: float | None) -> list[dict[str, Any]]:
+    # 流程A - 点群A - 无优惠点的坐标
     scored: list[dict[str, Any]] = []
     for point in points:
         price = _to_number(point.get("price"))
@@ -277,6 +258,7 @@ def _build_recommendations(
     candidate_count: int,
     purchase_price: float | None,
 ) -> list[dict[str, Any]]:
+    # 流程A - 点群A - 无优惠点的坐标
     if not scored_points:
         return []
     metric_key = "profit" if purchase_price is not None else "salesRevenue"
@@ -308,6 +290,7 @@ def _build_recommendations(
 
 
 def _build_price_range(points: list[dict[str, Any]]) -> dict[str, Any]:
+    # 流程A - 点群A - 无优惠点的坐标
     if not points:
         return {"min": 0, "max": 0, "unit": "元"}
     prices = [float(point["price"]) for point in points if _to_number(point.get("price")) is not None]

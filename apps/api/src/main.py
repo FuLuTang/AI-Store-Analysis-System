@@ -40,7 +40,7 @@ from packages.price_recommendation.service import (
     run_price_precheck,
     run_price_workflow,
 )
-from apps.api.src.chat_bridge import register_chat_routes
+from apps.api.src.chatbot_service import register_chatbot_routes
 
 load_dotenv()
 
@@ -95,6 +95,10 @@ def normalize_reasoning_effort(value: Optional[str]) -> str:
     return effort if effort in REASONING_EFFORT_OPTIONS else DEFAULT_REASONING_EFFORT
 
 
+def normalize_cost_tier(value: Optional[str]) -> str:
+    return normalize_reasoning_effort(value)
+
+
 def _default_llm_presets() -> dict:
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
@@ -111,7 +115,12 @@ def _default_llm_presets() -> dict:
     return {
         "low": {"call": _sub_config("low"), "fastcall": _sub_config("low")},
         "medium": {"call": _sub_config("medium"), "fastcall": _sub_config("medium")},
-        "high": {"call": _sub_config("high"), "fastcall": _sub_config("high")}
+        "high": {"call": _sub_config("high"), "fastcall": _sub_config("high")},
+        "chatbot": {
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "model": model,
+        },
     }
 
 
@@ -187,6 +196,22 @@ def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
         }
 
 
+def _sanitize_chatbot_preset(raw: Optional[dict], fallback: dict) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    base_url = data.get("baseUrl", fallback.get("baseUrl", ""))
+    api_key = data.get("apiKeyEnc")
+    if isinstance(api_key, str):
+        api_key = _decrypt_text(api_key)
+    else:
+        api_key = data.get("apiKey", fallback.get("apiKey", ""))
+    model = data.get("model", fallback.get("model", ""))
+    return {
+        "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback.get("baseUrl", "")),
+        "apiKey": api_key.strip() if isinstance(api_key, str) else str(fallback.get("apiKey", "")),
+        "model": model.strip() if isinstance(model, str) else str(fallback.get("model", "")),
+    }
+
+
 def _load_llm_presets() -> dict:
     defaults = _default_llm_presets()
     if LLM_PRESETS_FILE.exists():
@@ -196,6 +221,7 @@ def _load_llm_presets() -> dict:
             if isinstance(source, dict):
                 for effort in REASONING_EFFORT_OPTIONS:
                     defaults[effort] = _sanitize_preset_item(source.get(effort), defaults[effort])
+                defaults["chatbot"] = _sanitize_chatbot_preset(source.get("chatbot"), defaults["chatbot"])
         except Exception:
             pass
     return defaults
@@ -225,6 +251,9 @@ def set_global_api_key(raw_key: str):
                 preset["call"]["apiKey"] = key_value
             if "fastcall" in preset:
                 preset["fastcall"]["apiKey"] = key_value
+        chatbot_preset = GLOBAL_LLM_PRESETS.get("chatbot")
+        if isinstance(chatbot_preset, dict):
+            chatbot_preset["apiKey"] = key_value
         save_llm_presets_locked()
 
 
@@ -242,6 +271,16 @@ def get_llm_preset(reasoning_effort: Optional[str]) -> dict:
     return preset
 
 
+def get_chatbot_preset() -> dict:
+    with LLM_PRESETS_LOCK:
+        preset = GLOBAL_LLM_PRESETS.get("chatbot", {}).copy()
+    return {
+        "baseUrl": preset.get("baseUrl", ""),
+        "apiKey": preset.get("apiKey", ""),
+        "model": preset.get("model", ""),
+    }
+
+
 def get_all_llm_presets() -> dict:
     with LLM_PRESETS_LOCK:
         return {k: v.copy() for k, v in GLOBAL_LLM_PRESETS.items()}
@@ -251,22 +290,29 @@ def save_llm_presets_locked():
     LLM_PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
     safe_presets = {}
     for effort, preset in GLOBAL_LLM_PRESETS.items():
-        call_config = preset.get("call", {})
-        fast_config = preset.get("fastcall", {})
-        safe_presets[effort] = {
-            "call": {
-                "baseUrl": call_config.get("baseUrl", ""),
-                "apiKeyEnc": _encrypt_text(call_config.get("apiKey", "")),
-                "model": call_config.get("model", ""),
-                "reasoningEffort": call_config.get("reasoningEffort", effort)
-            },
-            "fastcall": {
-                "baseUrl": fast_config.get("baseUrl", ""),
-                "apiKeyEnc": _encrypt_text(fast_config.get("apiKey", "")),
-                "model": fast_config.get("model", ""),
-                "reasoningEffort": fast_config.get("reasoningEffort", effort)
+        if effort in REASONING_EFFORT_OPTIONS:
+            call_config = preset.get("call", {})
+            fast_config = preset.get("fastcall", {})
+            safe_presets[effort] = {
+                "call": {
+                    "baseUrl": call_config.get("baseUrl", ""),
+                    "apiKeyEnc": _encrypt_text(call_config.get("apiKey", "")),
+                    "model": call_config.get("model", ""),
+                    "reasoningEffort": call_config.get("reasoningEffort", effort)
+                },
+                "fastcall": {
+                    "baseUrl": fast_config.get("baseUrl", ""),
+                    "apiKeyEnc": _encrypt_text(fast_config.get("apiKey", "")),
+                    "model": fast_config.get("model", ""),
+                    "reasoningEffort": fast_config.get("reasoningEffort", effort)
+                }
             }
-        }
+        elif effort == "chatbot":
+            safe_presets["chatbot"] = {
+                "baseUrl": preset.get("baseUrl", ""),
+                "apiKeyEnc": _encrypt_text(preset.get("apiKey", "")),
+                "model": preset.get("model", ""),
+            }
     LLM_PRESETS_FILE.write_text(
         json.dumps({"presets": safe_presets}, ensure_ascii=False, indent=2),
         encoding="utf-8"
@@ -281,6 +327,8 @@ def update_llm_presets(raw_presets: dict):
         for effort in REASONING_EFFORT_OPTIONS:
             if effort in raw_presets:
                 next_presets[effort] = _sanitize_preset_item(raw_presets.get(effort), next_presets[effort])
+        if "chatbot" in raw_presets:
+            next_presets["chatbot"] = _sanitize_chatbot_preset(raw_presets.get("chatbot"), next_presets.get("chatbot", {}))
         GLOBAL_LLM_PRESETS.clear()
         GLOBAL_LLM_PRESETS.update(next_presets)
         save_llm_presets_locked()
@@ -1118,6 +1166,7 @@ async def price_recommendation_precheck(
     productName: str = Form(...),
     x_fzt_key: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
 ):
     resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
     product_name = (productName or "").strip()
@@ -1133,6 +1182,7 @@ async def start_price_recommendation(
     productName: str = Form(...),
     x_fzt_key: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
     candidateCount: Optional[int] = Form(None),
 ):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
@@ -1145,7 +1195,7 @@ async def start_price_recommendation(
 
     decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
 
-    session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort or "high")
+    session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort or "high")
     candidate_count = _normalize_candidate_count(candidateCount)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
@@ -1275,10 +1325,11 @@ def stop_price_recommendation(x_fzt_key: Optional[str] = Header(default=None)):
 async def analyze(
     files: List[UploadFile] = File(...),
     x_fzt_key: Optional[str] = Header(default=None),
-    reasoningEffort: Optional[str] = Form(None)
+    reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
 ):
     session = resolve_session(x_fzt_key)
-    session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort)
+    session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
             raise HTTPException(status_code=400, detail="任务正在运行中")
@@ -1835,11 +1886,10 @@ def get_public_report_asset(
     return FileResponse(asset_path, media_type=media_type)
 
 
-register_chat_routes(
+register_chatbot_routes(
     app,
     resolve_session=resolve_session,
-    get_llm_preset=get_llm_preset,
-    normalize_reasoning_effort=normalize_reasoning_effort,
+    get_chatbot_preset=get_chatbot_preset,
 )
 
 

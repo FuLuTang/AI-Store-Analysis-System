@@ -15,6 +15,13 @@ TOOL_BLACKLIST_BY_TASK_TYPE: dict[str, set[str]] = {
         "read_context",
         "read_plan",
     },
+    # Chatbot 禁用任务上下文/计划流工具，文件读写类保持可用。
+    "chatbot": {
+        "read_context",
+        "read_plan",
+        "check_plan",
+        "finish_task",
+    },
 }
 
 

@@ -30,10 +30,10 @@
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
-                <select id="reasoningEffortSelect" class="nav-select">
-                    <option value="medium">medium（默认）</option>
-                    <option value="low">low（快速）</option>
-                    <option value="high">high（深度）</option>
+                <select id="costTierSelect" class="nav-select">
+                    <option value="medium">平衡优先</option>
+                    <option value="low">省钱优先</option>
+                    <option value="high">效果优先</option>
                 </select>
                 <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
@@ -234,20 +234,20 @@
     <section id="chatPanel" class="chat-panel" aria-hidden="true">
         <div class="chat-panel-header">
             <div>
-                <h3><i class="fas fa-comments"></i> 对话追问</h3>
-                <div id="chatRunBadge" class="chat-run-badge">未绑定分析批次</div>
+                <h3><i class="fas fa-comments"></i> 对话助手</h3>
+                <div class="chat-run-badge">账号级聊天记录</div>
             </div>
             <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
                 <i class="fas fa-times"></i>
             </button>
         </div>
         <div id="chatMessages" class="chat-messages">
-            <div class="chat-empty-state">请先完成一次分析，然后在这里继续追问。</div>
+            <div class="chat-empty-state">从这里直接开始聊天。</div>
         </div>
         <div class="chat-composer">
-            <textarea id="chatInput" class="chat-input" placeholder="继续追问这次分析的结论、原因或建议..." rows="3"></textarea>
+            <textarea id="chatInput" class="chat-input" placeholder="输入你想问的问题..." rows="3"></textarea>
             <div class="chat-composer-actions">
-                <span id="chatStatusHint" class="chat-status-hint">基于当前分析结果多轮对话</span>
+                <span id="chatStatusHint" class="chat-status-hint">账号级多轮对话</span>
                 <button id="chatSendBtn" class="btn" type="button">
                     <i class="fas fa-paper-plane"></i> 发送
                 </button>
@@ -315,14 +315,13 @@
         const exampleBtn = document.getElementById('exampleBtn');
         const downloadArea = document.getElementById('downloadArea');
         const downloadBtn = document.getElementById('downloadBtn');
-        const reasoningEffortSelect = document.getElementById('reasoningEffortSelect');
+        const costTierSelect = document.getElementById('costTierSelect');
         const chatFab = document.getElementById('chatFab');
         const chatPanel = document.getElementById('chatPanel');
         const chatCloseBtn = document.getElementById('chatCloseBtn');
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const chatSendBtn = document.getElementById('chatSendBtn');
-        const chatRunBadge = document.getElementById('chatRunBadge');
         const chatStatusHint = document.getElementById('chatStatusHint');
         
         let filesData = [];
@@ -333,7 +332,9 @@
         let sseSource = null;
         let progressClosed = false;
         let chatSending = false;
-        const chatHistories = {};
+        let chatMessagesCache = [];
+        let chatHistoryLoaded = false;
+        let chatHistoryLoadPromise = null;
         
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
@@ -424,17 +425,6 @@
             }
         }
 
-        function getActiveChatRunId() {
-            const queryRunId = new URLSearchParams(window.location.search).get('run_id');
-            return currentRunId || queryRunId || null;
-        }
-
-        function getChatHistory(runId = getActiveChatRunId()) {
-            const key = runId || '__empty__';
-            if (!chatHistories[key]) chatHistories[key] = [];
-            return chatHistories[key];
-        }
-
         function escapeChatHtml(text) {
             return String(text || '')
                 .replace(/&/g, '&amp;')
@@ -448,9 +438,22 @@
             return escapeChatHtml(text).replace(/\n/g, '<br>');
         }
 
-        function syncChatRunContext() {
-            const runId = getActiveChatRunId();
-            chatRunBadge.textContent = runId ? `run: ${runId}` : '未绑定分析批次';
+        function normalizeChatRecord(record) {
+            if (!record || typeof record !== 'object') return null;
+            if (!record.role) return null;
+            return { ...record };
+        }
+
+        function formatChatTimestamp(record) {
+            if (!record || !record.datetime) return '';
+            const dt = new Date(record.datetime);
+            if (Number.isNaN(dt.getTime())) return record.datetime;
+            return dt.toLocaleString('zh-CN', { hour12: false });
+        }
+
+        function setChatMessages(messages) {
+            chatMessagesCache = (messages || []).map(normalizeChatRecord).filter(Boolean);
+            chatHistoryLoaded = true;
             renderChatMessages();
         }
 
@@ -459,27 +462,35 @@
             chatPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
             chatFab.setAttribute('aria-expanded', open ? 'true' : 'false');
             if (open) {
-                syncChatRunContext();
+                loadChatHistory().catch((err) => {
+                    console.error('Failed to load chatbot history', err);
+                });
                 setTimeout(() => chatInput.focus(), 50);
             }
         }
 
         function renderChatMessages() {
-            const runId = getActiveChatRunId();
-            if (!runId) {
-                chatMessages.innerHTML = '<div class="chat-empty-state">请先完成一次分析，然后在这里继续追问。</div>';
+            if (!chatHistoryLoaded) {
+                chatMessages.innerHTML = '<div class="chat-empty-state">正在加载聊天记录...</div>';
                 return;
             }
 
-            const history = getChatHistory(runId).filter(msg => msg.role === 'user' || msg.role === 'assistant');
+            const history = chatMessagesCache.filter(msg => {
+                if (msg.role === 'user') return true;
+                if (msg.role !== 'assistant') return false;
+                return String(msg.content || '').trim().length > 0;
+            });
             if (history.length === 0) {
-                chatMessages.innerHTML = '<div class="chat-empty-state">可以继续追问这次分析里的结论、证据、风险或建议。</div>';
+                chatMessages.innerHTML = '<div class="chat-empty-state">从这里直接开始聊天。</div>';
                 return;
             }
 
             chatMessages.innerHTML = history.map(msg => `
                 <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
-                    <div class="chat-message-role">${msg.role === 'user' ? '你' : 'AI'}</div>
+                    <div class="chat-message-role">
+                        ${msg.role === 'user' ? '你' : 'AI'}
+                        ${formatChatTimestamp(msg) ? ` · ${formatChatTimestamp(msg)}` : ''}
+                    </div>
                     <div class="chat-message-bubble">${formatChatContent(msg.content)}</div>
                 </div>
             `).join('');
@@ -489,38 +500,52 @@
         function updateChatComposerState() {
             chatSendBtn.disabled = chatSending;
             chatInput.disabled = chatSending;
-            chatStatusHint.textContent = chatSending ? 'AI 正在回复...' : '基于当前分析结果多轮对话';
+            chatStatusHint.textContent = chatSending ? 'AI 正在回复...' : '账号级多轮对话';
+        }
+
+        async function loadChatHistory() {
+            if (chatHistoryLoadPromise) return chatHistoryLoadPromise;
+            chatHistoryLoadPromise = (async () => {
+                chatHistoryLoaded = false;
+                renderChatMessages();
+                try {
+                    const response = await fetch('/api/chatbot/history', { headers: authHeaders() });
+                    if (!response.ok) {
+                        throw new Error(await response.text() || '历史记录加载失败');
+                    }
+                    const data = await response.json();
+                    setChatMessages(Array.isArray(data.messages) ? data.messages : []);
+                } catch (err) {
+                    chatMessages.innerHTML = `<div class="chat-empty-state">聊天记录加载失败：${escapeChatHtml(err.message)}</div>`;
+                    chatHistoryLoaded = true;
+                } finally {
+                    chatHistoryLoadPromise = null;
+                }
+            })();
+            return chatHistoryLoadPromise;
         }
 
         async function sendChatMessage() {
             const content = chatInput.value.trim();
             if (!content || chatSending) return;
 
-            const runId = getActiveChatRunId();
-            if (!runId) {
-                chatMessages.innerHTML = '<div class="chat-empty-state">当前没有可追问的分析批次。请先完成一次分析。</div>';
-                return;
-            }
-
-            const history = getChatHistory(runId);
-            const requestMessages = history.concat([{ role: 'user', content }]);
-            history.push({ role: 'user', content });
-            const assistantMessage = { role: 'assistant', content: '' };
-            history.push(assistantMessage);
-
             chatInput.value = '';
             chatSending = true;
             updateChatComposerState();
+            await loadChatHistory().catch(() => {});
+
+            const userMessage = { role: 'user', content, datetime: new Date().toISOString() };
+            const assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
+            chatMessagesCache.push(userMessage);
+            chatMessagesCache.push(assistantMessage);
             renderChatMessages();
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch('/api/chatbot', {
                     method: 'POST',
                     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        runId,
-                        reasoningEffort: reasoningEffortSelect.value || 'medium',
-                        messages: requestMessages
+                        content
                     })
                 });
 
@@ -547,6 +572,7 @@
                 if (!assistantMessage.content.trim()) {
                     assistantMessage.content = '当前没有返回可显示的内容。';
                 }
+                await loadChatHistory().catch(() => {});
             } catch (err) {
                 assistantMessage.content = `对话失败：${err.message}`;
             } finally {
@@ -559,7 +585,7 @@
         window.onload = async () => {
             updateThemeIcon();
             await checkStatus();
-            syncChatRunContext();
+            await loadChatHistory();
             updateChatComposerState();
         };
 
@@ -619,7 +645,6 @@
                 const res = await fetch(statusUrl, { headers: authHeaders() });
                 const data = await res.json();
                 currentRunId = data.runId || null;
-                syncChatRunContext();
 
                 if (data.status === 'completed') {
                     downloadArea.style.display = 'block';
@@ -948,7 +973,7 @@
                 });
             } catch (e) { /* 静默失败 */ }
 
-            const reasoningEffort = document.getElementById('reasoningEffortSelect').value || 'medium';
+            const costTier = document.getElementById('costTierSelect').value || 'medium';
 
             startBtn.disabled = true;
             stopBtn.style.display = 'inline-flex';
@@ -964,7 +989,7 @@
             try {
                 const formData = new FormData();
                 filesData.forEach(file => formData.append('files', file));
-                formData.append('reasoningEffort', reasoningEffort);
+                formData.append('costTier', costTier);
 
                 const response = await fetch('/api/analyze', {
                     method: 'POST',
@@ -1265,7 +1290,7 @@
                 paramsData = JSON.parse(JSON.stringify(preset));
             } else {
                 if (preset.reasoning_effort) {
-                    document.getElementById('reasoningEffortSelect').value = preset.reasoning_effort;
+                    document.getElementById('costTierSelect').value = preset.cost_tier || preset.reasoning_effort || 'medium';
                 }
                 paramsData = JSON.parse(JSON.stringify(preset.params || []));
             }

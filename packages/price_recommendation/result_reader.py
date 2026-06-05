@@ -18,7 +18,7 @@ def read_price_result(run_dir: Path | None) -> tuple[dict | None, str | None]:
     full_result = None
     result_path = workspace_dir / "output" / "price_recommendation.json"
     charts_path = workspace_dir / "output" / "rendered_final_charts.json"
-    summary_path = workspace_dir / "summary.md"
+    summary_path = workspace_dir / "output" / "summary.md"
     if result_path.exists():
         result = json.loads(result_path.read_text(encoding="utf-8"))
         logger.info("Read price result from %s", result_path)

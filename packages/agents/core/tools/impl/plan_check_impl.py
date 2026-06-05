@@ -12,7 +12,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 
 def read_plan_impl(ws: Workspace) -> dict | None:
     """读取完整 plan，去掉 check 字段。返回 plan 列表，或 None（plan.json 不存在时）。"""
-    plan_path = ws.resolve("output/plan.json")
+    plan_path = ws.resolve("plan.json")
     if not plan_path.exists():
         return None
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -32,7 +32,7 @@ def check_plan_impl(ws: Workspace, step_index: int, emit_log: Optional[Callable]
     Returns:
         包含 step_index / ok / errors / next_action（可选）等字段的 dict。
     """
-    plan_path = ws.resolve("output/plan.json")
+    plan_path = ws.resolve("plan.json")
     if not plan_path.exists():
         return {"error": "plan.json not found"}
     plan = json.loads(plan_path.read_text(encoding="utf-8"))

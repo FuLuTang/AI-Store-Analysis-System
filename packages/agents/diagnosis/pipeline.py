@@ -61,6 +61,9 @@ class CustomPipeline(AgentPipeline):
             base_url = preset.get("baseUrl", "https://api.deepseek.com")
             client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
+            # ── Bootstrap 注入 ──
+            bootstrap_messages = self._build_bootstrap_messages(ws)
+
             # ── 运行 Agent Loop ──
             loop = AgentLoop(
                 client=client,
@@ -70,6 +73,7 @@ class CustomPipeline(AgentPipeline):
                 emit_log=self._emit_log,
                 emit_status=self._emit_status,
                 check_aborted=self._check_aborted,
+                bootstrap_messages=bootstrap_messages,
             )
 
             # 标记第一个步骤节点为 active
@@ -82,6 +86,12 @@ class CustomPipeline(AgentPipeline):
             })
 
             output = await asyncio.to_thread(loop.run)
+
+            # ── 检查 plan 是否全部完成 ──
+            if not self._is_plan_done(ws):
+                logger.error("Agent plan not fully completed")
+                self._emit_log("custom_done", {"level": "error", "message": "Agent 诊断步骤未全部完成", "error_details": "Agent 计划中存在未成功完成的步骤。"})
+                raise RuntimeError("Agent 诊断步骤未全部完成")
 
             # ── 收尾与产物输出 ──
             self._emit_status("custom_output", "active")
@@ -143,6 +153,89 @@ class CustomPipeline(AgentPipeline):
         if plan and plan[0]["status"] == "pending":
             plan[0]["status"] = "in_progress"
             plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _is_plan_done(self, ws: Workspace) -> bool:
+        try:
+            plan_path = ws.resolve("plan.json")
+            if not plan_path.exists():
+                return False
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            return all(s.get("status") == "success" for s in plan)
+        except Exception:
+            return False
+
+    def _build_bootstrap_messages(self, ws: Workspace) -> list[dict]:
+        from ..core.tools.impl.setup_impl import read_plan_short_impl
+        from ..core.tools.impl.file_impl import list_files_impl
+        from ..core.tools.impl.doc_impl import read_document_structure_impl
+
+        def tool_pair(call_id: str, name: str, arguments: dict, content: str) -> list[dict]:
+            return [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(arguments, ensure_ascii=False),
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": content,
+                },
+            ]
+
+        messages: list[dict] = []
+        
+        # 1. list_files
+        list_files_json = json.dumps(list_files_impl(ws, ""), ensure_ascii=False)
+        messages.extend(tool_pair("call_bootstrap_list_files", "list_files", {"subdir": ""}, list_files_json))
+
+        # 2. read_plan_short
+        plan_short_text = read_plan_short_impl(ws)
+        if plan_short_text and plan_short_text.strip():
+            messages.extend(tool_pair("call_bootstrap_read_plan_short", "read_plan_short", {}, plan_short_text))
+
+        # 3. read_document_structure
+        for idx, rel_path in enumerate(ws.list_inputs()):
+            try:
+                struct_text = read_document_structure_impl(ws, f"input/{rel_path}")
+                messages.extend(tool_pair(
+                    f"call_bootstrap_read_document_structure_{idx}",
+                    "read_document_structure",
+                    {"path": f"input/{rel_path}"},
+                    struct_text,
+                ))
+            except Exception:
+                continue
+
+        # 4. old session scripts
+        old_scripts_dir = ws.resolve("scripts/old_session_scripts")
+        if old_scripts_dir.is_dir():
+            for session_dir in sorted(old_scripts_dir.iterdir()):
+                if not session_dir.is_dir():
+                    continue
+                for script_file in sorted(session_dir.iterdir()):
+                    if script_file.suffix != ".py":
+                        continue
+                    try:
+                        rel = str(script_file.relative_to(ws.dir))
+                        content = script_file.read_text(encoding="utf-8")
+                        call_id = f"call_bootstrap_old_script_{script_file.stem}"
+                        messages.extend(tool_pair(call_id, "read_file", {"path": rel}, content))
+                    except Exception:
+                        continue
+
+        return messages
 
     def _read_agent_outputs(self, ws: Workspace, token_usage: dict | None = None) -> tuple[list, str, list]:
         """从 workspace 文件组装 Agent 最终产物，程序化写入 output/result.json。"""

@@ -116,12 +116,17 @@ class AgentLoop:
                 {"role": "system", "content": sys_content},
                 {"role": "user", "content": user_content},
             ]
+            self._write_message_log(self.messages[0], mode="w")
+            self._write_message_log(self.messages[1], mode="a")
+
             if self.bootstrap_messages:
                 self.messages.extend(self.bootstrap_messages)
+                for msg in self.bootstrap_messages:
+                    self._write_message_log(msg, mode="a")
             else:
                 # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
                 init_files_json = self.tool_map["list_files"](subdir="")
-                self.messages.extend([
+                init_msgs = [
                     {
                         "role": "assistant",
                         "content": None,
@@ -143,7 +148,10 @@ class AgentLoop:
                         "name": "list_files",
                         "content": init_files_json
                     },
-                ])
+                ]
+                self.messages.extend(init_msgs)
+                for msg in init_msgs:
+                    self._write_message_log(msg, mode="a")
 
             self._emit_status("custom_agent", "active")
             self._emit_log("custom_agent", {"level": "info", "message": f"🚀 启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个"})
@@ -163,7 +171,9 @@ class AgentLoop:
                             raise
 
                     # ── 保存 assistant message ──
-                    self.messages.append(self._normalize_assistant_message(sr))
+                    norm_msg = self._normalize_assistant_message(sr)
+                    self.messages.append(norm_msg)
+                    self._write_message_log(norm_msg, mode="a")
 
                     # ── 缓存 & token 日志（仅文件日志，不推 SSE）──
                     if sr.usage:
@@ -238,11 +248,13 @@ class AgentLoop:
                                 except Exception:
                                     pass
 
-                            self.messages.append({
+                            tool_msg = {
                                 "role": "tool",
                                 "tool_call_id": tc["id"],
                                 "content": result,
-                            })
+                            }
+                            self.messages.append(tool_msg)
+                            self._write_message_log(tool_msg, mode="a")
 
                             if self._finished:
                                 break
@@ -257,7 +269,7 @@ class AgentLoop:
                                 self._emit_status("custom_agent", "error")
                                 raise RuntimeError(self._finish_text)
 
-                    if self.task_type == "diagnosis" and not self._finished and self._round < max_rounds - 1:
+                    if not self._finished and self._round < max_rounds - 1:
                         self._inject_diagnosis_plan_context()
 
             except Exception as e:
@@ -532,14 +544,16 @@ class AgentLoop:
     def _inject_diagnosis_plan_context(self) -> None:
         """把当前 plan short 作为 system 消息追加到对话尾部，供下一轮请求使用。"""
         try:
-            from ..diagnosis.prompt_builder import plan_progress
+            from .tools.impl.setup_impl import read_plan_short_impl
 
-            text = plan_progress(self.ws)
+            text = read_plan_short_impl(self.ws)
             if text and text.strip():
-                self.messages.append({
+                sys_msg = {
                     "role": "system",
                     "content": text,
-                })
+                }
+                self.messages.append(sys_msg)
+                self._write_message_log(sys_msg, mode="a")
         except Exception:
             pass
 
@@ -556,6 +570,20 @@ class AgentLoop:
             except json.JSONDecodeError:
                 pass
         return {"full_report": content, "cards": [], "metrics": [], "mapping": [], "warnings": []}
+
+    def _write_message_log(self, message: dict, mode: str = "a") -> None:
+        """将单条消息实时追加/写入到 workspace/agent_messages.jsonl，保障断电不丢失。"""
+        try:
+            import datetime
+            log_entry = {
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                **message
+            }
+            log_file = self.ws.resolve("agent_messages.jsonl")
+            with open(log_file, mode, encoding="utf-8") as f:
+                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to write agent dialogue log: {e}")
 
 
 # ── helpers ──

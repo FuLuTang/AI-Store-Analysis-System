@@ -71,6 +71,11 @@ class CustomPipeline(AgentPipeline):
             )
             output = await asyncio.to_thread(loop.run)
 
+            # ── 检查 plan 是否全部完成 ──
+            if not self._is_plan_done(ws):
+                logger.error("Agent plan not fully completed")
+                raise RuntimeError("Agent 诊断步骤未全部完成")
+
             elapsed_ms = (time.time() - t0) * 1000
 
             # ── Agent 已将产物写入 workspace，API 直接读文件 ──
@@ -120,6 +125,16 @@ class CustomPipeline(AgentPipeline):
         if plan and plan[0]["status"] == "pending":
             plan[0]["status"] = "in_progress"
             plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _is_plan_done(self, ws: Workspace) -> bool:
+        try:
+            plan_path = ws.resolve("output/plan.json")
+            if not plan_path.exists():
+                return False
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            return all(s.get("status") == "success" for s in plan)
+        except Exception:
+            return False
 
     def _read_agent_outputs(self, ws: Workspace) -> tuple[list, str]:
         """从 workspace 文件读取 Agent 的最终产物。

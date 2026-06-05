@@ -1077,18 +1077,34 @@ async def run_price_recommendation_task(session: SessionState, decoded_files: li
 
         active_preset = get_llm_preset(session.config.get("reasoningEffort", "high"))
 
-        result, full_result = await asyncio.to_thread(
-            run_price_workflow,
-            decoded_files=decoded_files,
+        from packages.agents.core.models import DatasetBundle, RawFile
+        from packages.agents.registry import create_pipeline
+
+        bundle = DatasetBundle(
+            tables=[],
+            raw_files=[RawFile(name=df["name"], data=df["bytes"]) for df in decoded_files]
+        )
+
+        pipe = create_pipeline(
+            name="price_recommendation",
+            llm_preset=active_preset,
+            check_aborted=check_aborted,
+            workspace_dir=ws_dir,
             product_name=product_name,
             candidate_count=candidate_count,
-            workspace_dir=ws_dir,
-            llm_preset=active_preset,
-            emit_log=lambda nid, payload: add_log(session, nid, payload),
-            check_aborted=check_aborted,
         )
-        session.result = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else result
-        session.full_result = full_result
+        pipe.set_event_callbacks(
+            on_status=lambda nid, st: add_status(session, nid, st),
+            on_log=lambda nid, msg: add_log(session, nid, msg),
+            on_progress=lambda nid, cur, tot: add_progress(session, nid, cur, tot),
+            on_tally=lambda nid, t: add_tally(session, nid, t),
+        )
+
+        await pipe.run(bundle)
+
+        disk_result, disk_full = read_price_service_result(session.run_dir)
+        session.result = json.dumps(disk_result, ensure_ascii=False) if disk_result else ""
+        session.full_result = disk_full if disk_full else ""
         with session.runtime_lock:
             if session.force_stop or session.status == "aborted":
                 _save_session_json(session)

@@ -15,7 +15,6 @@ import time
 from openai import OpenAI
 
 from .workspace import Workspace
-from ..chatbot.prompt_builder import build_system_content as build_chatbot_system_content
 from ..diagnosis.prompt_builder import build_system_content, build_user_content
 from .tool_converter import available_tool_call_for_agent, build_tool_map, get_step_milestone, get_plan_progress_info
 
@@ -43,7 +42,6 @@ class AgentLoop:
         product_name: str = "",
         candidate_count: int = 2,
         bootstrap_messages: list[dict] | None = None,
-        initial_messages: list[dict] | None = None,
     ):
         self.ws = ws
         self.analysis_params = analysis_params
@@ -84,7 +82,6 @@ class AgentLoop:
         self._finish_success = True
         self._finish_text = ""
         self.bootstrap_messages = bootstrap_messages or []
-        self.initial_messages = list(initial_messages or [])
 
         def on_finish(success: bool, text: str):
             self._finished = True
@@ -104,11 +101,7 @@ class AgentLoop:
     def run(self) -> dict:
         """主循环：构建初始 messages → 发请求 → 处理 tool_calls → 循环直到收到最终回答。"""
         try:
-            if self.initial_messages:
-                self.messages = list(self.initial_messages)
-                if self.bootstrap_messages:
-                    self.messages.extend(self.bootstrap_messages)
-            elif self.task_type == "price_recommendation":
+            if self.task_type == "price_recommendation":
                 from ..price_recommendation.prompt_builder import (
                     build_system_content as build_price_sys,
                     build_user_content as build_price_user,
@@ -140,19 +133,13 @@ class AgentLoop:
                                 }
                             ]
                         },
-                        {
-                            "role": "tool",
-                            "tool_call_id": "call_init_list_files",
-                            "name": "list_files",
-                            "content": init_files_json
-                        },
-                    ])
-            elif self.task_type == "chatbot":
-                self.messages = [
-                    {"role": "system", "content": build_chatbot_system_content()},
-                ]
-                if self.bootstrap_messages:
-                    self.messages.extend(self.bootstrap_messages)
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_init_list_files",
+                        "name": "list_files",
+                        "content": init_files_json
+                    },
+                ])
             else:
                 sys_content = build_system_content(self.analysis_params)
                 user_content = build_user_content(self.ws, self.analysis_params)

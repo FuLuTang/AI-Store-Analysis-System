@@ -12,7 +12,7 @@ from openai import OpenAI
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from packages.agents.core.agent_loop import AgentLoop
+from packages.agents.core.chat_agent_loop import ChatAgentLoop
 from packages.agents.core.workspace import Workspace
 from packages.agents.chatbot.prompt_builder import build_system_content as build_chatbot_system_content
 
@@ -282,10 +282,11 @@ def register_chatbot_routes(
                     "apiKey": api_key,
                 }
                 client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
-                loop = AgentLoop(
+                loop = ChatAgentLoop(
                     client=client,
                     ws=ws,
                     llm_preset=llm_preset,
+                    initial_messages=initial_messages,
                     emit_log=lambda nid, msg: logger.info(
                         "[chatbot-agent] request_id=%s node=%s message=%s",
                         request_id,
@@ -298,8 +299,7 @@ def register_chatbot_routes(
                         nid,
                         st,
                     ),
-                    task_type="chatbot",
-                    initial_messages=initial_messages,
+                    check_aborted=None,
                 )
                 result = await asyncio.to_thread(loop.run)
                 delta_messages = _history_delta(initial_messages, loop.messages)

@@ -30,6 +30,7 @@ logger.propagate = False
 
 
 CHATBOT_DIRNAME = "chatbot"
+SERVICE_DOCS_DIRNAME = "service_docs"
 CHATBOT_HISTORY_FILENAME = "chat.jsonl"
 CHATBOT_WORKSPACE_DIRNAME = "workspace"
 CHATBOT_FILES_DIRNAME = "files"
@@ -83,6 +84,9 @@ def _safe_extension(filename: str) -> str:
 
 
 def _public_attachment_record(record: dict) -> dict:
+    relative_path = str(record.get("relativePath", "") or "")
+    if relative_path and not relative_path.startswith(f"{CHATBOT_DIRNAME}/"):
+        relative_path = f"{CHATBOT_DIRNAME}/{relative_path.lstrip('/')}"
     return {
         "attachmentId": record.get("attachmentId", ""),
         "originalName": record.get("originalName", ""),
@@ -91,8 +95,17 @@ def _public_attachment_record(record: dict) -> dict:
         "size": record.get("size", 0),
         "sha256": record.get("sha256", ""),
         "createdAt": record.get("createdAt", ""),
-        "relativePath": record.get("relativePath", ""),
+        "relativePath": relative_path,
     }
+
+
+def _normalize_attachment_relative_path(value: str) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    if text.startswith(f"{CHATBOT_DIRNAME}/") or text.startswith(f"{SERVICE_DOCS_DIRNAME}/"):
+        return text
+    return f"{CHATBOT_DIRNAME}/{text.lstrip('/')}"
 
 
 def _format_attachment_context(attachments: list[dict]) -> str:
@@ -103,7 +116,7 @@ def _format_attachment_context(attachments: list[dict]) -> str:
         lines.append(
             f"{idx}. {item.get('originalName', 'unnamed')} "
             f"(attachmentId={item.get('attachmentId', '')}, "
-            f"path={item.get('relativePath', '')}, "
+            f"path={_normalize_attachment_relative_path(item.get('relativePath', ''))}, "
             f"mime={item.get('mimeType', 'application/octet-stream')}, "
             f"size={item.get('size', 0)} bytes)"
         )
@@ -137,7 +150,14 @@ def _public_history_messages(messages: list[dict]) -> list[dict]:
             continue
         if role == "system":
             continue
-        visible.append(message)
+        public_message = dict(message)
+        attachments = public_message.get("attachments")
+        if isinstance(attachments, list):
+            public_message["attachments"] = [
+                _public_attachment_record(item) if isinstance(item, dict) else item
+                for item in attachments
+            ]
+        visible.append(public_message)
     return visible
 
 
@@ -349,7 +369,7 @@ class ChatbotAttachmentStore:
                 "size": len(raw),
                 "sha256": hashlib.sha256(raw).hexdigest(),
                 "createdAt": _now_iso(),
-                "relativePath": f"{CHATBOT_FILES_DIRNAME}/{stored_name}",
+                "relativePath": f"{CHATBOT_DIRNAME}/{CHATBOT_FILES_DIRNAME}/{stored_name}",
             }
             records.append(record)
 
@@ -371,9 +391,14 @@ def _chatbot_root(account_dir: Path) -> Path:
 def _build_chatbot_workspace(account_dir: Path) -> Workspace:
     root = _chatbot_root(account_dir)
     workspace_dir = root / CHATBOT_WORKSPACE_DIRNAME
+    service_docs_root = Path(__file__).resolve().parents[3] / "storage" / SERVICE_DOCS_DIRNAME
     return Workspace(
         base_dir=root,
-        read_root=root,
+        read_roots={
+            CHATBOT_DIRNAME: root,
+            SERVICE_DOCS_DIRNAME: service_docs_root,
+        },
+        default_read_domain=CHATBOT_DIRNAME,
         write_root=workspace_dir,
         script_root=workspace_dir,
     )

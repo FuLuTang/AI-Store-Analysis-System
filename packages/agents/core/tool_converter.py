@@ -41,17 +41,19 @@ def _filter_tool_map_by_task_type(tool_map: dict, task_type: str) -> dict:
 
 def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -> list[dict]:
     """返回 OpenAI tools 参数列表，由已有的 _impl 函数自动拼合。"""
+    from .tools.impl.search_impl import search_files_impl
+
     tools = [
         # ── 文档解析 ──
         _make_tool(
             name="read_document_structure",
-            description="读取任意文档的结构信息（xlsx/csv/pdf/docx/txt/md/json/sqlite/zip），返回表结构摘要、列名、行数和样本行。",
+            description="读取任意文档的结构信息（xlsx/csv/pdf/docx/txt/md/json/sqlite/zip），返回表结构摘要、列名、行数和样本行。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'.",
             parameters={
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "workspace 内的相对路径，如 'input/report.xlsx'",
+                        "description": "workspace 内的相对路径；多域时需带域名前缀，如 'chatbot/input/report.xlsx' 或 'service_docs/policy/faq.md'",
                     }
                 },
                 "required": ["path"],
@@ -60,11 +62,11 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         # ── 文件读写 ──
         _make_tool(
             name="read_file",
-            description="读取 workspace 内的文本文件内容。",
+            description="读取 workspace 内的文本文件内容。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "workspace 内的相对路径"},
+                    "path": {"type": "string", "description": "workspace 内的相对路径；多域时需带域名前缀"},
                 },
                 "required": ["path"],
             },
@@ -108,15 +110,29 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         ),
         _make_tool(
             name="list_files",
-            description="列出 workspace 子目录下的文件。",
+            description="列出 workspace 子目录下的文件。多域工作区中 subdir 也需要带域名前缀，例如 'chatbot/' 或 'service_docs/'.",
             parameters={
                 "type": "object",
                 "properties": {
                     "subdir": {
                         "type": "string",
-                        "description": "子目录名，如 'input', 'tables', 'output'。空字符串表示根目录",
+                        "description": "子目录名；多域时需写成 'chatbot/' 或 'service_docs/' 这样的域前缀",
                     }
                 },
+            },
+        ),
+        _make_tool(
+            name="search",
+            description="在 workspace 内检索文本或正则模式。多域工作区中 path 需要带域名前缀，例如 'chatbot/...' 或 'service_docs/...'; 不传 path 时会搜索所有域。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "要搜索的关键词或正则"},
+                    "path": {"type": "string", "description": "可选：限定在某个带域名的路径下搜索"},
+                    "regex": {"type": "boolean", "description": "是否按正则搜索"},
+                    "max_matches": {"type": "integer", "description": "最多返回多少条匹配"},
+                },
+                "required": ["pattern"],
             },
         ),
         # ── Python 脚本执行 ──
@@ -303,6 +319,9 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         files = list_files_impl(ws, subdir, emit_log=_emit_log)
         return json.dumps(files, ensure_ascii=False)
 
+    def _search(pattern: str, path: str = None, regex: bool = False, max_matches: int = 50) -> str:
+        return search_files_impl(ws, pattern, path=path, regex=regex, max_matches=max_matches)
+
     def _run_python(script_path: str, content: str = None) -> str:
         return run_python_impl(ws, script_path, content=content, emit_log=_emit_log)
 
@@ -418,6 +437,7 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         "replace_text": _replace_text,
         "copy_file": _copy_file,
         "list_files": _list_files,
+        "search": _search,
         "run_python": _run_python,
         "duckdb_query": _duckdb_query,
         "duckdb_register_parquet": _duckdb_register_parquet,

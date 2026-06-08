@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 from ...workspace import Workspace
+from ...file_domains import join_domain_path
 
 
 def _is_binary(path: Path) -> bool:
@@ -22,22 +23,41 @@ def search_files_impl(ws: Workspace, pattern: str, path: str = None, regex: bool
     max_matches = max(1, min(int(max_matches or 50), 200))
     
     if path:
-        target_path = ws.resolve_read(path)
+        try:
+            if ws.has_multi_read_roots:
+                domain, _ = ws.format_read_path(path).split("/", 1)
+                root = ws.read_roots[domain].resolve()
+                target_path = ws.resolve_read(path)
+                files = [(domain, target_path, root)]
+            else:
+                target_path = ws.resolve_read(path)
+                files = [target_path]
+        except ValueError as e:
+            return json.dumps({"error": str(e), "path": path}, ensure_ascii=False)
         if not target_path.exists():
             return json.dumps({"error": f"路径不存在: {path}"}, ensure_ascii=False)
         if not target_path.is_file():
             return json.dumps({"error": f"不是文件: {path}"}, ensure_ascii=False)
-        files = [target_path]
     else:
         files = []
-        for p in sorted(ws.read_root.rglob("*")):
-            if not p.is_file():
-                continue
-            rel_parts = p.relative_to(ws.read_root).parts
-            # 排除隐藏文件/目录（如 .git, .gemini 等）
-            if any(part.startswith(".") for part in rel_parts):
-                continue
-            files.append(p)
+        if ws.has_multi_read_roots:
+            for domain, root in ws.read_roots.items():
+                for p in sorted(root.rglob("*")):
+                    if not p.is_file():
+                        continue
+                    rel_parts = p.relative_to(root).parts
+                    if any(part.startswith(".") for part in rel_parts):
+                        continue
+                    files.append((domain, p, root))
+        else:
+            for p in sorted(ws.read_root.rglob("*")):
+                if not p.is_file():
+                    continue
+                rel_parts = p.relative_to(ws.read_root).parts
+                # 排除隐藏文件/目录（如 .git, .gemini 等）
+                if any(part.startswith(".") for part in rel_parts):
+                    continue
+                files.append(p)
 
     # 编译正则或转换子串模式
     rx = None
@@ -54,15 +74,21 @@ def search_files_impl(ws: Workspace, pattern: str, path: str = None, regex: bool
     global_matches_count = 0
     hit_limit = False
 
-    for p in files:
+    for item in files:
         if hit_limit:
             break
         
+        if ws.has_multi_read_roots and isinstance(item, tuple):
+            domain, p, root = item
+            rel_path = join_domain_path(domain, str(p.relative_to(root)).replace("\\", "/"))
+        else:
+            p = item
+            rel_path = str(p.relative_to(ws.read_root))
+
         # 排除二进制文件
         if _is_binary(p):
             continue
 
-        rel_path = str(p.relative_to(ws.read_root))
         file_matches = []
 
         try:

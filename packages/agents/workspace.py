@@ -20,6 +20,7 @@ from typing import Optional
 import pandas as pd
 
 from .models import ColumnMeta, Manifest, RawTable, TableMeta
+from .core.file_domains import DEFAULT_FILE_DOMAINS, join_domain_path, split_domain_path
 
 ARTIFACTS_ROOT = Path("storage/artifacts")
 
@@ -32,6 +33,8 @@ class Workspace:
         report_id: Optional[str] = None,
         base_dir: Optional[Path] = None,
         read_root: Optional[Path] = None,
+        read_roots: Optional[dict[str, Path]] = None,
+        default_read_domain: Optional[str] = None,
         write_root: Optional[Path] = None,
         script_root: Optional[Path] = None,
     ):
@@ -42,7 +45,18 @@ class Workspace:
         else:
             self.report_id = report_id or f"{label}_{_short_uuid()}"
             self._dir = Path(ARTIFACTS_ROOT) / self.report_id
-        self._read_root = Path(read_root) if read_root else self._dir
+        self._read_roots: dict[str, Path] = {}
+        if read_roots:
+            self._read_roots = {str(domain): Path(root) for domain, root in read_roots.items()}
+            if not self._read_roots:
+                raise ValueError("read_roots 不能为空")
+            self._default_read_domain = str(default_read_domain or next(iter(self._read_roots.keys())))
+            if self._default_read_domain not in self._read_roots:
+                raise ValueError(f"默认读域不存在: {self._default_read_domain}")
+            self._read_root = self._read_roots[self._default_read_domain]
+        else:
+            self._default_read_domain = None
+            self._read_root = Path(read_root) if read_root else self._dir
         self._write_root = Path(write_root) if write_root else self._dir
         self._input_dir = self._write_root / "input"
         self._output_dir = self._write_root / "output"
@@ -62,6 +76,11 @@ class Workspace:
             self._tables_dir,
             self._script_root,
         ]:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+        for d in self._read_roots.values():
             try:
                 d.mkdir(parents=True, exist_ok=True)
             except Exception:
@@ -134,6 +153,20 @@ class Workspace:
     @property
     def read_root(self) -> Path:
         return self._read_root
+
+    @property
+    def read_roots(self) -> dict[str, Path]:
+        if self._read_roots:
+            return dict(self._read_roots)
+        return {DEFAULT_FILE_DOMAINS[0]: self._read_root}
+
+    @property
+    def default_read_domain(self) -> Optional[str]:
+        return self._default_read_domain
+
+    @property
+    def has_multi_read_roots(self) -> bool:
+        return len(self._read_roots) > 0
 
     @property
     def write_root(self) -> Path:
@@ -222,10 +255,31 @@ class Workspace:
         return resolved
 
     def resolve_read(self, rel: str) -> Path:
+        if self._read_roots:
+            domain, inner = split_domain_path(rel, allowed_domains=self._read_roots.keys())
+            return self._resolve_from(self._read_roots[domain], inner)
         return self._resolve_from(self._read_root, rel)
+
+    def resolve_read_domain(self, domain: str, rel: str = "") -> Path:
+        if not self._read_roots:
+            if domain != DEFAULT_FILE_DOMAINS[0]:
+                raise ValueError(f"不支持的文件域: {domain}")
+            return self._resolve_from(self._read_root, rel)
+        if domain not in self._read_roots:
+            raise ValueError(f"不支持的文件域: {domain}")
+        return self._resolve_from(self._read_roots[domain], rel)
 
     def resolve_write(self, rel: str) -> Path:
         return self._resolve_from(self._write_root, rel)
+
+    def format_read_path(self, path: str, domain: Optional[str] = None) -> str:
+        if not self._read_roots:
+            return path
+        if domain is None:
+            domain, rel = split_domain_path(path, allowed_domains=self._read_roots.keys())
+        else:
+            rel = path
+        return join_domain_path(domain, rel)
 
     def resolve_script(self, rel: str) -> Path:
         return self._resolve_from(self._script_root, rel)

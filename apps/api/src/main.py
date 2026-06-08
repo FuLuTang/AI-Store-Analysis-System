@@ -41,6 +41,7 @@ from packages.price_recommendation.service import (
     run_price_workflow,
 )
 from apps.api.src.chatbot_service import register_chatbot_routes
+from packages.agents.core.file_domains import SERVICE_DOCS_DOMAIN, join_domain_path, split_domain_path
 
 load_dotenv()
 
@@ -75,6 +76,7 @@ app.add_middleware(
 STORAGE_DIR = ROOT_DIR / "storage"
 _ensure_file_log()
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
+SERVICE_DOCS_DIR = STORAGE_DIR / "service_docs"
 LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
 MAX_UPLOAD_FILE_SIZE = 100 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
@@ -86,6 +88,8 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 PRESET_SECRET = os.getenv("LLM_PRESET_SECRET", "").strip()
 
 GLOBAL_AGENT_PIPELINE = "custom"
+
+SERVICE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def normalize_reasoning_effort(value: Optional[str]) -> str:
@@ -336,6 +340,72 @@ def update_llm_presets(raw_presets: dict):
 
 def require_admin_authorization(x_admin_token: Optional[str]):
     return  # 内部工具，不做管理员鉴权
+
+
+def _service_docs_rel_path(path: str) -> str:
+    domain, rel = split_domain_path(path, allowed_domains=(SERVICE_DOCS_DOMAIN,))
+    if domain != SERVICE_DOCS_DOMAIN:
+        raise HTTPException(status_code=400, detail=f"仅支持 {SERVICE_DOCS_DOMAIN}/ 域")
+    return rel
+
+
+def _service_docs_abs_path(path: str) -> Path:
+    rel = _service_docs_rel_path(path)
+    target = (SERVICE_DOCS_DIR / rel).resolve()
+    try:
+        target.relative_to(SERVICE_DOCS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="路径越界")
+    return target
+
+
+def _service_docs_kind(path: Path) -> str:
+    if path.is_dir():
+        return "directory"
+    ext = path.suffix.lower()
+    if ext in {".md"}:
+        return "markdown"
+    if ext in {".txt", ".log"}:
+        return "text"
+    if ext == ".json":
+        return "json"
+    if ext in {".csv"}:
+        return "csv"
+    if ext in {".xlsx", ".xls"}:
+        return "excel"
+    if ext in {".pdf"}:
+        return "pdf"
+    if ext in {".docx", ".doc"}:
+        return "word"
+    return "file"
+
+
+def _service_docs_item(path: Path, root: Path) -> dict:
+    rel = path.relative_to(root).as_posix()
+    item = {
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, rel),
+        "name": path.name,
+        "isDir": path.is_dir(),
+        "kind": _service_docs_kind(path),
+        "size": 0 if path.is_dir() else path.stat().st_size,
+        "sizeHuman": "0B" if path.is_dir() else f"{path.stat().st_size}B",
+    }
+    if not path.is_dir():
+        item["ext"] = path.suffix.lower()
+    return item
+
+
+def _list_service_docs_entries(target: Path) -> list[dict]:
+    entries: list[dict] = []
+    if not target.exists():
+        return entries
+    if target.is_file():
+        return [_service_docs_item(target, SERVICE_DOCS_DIR)]
+    for p in sorted(target.rglob("*")):
+        if any(part.startswith(".") for part in p.relative_to(SERVICE_DOCS_DIR).parts):
+            continue
+        entries.append(_service_docs_item(p, SERVICE_DOCS_DIR))
+    return entries
 
 
 # ── 账号 / Run 目录辅助 ──
@@ -848,6 +918,105 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
         "status": "ok",
         "presets": get_all_llm_presets()
     }
+
+
+@app.get("/api/admin/service-docs")
+def list_admin_service_docs(path: str = "service_docs/", x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    return {
+        "status": "ok",
+        "path": path,
+        "entries": _list_service_docs_entries(target),
+    }
+
+
+@app.get("/api/admin/service-docs/file")
+def read_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail=f"不是文件: {path}")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail=f"非文本文件，无法直接读取: {path}")
+    return {
+        "status": "ok",
+        "path": path,
+        "content": content,
+    }
+
+
+@app.get("/api/admin/service-docs/download")
+def download_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail=f"不是文件: {path}")
+    return FileResponse(str(target), filename=target.name)
+
+
+@app.post("/api/admin/service-docs/file")
+async def save_admin_service_doc_file(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    path = str(payload.get("path") or "").strip()
+    content = payload.get("content")
+    if not path:
+        raise HTTPException(status_code=400, detail="缺少 path")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="content 必须是字符串")
+    target = _service_docs_abs_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return {
+        "status": "ok",
+        "path": path,
+        "bytesWritten": len(content.encode("utf-8")),
+    }
+
+
+@app.post("/api/admin/service-docs/upload")
+async def upload_admin_service_doc_file(
+    file: UploadFile = File(...),
+    path: Optional[str] = Form(default=None),
+    x_admin_token: Optional[str] = Header(default=None),
+):
+    require_admin_authorization(x_admin_token)
+    target_path = path.strip() if isinstance(path, str) and path.strip() else None
+    if target_path:
+        target = _service_docs_abs_path(target_path)
+    else:
+        target = _service_docs_abs_path(f"{SERVICE_DOCS_DOMAIN}/{file.filename}")
+    raw = await file.read()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+    return {
+        "status": "ok",
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()),
+        "bytesWritten": len(raw),
+        "mimeType": file.content_type or "application/octet-stream",
+    }
+
+
+@app.delete("/api/admin/service-docs/file")
+def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return {"status": "ok", "path": path}
 
 @app.get("/api/status")
 def get_status(

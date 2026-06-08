@@ -4,6 +4,7 @@ import shutil
 from typing import Callable, Optional
 from pathlib import Path
 from ...workspace import Workspace
+from ...file_domains import join_domain_path, split_domain_path
 
 
 DEFAULT_READ_LINES = 2000
@@ -41,7 +42,10 @@ def read_file_impl(
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> str:
     """读取文件内容，支持分页(offset/limit)以及首尾快捷读取(head/tail)。"""
-    p = ws.resolve_read(path)
+    try:
+        p = ws.resolve_read(path)
+    except ValueError as e:
+        return json.dumps({"error": str(e), "path": path}, ensure_ascii=False)
     if p.name in FORBIDDEN_READ_BASENAMES:
         return json.dumps({
             "error": f"不允许使用 read_file 读取受限文件: {path}",
@@ -288,7 +292,10 @@ def copy_file_impl(
 ) -> str:
     if Path(destination_path).name in FORBIDDEN_READ_BASENAMES:
         return json.dumps({"error": f"不允许将文件复制到受限文件名: {destination_path}"}, ensure_ascii=False)
-    src = ws.resolve_read(source_path)
+    try:
+        src = ws.resolve_read(source_path)
+    except ValueError as e:
+        return json.dumps({"error": str(e), "source_path": source_path}, ensure_ascii=False)
     dst = ws.resolve_write(destination_path)
     old_scripts_dir = ws.scripts_dir / "old_session_scripts"
     try:
@@ -326,65 +333,127 @@ def list_files_impl(
     subdir: str = "",
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> list[dict]:
-    target = ws.resolve_read(subdir) if subdir else ws.read_root.resolve()
-    ws_dir_abs = ws.read_root.resolve()
     files = []
-    for p in sorted(target.rglob("*")):
-        if not p.is_file():
-            continue
-        rel_parts = p.relative_to(ws_dir_abs).parts
-        if any(part.startswith(".") for part in rel_parts):
-            continue
-        
-        size = p.stat().st_size
-        ext = p.suffix.lower()
-        
-        # 判定 kind
-        if ext in {".xlsx", ".xls"}:
-            kind = "excel"
-        elif ext == ".csv":
-            kind = "csv"
-        elif ext == ".pdf":
-            kind = "pdf"
-        elif ext in {".docx", ".doc"}:
-            kind = "word"
-        elif ext in {".txt", ".log"}:
-            kind = "text"
-        elif ext == ".md":
-            kind = "markdown"
-        elif ext == ".json":
-            kind = "json"
-        elif ext in {".sqlite", ".db"}:
-            kind = "sqlite"
-        elif ext in {".zip", ".tar", ".gz", ".rar"}:
-            kind = "archive"
-        elif ext == ".py":
-            kind = "python"
-        else:
-            kind = "other"
-            
-        # 判定 recommended_tool
-        if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
-            rec_tool = "read_document_structure"
-        elif kind == "text":
-            if size < 100 * 1024:  # 小于 100KB
-                rec_tool = "read_file"
+    try:
+        if ws.has_multi_read_roots:
+            if subdir:
+                target = ws.resolve_read(subdir)
+                domain, _ = split_domain_path(subdir, allowed_domains=ws.read_roots.keys())
+                domains = [(domain, target)]
             else:
-                rec_tool = "search_files"
-        elif kind == "python":
-            rec_tool = "read_file"
-        else:
-            rec_tool = "run_python"
+                domains = [(domain, root.resolve()) for domain, root in ws.read_roots.items()]
+            for domain, root in domains:
+                candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+                for p in candidates:
+                    if not p.is_file():
+                        continue
+                    rel_parts = p.relative_to(root).parts
+                    if any(part.startswith(".") for part in rel_parts):
+                        continue
 
-        files.append({
-            "path": str(p.relative_to(ws_dir_abs)),
-            "name": p.name,
-            "size": size,
-            "size_human": _format_size(size),
-            "ext": ext,
-            "kind": kind,
-            "recommended_tool": rec_tool
-        })
+                    size = p.stat().st_size
+                    ext = p.suffix.lower()
+                    if ext in {".xlsx", ".xls"}:
+                        kind = "excel"
+                    elif ext == ".csv":
+                        kind = "csv"
+                    elif ext == ".pdf":
+                        kind = "pdf"
+                    elif ext in {".docx", ".doc"}:
+                        kind = "word"
+                    elif ext in {".txt", ".log"}:
+                        kind = "text"
+                    elif ext == ".md":
+                        kind = "markdown"
+                    elif ext == ".json":
+                        kind = "json"
+                    elif ext in {".sqlite", ".db"}:
+                        kind = "sqlite"
+                    elif ext in {".zip", ".tar", ".gz", ".rar"}:
+                        kind = "archive"
+                    elif ext == ".py":
+                        kind = "python"
+                    else:
+                        kind = "other"
+
+                    if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
+                        rec_tool = "read_document_structure"
+                    elif kind == "text":
+                        rec_tool = "read_file" if size < 100 * 1024 else "search"
+                    elif kind == "python":
+                        rec_tool = "read_file"
+                    else:
+                        rec_tool = "run_python"
+
+                    files.append({
+                        "path": join_domain_path(domain, str(p.relative_to(root)).replace("\\", "/")),
+                        "name": p.name,
+                        "size": size,
+                        "size_human": _format_size(size),
+                        "ext": ext,
+                        "kind": kind,
+                        "recommended_tool": rec_tool
+                    })
+        else:
+            target = ws.resolve_read(subdir) if subdir else ws.read_root.resolve()
+            ws_dir_abs = ws.read_root.resolve()
+            candidates = [target] if target.is_file() else sorted(target.rglob("*"))
+            for p in candidates:
+                if not p.is_file():
+                    continue
+                rel_parts = p.relative_to(ws_dir_abs).parts
+                if any(part.startswith(".") for part in rel_parts):
+                    continue
+
+                size = p.stat().st_size
+                ext = p.suffix.lower()
+
+                if ext in {".xlsx", ".xls"}:
+                    kind = "excel"
+                elif ext == ".csv":
+                    kind = "csv"
+                elif ext == ".pdf":
+                    kind = "pdf"
+                elif ext in {".docx", ".doc"}:
+                    kind = "word"
+                elif ext in {".txt", ".log"}:
+                    kind = "text"
+                elif ext == ".md":
+                    kind = "markdown"
+                elif ext == ".json":
+                    kind = "json"
+                elif ext in {".sqlite", ".db"}:
+                    kind = "sqlite"
+                elif ext in {".zip", ".tar", ".gz", ".rar"}:
+                    kind = "archive"
+                elif ext == ".py":
+                    kind = "python"
+                else:
+                    kind = "other"
+
+                if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
+                    rec_tool = "read_document_structure"
+                elif kind == "text":
+                    if size < 100 * 1024:
+                        rec_tool = "read_file"
+                    else:
+                        rec_tool = "search"
+                elif kind == "python":
+                    rec_tool = "read_file"
+                else:
+                    rec_tool = "run_python"
+
+                files.append({
+                    "path": str(p.relative_to(ws_dir_abs)),
+                    "name": p.name,
+                    "size": size,
+                    "size_human": _format_size(size),
+                    "ext": ext,
+                    "kind": kind,
+                    "recommended_tool": rec_tool
+                })
+    except ValueError as e:
+        return [{"error": str(e), "path": subdir or ""}]
     if emit_log:
         emit_log("custom_agent", {"level": "info", "message": f"✅ list_files 调用成功: {subdir or '.'}"})
     return files

@@ -662,6 +662,7 @@ def _tool_target(name: str, args_json: str) -> str:
         "list_files": lambda a: f"列出 {a.get('subdir', '根目录')}/ 目录",
         "run_python": lambda a: f"执行 {a.get('script_path', '?')}",
         "search_files": lambda a: f"检索关键词 {a.get('pattern', '?')}",
+        "search": lambda a: f"检索关键词 {a.get('pattern', '?')}",
         "query_sqlite": lambda a: f"查询 SQLite {a.get('path', '?')}",
         "duckdb_register_parquet": lambda a: f"注册表 {a.get('table_name', '?')}",
         "list_tables": lambda a: "列出所有表",

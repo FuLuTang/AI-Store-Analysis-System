@@ -166,7 +166,7 @@ sequenceDiagram
       "size": 123456,
       "sha256": "...",
       "createdAt": "2026-06-05T10:30:00+08:00",
-      "relativePath": "files/f4a1....png"
+      "relativePath": "chatbot/files/f4a1....png"
     }
   ]
 }
@@ -208,6 +208,8 @@ sequenceDiagram
   - 服务端会将客服历史消息、本次输入和本次附件清单一起作为会话上下文；历史中的普通 `system` 消息和 `system/name=notice` 消息不发送给模型。
   - 如果只有附件没有文字输入，服务端会按“请查看本次上传的附件。”处理本次输入。
   - 本次附件会以元数据和相对路径形式进入会话上下文；客服会话处理逻辑必要时可读取 `chatbot/files/` 下的附件内容。
+  - 读类工具统一使用域名前缀路径，当前只支持 `chatbot/...` 与 `service_docs/...` 两个域；`service_docs` 用于公司公共资料，`chatbot` 用于私有会话工作区。
+  - `list_files`、`read_file`、`read_document_structure`、`search` 这类读工具返回的 `path` 也会保留域名前缀，方便模型继续引用同一路径。
 
 - **相关配置**: 客服会话的连接参数来自全局预设 `chatbot` 段，由管理员接口维护，并通过 `/api/admin/llm-presets` 读取和更新。
 
@@ -229,6 +231,58 @@ sequenceDiagram
   - 子对象字段（`call` 与 `fastcall`）：`baseUrl` (string), `apiKey` (string, 可选), `apiKeyEnc` (string, 可选), `model` (string), `reasoningEffort` (string)
 - **补充**: `chatbot` 配置字段为 `baseUrl`、`apiKey`、`model`，由独立聊天接口使用，不参与 `low/medium/high` 三档分析预设。
 - **响应 (200)**: `{"status": "ok", "presets": {"low": {...}, "medium": {...}, "high": {...}}}`
+
+#### [GET] /api/admin/service-docs
+
+- **说明**: 列出 `storage/service_docs/` 下的文件与目录。
+- **Query**: `path`，默认 `service_docs/`
+- **响应 (200)**:
+
+```json
+{
+  "status": "ok",
+  "path": "service_docs/",
+  "entries": [
+    {
+      "path": "service_docs/policy/faq.md",
+      "name": "faq.md",
+      "isDir": false,
+      "kind": "markdown",
+      "size": 1234,
+      "sizeHuman": "1234B",
+      "ext": ".md"
+    }
+  ]
+}
+```
+
+#### [GET] /api/admin/service-docs/file
+
+- **说明**: 读取 `service_docs` 中的文本文件内容。
+- **Query**: `path`，必须带域名前缀，例如 `service_docs/policy/faq.md`
+- **响应 (200)**: `{"status":"ok","path":"service_docs/...","content":"..."}`
+
+#### [POST] /api/admin/service-docs/file
+
+- **说明**: 写入或覆盖 `service_docs` 中的文本文件。
+- **Body (JSON)**:
+  - `path`: 带域名前缀的路径，例如 `service_docs/policy/faq.md`
+  - `content`: 文本内容
+- **响应 (200)**: `{"status":"ok","path":"service_docs/...","bytesWritten":123}`
+
+#### [POST] /api/admin/service-docs/upload
+
+- **说明**: 上传一个二进制或文本文件到 `service_docs`。
+- **Body**: `multipart/form-data`
+  - `file`: 文件
+  - `path`: 可选，带域名前缀的目标路径；不传时默认使用文件名
+- **响应 (200)**: `{"status":"ok","path":"service_docs/...","bytesWritten":123,"mimeType":"..." }`
+
+#### [DELETE] /api/admin/service-docs/file
+
+- **说明**: 删除 `service_docs` 中的文件或目录。
+- **Query**: `path`，必须带域名前缀
+- **响应 (200)**: `{"status":"ok","path":"service_docs/..."}`
 
 ### 3.5 其他接口
 

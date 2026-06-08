@@ -333,7 +333,10 @@ def read_document_structure_impl(
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> str:
     """探测指定文档的结构（元数据、列、大纲），绝不返回大文件全文，统一输出 JSON。"""
-    p = ws.resolve_read(path)
+    try:
+        p = ws.resolve_read(path)
+    except ValueError as e:
+        return json.dumps({"error": str(e), "path": path}, ensure_ascii=False)
     if p.name == "plan.json":
         return json.dumps({"error": f"不允许使用 read_document_structure 读取受限文件: {path}"}, ensure_ascii=False)
     if not p.exists():
@@ -507,7 +510,10 @@ def _extract_docx_tables(raw: bytes) -> list[dict]:
 
 def extract_document_tables_impl(ws: Workspace, path: str, sheet: str = "") -> str:
     """从 xlsx/csv/pdf/docx 提取结构化表格数据，返回 JSON 数组。"""
-    p = ws.resolve_read(path)
+    try:
+        p = ws.resolve_read(path)
+    except ValueError as e:
+        return json.dumps({"error": str(e), "path": path}, ensure_ascii=False)
     if not p.exists():
         return json.dumps({"error": f"文件不存在: {path}"})
     lower = path.lower()

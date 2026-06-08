@@ -67,6 +67,7 @@ class ChatAgentLoop:
             emit_log=self._emit_log,
             emit_status=self._emit_status,
             on_finish=None,
+            llm_preset=llm_preset,
         )
 
     def run(self) -> dict:

@@ -245,6 +245,46 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
             },
         ),
     ]
+    if task_type == "chatbot":
+        tools.extend([
+            _make_tool(
+                name="list_system_functions",
+                description="列出系统所有的可用服务功能。功能以树形目录层级结构展示（不包含 .py 后缀）。",
+                parameters={"type": "object", "properties": {}},
+            ),
+            _make_tool(
+                name="view_system_function_doc",
+                description="查看指定系统服务功能说明文档。在执行功能前，必须先调用此工具查看说明，确认如何正确填写参数。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                        }
+                    },
+                    "required": ["path"],
+                },
+            ),
+            _make_tool(
+                name="execute_system_function",
+                description="执行指定的系统服务功能。必须传入准确的功能路径与符合说明要求的参数对象。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                        },
+                        "params": {
+                            "type": "object",
+                            "description": "具体入参键值对。请务必提前通过查看功能说明工具（view_system_function_doc）确认此参数对象中应当包含哪些属性及如何填写。"
+                        }
+                    },
+                    "required": ["path", "params"],
+                },
+            ),
+        ])
     return _filter_tools_by_task_type(tools, task_type)
 
 
@@ -270,7 +310,7 @@ def get_plan_progress_info(ws) -> tuple[int, int]:
         return -1, 0
 
 
-def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, emit_status=None, on_finish=None) -> dict:
+def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, emit_status=None, on_finish=None, llm_preset: dict = None) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
 
     emit_log(node_id, message)  —— 日志回调，message 可为 str 或 dict
@@ -447,6 +487,29 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         "check_plan": _check_plan,
         "finish_task": _finish_task,
     }
+
+    if task_type == "chatbot":
+        from .tools.impl.system_function_impl import (
+            list_system_functions_impl,
+            view_system_function_doc_impl,
+            execute_system_function_impl,
+        )
+
+        def _list_system_functions() -> str:
+            return list_system_functions_impl()
+
+        def _view_system_function_doc(path: str) -> str:
+            return view_system_function_doc_impl(path)
+
+        def _execute_system_function(path: str, params: dict) -> str:
+            return execute_system_function_impl(ws, path, params, llm_preset)
+
+        tool_map.update({
+            "list_system_functions": _list_system_functions,
+            "view_system_function_doc": _view_system_function_doc,
+            "execute_system_function": _execute_system_function,
+        })
+
     return _filter_tool_map_by_task_type(tool_map, task_type)
 
 

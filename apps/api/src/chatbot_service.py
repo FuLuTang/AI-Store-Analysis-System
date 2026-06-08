@@ -50,12 +50,37 @@ MODEL_MESSAGE_KEYS = {
 }
 HISTORY_EXTRA_KEYS = {"attachments"}
 NOTICE_NAME = "notice"
+CHATBOT_ACTIVE_REQUESTS: set[str] = set()
+CHATBOT_ACTIVE_REQUESTS_LOCK = Lock()
 
 
 class ChatbotStreamError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
         self.message = message
+
+
+def _acquire_chatbot_request(account_id: object):
+    account_key = str(account_id or "").strip()
+    if not account_key:
+        raise HTTPException(status_code=400, detail="缺少账号信息")
+
+    with CHATBOT_ACTIVE_REQUESTS_LOCK:
+        if account_key in CHATBOT_ACTIVE_REQUESTS:
+            raise HTTPException(status_code=409, detail="当前会话正在处理中，请稍后再发消息")
+        CHATBOT_ACTIVE_REQUESTS.add(account_key)
+
+    released = False
+
+    def _release():
+        nonlocal released
+        if released:
+            return
+        released = True
+        with CHATBOT_ACTIVE_REQUESTS_LOCK:
+            CHATBOT_ACTIVE_REQUESTS.discard(account_key)
+
+    return _release
 
 
 def _now_iso() -> str:
@@ -132,6 +157,26 @@ def _is_notice_message(message: dict) -> bool:
 
 def _history_time(message: dict) -> str:
     return str(message.get("datetime") or message.get("time") or "").strip()
+
+
+def _notice_messages_for_model(messages: list[dict]) -> list[dict]:
+    notices: list[dict] = []
+    for message in messages:
+        if not _is_notice_message(message):
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        notice: dict = {
+            "role": "system",
+            "name": NOTICE_NAME,
+            "content": content,
+        }
+        notice_time = _history_time(message)
+        if notice_time:
+            notice["content"] = f"【系统提醒 {notice_time}】\n{content}"
+        notices.append(notice)
+    return notices
 
 
 def _public_history_messages(messages: list[dict]) -> list[dict]:
@@ -424,21 +469,23 @@ def _build_initial_messages(history: list[dict], content: str, attachments: list
     return initial_messages, prefix_to_persist
 
 
+def _build_messages_from_history(history: list[dict]) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": build_chatbot_system_content()}]
+    messages.extend(_notice_messages_for_model(history))
+    messages.extend(
+        _normalize_message_for_model(item)
+        for item in history
+        if str(item.get("role", "")).strip().lower() != "system"
+    )
+    return messages
+
+
 def _extract_final_text(result: dict) -> str:
     full_report = str(result.get("full_report") or "").strip()
     if full_report:
         return full_report
     compact = {k: v for k, v in result.items() if k != "_token_usage"}
     return json.dumps(compact, ensure_ascii=False)
-
-
-def _history_delta(initial_messages: list[dict], final_messages: list[dict]) -> list[dict]:
-    if len(final_messages) <= len(initial_messages):
-        return []
-    persisted: list[dict] = []
-    for message in final_messages[len(initial_messages):]:
-        persisted.append(_clone_message_fields(message, include_datetime=True))
-    return persisted
 
 
 def register_chatbot_routes(
@@ -473,8 +520,10 @@ def register_chatbot_routes(
     async def chat_stream(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
         t0 = time.perf_counter()
         session = resolve_session(x_fzt_key)
+        release_chatbot_request = _acquire_chatbot_request(getattr(session, "account_id", None))
         payload = await request.json()
         if not isinstance(payload, dict):
+            release_chatbot_request()
             raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
 
         content = str(
@@ -504,6 +553,7 @@ def register_chatbot_routes(
         api_key = preset.get("apiKey", "")
         model = preset.get("model", "")
         if not base_url or not api_key or not model:
+            release_chatbot_request()
             raise HTTPException(status_code=500, detail="LLM 配置不完整")
 
         history = history_store.load_messages(session.account_dir)
@@ -547,6 +597,8 @@ def register_chatbot_routes(
                     ws=ws,
                     llm_preset=llm_preset,
                     initial_messages=initial_messages,
+                    load_messages=lambda: _build_messages_from_history(history_store.load_messages(session.account_dir)),
+                    persist_messages=lambda msgs: history_store.append_messages(session.account_dir, msgs),
                     emit_log=lambda nid, msg: logger.info(
                         "[chatbot-agent] request_id=%s node=%s message=%s",
                         request_id,
@@ -562,8 +614,6 @@ def register_chatbot_routes(
                     check_aborted=None,
                 )
                 result = await asyncio.to_thread(loop.run)
-                delta_messages = _history_delta(initial_messages, loop.messages)
-                history_store.append_messages(session.account_dir, delta_messages)
                 final_text = _extract_final_text(result)
                 if final_text:
                     yield final_text.encode("utf-8")
@@ -573,7 +623,7 @@ def register_chatbot_routes(
                     request_id,
                     elapsed_ms,
                     len(final_text),
-                    len(delta_messages),
+                    max(len(loop.messages) - len(initial_messages), 0),
                 )
                 logger.info(
                     json.dumps(
@@ -586,7 +636,7 @@ def register_chatbot_routes(
                                 for item in initial_messages
                             ],
                             "output_chars": len(final_text),
-                            "new_messages": len(delta_messages),
+                            "new_messages": max(len(loop.messages) - len(initial_messages), 0),
                             "usage": result.get("_token_usage", {}),
                             "elapsed_ms": elapsed_ms,
                         },
@@ -633,7 +683,13 @@ def register_chatbot_routes(
                     "datetime": _now_iso(),
                 }])
                 yield error_text.encode("utf-8")
+            finally:
+                release_chatbot_request()
 
-        return StreamingResponse(_logged_stream(), media_type="text/plain; charset=utf-8")
+        try:
+            return StreamingResponse(_logged_stream(), media_type="text/plain; charset=utf-8")
+        except Exception:
+            release_chatbot_request()
+            raise
 
     app.include_router(router)

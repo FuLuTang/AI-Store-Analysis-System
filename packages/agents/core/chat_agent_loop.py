@@ -12,6 +12,7 @@ import logging
 import re
 import sys
 import time
+from datetime import datetime
 from openai import OpenAI
 
 from .workspace import Workspace
@@ -35,9 +36,11 @@ class ChatAgentLoop:
         ws: Workspace,
         llm_preset: dict,
         initial_messages: list[dict],
+        load_messages=None,
         emit_log=None,
         emit_status=None,
         check_aborted=None,
+        persist_messages=None,
     ):
         self.ws = ws
         self._check_aborted = check_aborted
@@ -56,10 +59,12 @@ class ChatAgentLoop:
         self._total_cache_hit = 0
         self._total_cache_miss = 0
         self.messages: list[dict] = list(initial_messages or [])
+        self._load_messages = load_messages or (lambda: list(self.messages))
         self.tools = available_tool_call_for_agent(ws, task_type="chatbot")
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
         self._round = 0
+        self._persist_messages = persist_messages or (lambda msgs: None)
 
         self.tool_map = build_tool_map(
             ws,
@@ -84,7 +89,9 @@ class ChatAgentLoop:
         max_rounds = 50
         try:
             for self._round in range(max_rounds):
-                sr = self._call_api()
+                round_messages = list(self._load_messages() or [])
+                self.messages = round_messages
+                sr = self._call_api(round_messages)
 
                 if self._check_aborted:
                     try:
@@ -93,7 +100,11 @@ class ChatAgentLoop:
                         self._emit_log("chatbot_agent", {"level": "error", "message": "⛔ 用户已强制停止"})
                         raise
 
-                self.messages.append(self._normalize_assistant_message(sr))
+                assistant_message = self._normalize_assistant_message(sr)
+                assistant_message["datetime"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                round_messages.append(assistant_message)
+                self.messages = round_messages
+                self._persist_messages([assistant_message])
 
                 if sr.usage:
                     u = sr.usage
@@ -145,16 +156,18 @@ class ChatAgentLoop:
                         self._emit_log("chatbot_agent", {"level": "info", "message": f"🔧 {target}"})
 
                         result = self._execute_tool(tc)
-                        self.messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tc["id"],
-                                "name": tc["name"],
-                                "content": result,
-                            }
-                        )
+                        tool_message = {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "name": tc["name"],
+                            "content": result,
+                            "datetime": datetime.now().astimezone().isoformat(timespec="seconds"),
+                        }
+                        round_messages.append(tool_message)
+                        self.messages = round_messages
+                        self._persist_messages([tool_message])
 
-                self.messages = list(self.messages)
+                self.messages = round_messages
 
         except Exception as e:
             if "aborted" in type(e).__name__.lower() or "强制" in str(e):
@@ -168,10 +181,10 @@ class ChatAgentLoop:
         self._emit_status("chatbot_agent", "max_rounds")
         return self._with_usage(self._parse_final_output(""))
 
-    def _call_api(self):
+    def _call_api(self, messages: list[dict]):
         kwargs = {
             "model": self.model,
-            "messages": self.messages,
+            "messages": messages,
             "tools": self.tools,
             "stream": True,
         }
@@ -180,10 +193,10 @@ class ChatAgentLoop:
         if "deepseek" in self.model.lower():
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
 
-        logger.info("[round_%d] → 发送 LLM 请求 (messages 共 %d 条):", self._round, len(self.messages))
+        logger.info("[round_%d] → 发送 LLM 请求 (messages 共 %d 条):", self._round, len(messages))
         if self._round == 0 and self.tools:
             logger.info("[round_0] 发送的 Tools 列表 Schema:\n%s", json.dumps(self.tools, ensure_ascii=False, indent=2))
-        for idx, msg in enumerate(self.messages):
+        for idx, msg in enumerate(messages):
             role = msg.get("role", "")
             text = msg.get("content") or ""
             if not isinstance(text, str):
@@ -289,7 +302,7 @@ class ChatAgentLoop:
                     "round": self._round,
                     "model": self.model,
                     "elapsed_ms": round(elapsed, 1),
-                    "request_last_message": self.messages[-1] if self.messages else None,
+                    "request_last_message": messages[-1] if messages else None,
                     "response": {
                         "content_len": len(content),
                         "reasoning_len": len(reasoning),

@@ -14,8 +14,8 @@
     <script>
         (function initTheme() {
             const theme = localStorage.getItem('theme') || 'dark';
-            if (theme === 'light') {
-                document.documentElement.classList.add('light-theme');
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
             }
         })();
     </script>
@@ -234,7 +234,7 @@
     <section id="chatPanel" class="chat-panel" aria-hidden="true">
         <div class="chat-panel-header">
             <div>
-                <h3><i class="fas fa-comments"></i> 对话助手</h3>
+                <h3><i class="fas fa-comments"></i> 对话助手 <span class="chat-status-dot" title="在线"></span></h3>
                 <div class="chat-run-badge">账号级聊天记录</div>
             </div>
             <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
@@ -285,6 +285,12 @@
                 }
             }
         });
+        if (typeof marked.setOptions === 'function') {
+            marked.setOptions({
+                gfm: true,
+                breaks: true,
+            });
+        }
 
         // ========== 鉴权守卫 ==========
         function authHeaders() {
@@ -333,6 +339,7 @@
         const chatAttachBtn = document.getElementById('chatAttachBtn');
         const chatSendBtn = document.getElementById('chatSendBtn');
         const chatStatusHint = document.getElementById('chatStatusHint');
+        const chatComposer = document.querySelector('.chat-composer');
         
         let filesData = [];
         let currentRunId = null;
@@ -446,7 +453,11 @@
         }
 
         function formatChatContent(text) {
-            return escapeChatHtml(text).replace(/\n/g, '<br>');
+            const safeText = escapeChatHtml(text);
+            if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
+                return marked.parse(safeText);
+            }
+            return safeText.replace(/\n/g, '<br>');
         }
 
         function formatFileSize(size) {
@@ -518,7 +529,7 @@
             chatMessages.innerHTML = history.map(msg => `
                 ${msg.role === 'notice' ? `
                     <div class="chat-notice">
-                        <span>${formatChatContent(msg.content)}</span>
+                        <span class="markdown-body chat-markdown">${formatChatContent(msg.content)}</span>
                     </div>
                 ` : `
                 <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
@@ -527,7 +538,7 @@
                         ${formatChatTimestamp(msg) ? ` · ${formatChatTimestamp(msg)}` : ''}
                     </div>
                     <div class="chat-message-bubble">
-                        ${formatChatContent(msg.content)}
+                        <div class="markdown-body chat-markdown">${formatChatContent(msg.content)}</div>
                         ${renderChatAttachments(msg.attachments)}
                     </div>
                 </div>
@@ -542,6 +553,10 @@
             chatAttachBtn.disabled = chatSending;
             chatAttachmentInput.disabled = chatSending;
             chatStatusHint.textContent = chatSending ? '正在处理...' : '账号级多轮对话';
+            if (chatComposer) {
+                chatComposer.classList.toggle('is-busy', chatSending);
+                chatComposer.setAttribute('aria-busy', chatSending ? 'true' : 'false');
+            }
         }
 
         function renderChatAttachmentDrafts() {
@@ -1151,6 +1166,10 @@
         chatCloseBtn.onclick = () => setChatOpen(false);
         chatSendBtn.onclick = () => sendChatMessage();
         chatInput.addEventListener('keydown', (event) => {
+            if (chatSending) {
+                event.preventDefault();
+                return;
+            }
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 sendChatMessage();

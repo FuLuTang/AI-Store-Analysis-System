@@ -246,11 +246,18 @@
         </div>
         <div class="chat-composer">
             <textarea id="chatInput" class="chat-input" placeholder="输入你想问的问题..." rows="3"></textarea>
+            <input type="file" id="chatAttachmentInput" hidden multiple>
+            <div id="chatAttachmentDrafts" class="chat-attachment-drafts"></div>
             <div class="chat-composer-actions">
                 <span id="chatStatusHint" class="chat-status-hint">账号级多轮对话</span>
-                <button id="chatSendBtn" class="btn" type="button">
-                    <i class="fas fa-paper-plane"></i> 发送
-                </button>
+                <div class="chat-action-buttons">
+                    <button id="chatAttachBtn" class="chat-icon-btn" type="button" title="添加附件" aria-label="添加附件">
+                        <i class="fas fa-paperclip"></i>
+                    </button>
+                    <button id="chatSendBtn" class="btn" type="button">
+                        <i class="fas fa-paper-plane"></i> 发送
+                    </button>
+                </div>
             </div>
         </div>
     </section>
@@ -321,6 +328,9 @@
         const chatCloseBtn = document.getElementById('chatCloseBtn');
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
+        const chatAttachmentInput = document.getElementById('chatAttachmentInput');
+        const chatAttachmentDrafts = document.getElementById('chatAttachmentDrafts');
+        const chatAttachBtn = document.getElementById('chatAttachBtn');
         const chatSendBtn = document.getElementById('chatSendBtn');
         const chatStatusHint = document.getElementById('chatStatusHint');
         
@@ -335,6 +345,7 @@
         let chatMessagesCache = [];
         let chatHistoryLoaded = false;
         let chatHistoryLoadPromise = null;
+        let chatPendingFiles = [];
         
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
@@ -438,6 +449,24 @@
             return escapeChatHtml(text).replace(/\n/g, '<br>');
         }
 
+        function formatFileSize(size) {
+            const bytes = Number(size || 0);
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+        }
+
+        function renderChatAttachments(attachments) {
+            if (!Array.isArray(attachments) || attachments.length === 0) return '';
+            return `<div class="chat-attachments">${attachments.map(item => `
+                <div class="chat-attachment-chip" title="${escapeChatHtml(item.originalName || '')}">
+                    <i class="fas fa-paperclip"></i>
+                    <span>${escapeChatHtml(item.originalName || '附件')}</span>
+                    ${item.size !== undefined ? `<small>${formatFileSize(item.size)}</small>` : ''}
+                </div>
+            `).join('')}</div>`;
+        }
+
         function normalizeChatRecord(record) {
             if (!record || typeof record !== 'object') return null;
             if (!record.role) return null;
@@ -476,6 +505,7 @@
             }
 
             const history = chatMessagesCache.filter(msg => {
+                if (msg.role === 'notice') return String(msg.content || '').trim().length > 0;
                 if (msg.role === 'user') return true;
                 if (msg.role !== 'assistant') return false;
                 return String(msg.content || '').trim().length > 0;
@@ -486,13 +516,22 @@
             }
 
             chatMessages.innerHTML = history.map(msg => `
+                ${msg.role === 'notice' ? `
+                    <div class="chat-notice">
+                        <span>${formatChatContent(msg.content)}</span>
+                    </div>
+                ` : `
                 <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
                     <div class="chat-message-role">
                         ${msg.role === 'user' ? '你' : 'AI'}
                         ${formatChatTimestamp(msg) ? ` · ${formatChatTimestamp(msg)}` : ''}
                     </div>
-                    <div class="chat-message-bubble">${formatChatContent(msg.content)}</div>
+                    <div class="chat-message-bubble">
+                        ${formatChatContent(msg.content)}
+                        ${renderChatAttachments(msg.attachments)}
+                    </div>
                 </div>
+                `}
             `).join('');
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
@@ -500,7 +539,57 @@
         function updateChatComposerState() {
             chatSendBtn.disabled = chatSending;
             chatInput.disabled = chatSending;
-            chatStatusHint.textContent = chatSending ? 'AI 正在回复...' : '账号级多轮对话';
+            chatAttachBtn.disabled = chatSending;
+            chatAttachmentInput.disabled = chatSending;
+            chatStatusHint.textContent = chatSending ? '正在处理...' : '账号级多轮对话';
+        }
+
+        function renderChatAttachmentDrafts() {
+            if (!chatAttachmentDrafts) return;
+            if (chatPendingFiles.length === 0) {
+                chatAttachmentDrafts.innerHTML = '';
+                return;
+            }
+            chatAttachmentDrafts.innerHTML = chatPendingFiles.map((file, idx) => `
+                <div class="chat-attachment-draft">
+                    <i class="fas fa-paperclip"></i>
+                    <span title="${escapeChatHtml(file.name)}">${escapeChatHtml(file.name)}</span>
+                    <small>${formatFileSize(file.size)}</small>
+                    <button type="button" data-chat-attachment-remove="${idx}" title="移除附件" aria-label="移除附件">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            `).join('');
+            chatAttachmentDrafts.querySelectorAll('[data-chat-attachment-remove]').forEach(btn => {
+                btn.onclick = () => {
+                    const idx = Number(btn.getAttribute('data-chat-attachment-remove'));
+                    chatPendingFiles.splice(idx, 1);
+                    renderChatAttachmentDrafts();
+                };
+            });
+        }
+
+        async function uploadChatAttachments(files) {
+            if (!files.length) return [];
+            const formData = new FormData();
+            files.forEach(file => formData.append('attachments', file));
+            const response = await fetch('/api/chatbot/attachments', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: formData
+            });
+            if (!response.ok) {
+                let errorText = '附件上传失败';
+                try {
+                    const errorData = await response.json();
+                    errorText = errorData.detail || errorText;
+                } catch (_) {
+                    errorText = await response.text() || errorText;
+                }
+                throw new Error(errorText);
+            }
+            const data = await response.json();
+            return Array.isArray(data.attachments) ? data.attachments : [];
         }
 
         async function loadChatHistory() {
@@ -527,25 +616,39 @@
 
         async function sendChatMessage() {
             const content = chatInput.value.trim();
-            if (!content || chatSending) return;
+            const filesToUpload = [...chatPendingFiles];
+            if ((!content && filesToUpload.length === 0) || chatSending) return;
 
             chatInput.value = '';
             chatSending = true;
             updateChatComposerState();
             await loadChatHistory().catch(() => {});
 
-            const userMessage = { role: 'user', content, datetime: new Date().toISOString() };
-            const assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
-            chatMessagesCache.push(userMessage);
-            chatMessagesCache.push(assistantMessage);
-            renderChatMessages();
+            let userMessage = null;
+            let assistantMessage = null;
 
             try {
+                const uploadedAttachments = await uploadChatAttachments(filesToUpload);
+                chatPendingFiles = [];
+                renderChatAttachmentDrafts();
+
+                userMessage = {
+                    role: 'user',
+                    content: content || '请查看本次上传的附件。',
+                    attachments: uploadedAttachments,
+                    datetime: new Date().toISOString()
+                };
+                assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
+                chatMessagesCache.push(userMessage);
+                chatMessagesCache.push(assistantMessage);
+                renderChatMessages();
+
                 const response = await fetch('/api/chatbot', {
                     method: 'POST',
                     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        content
+                        content,
+                        attachmentIds: uploadedAttachments.map(item => item.attachmentId)
                     })
                 });
 
@@ -574,6 +677,10 @@
                 }
                 await loadChatHistory().catch(() => {});
             } catch (err) {
+                if (!assistantMessage) {
+                    assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
+                    chatMessagesCache.push(assistantMessage);
+                }
                 assistantMessage.content = `对话失败：${err.message}`;
             } finally {
                 chatSending = false;
@@ -581,6 +688,13 @@
                 renderChatMessages();
             }
         }
+
+        chatAttachBtn.addEventListener('click', () => chatAttachmentInput.click());
+        chatAttachmentInput.addEventListener('change', () => {
+            chatPendingFiles = chatPendingFiles.concat(Array.from(chatAttachmentInput.files || []));
+            chatAttachmentInput.value = '';
+            renderChatAttachmentDrafts();
+        });
 
         window.onload = async () => {
             updateThemeIcon();

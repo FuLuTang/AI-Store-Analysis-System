@@ -3,13 +3,17 @@ import logging
 import sys
 import time
 import asyncio
+import hashlib
+import mimetypes
+import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Callable, Optional
 
 from openai import OpenAI
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from packages.agents.core.chat_agent_loop import ChatAgentLoop
@@ -28,6 +32,10 @@ logger.propagate = False
 CHATBOT_DIRNAME = "chatbot"
 CHATBOT_HISTORY_FILENAME = "chat.jsonl"
 CHATBOT_WORKSPACE_DIRNAME = "workspace"
+CHATBOT_FILES_DIRNAME = "files"
+CHATBOT_ATTACHMENTS_FILENAME = "attachments.jsonl"
+CHATBOT_MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024
+CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE = 20
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 MODEL_MESSAGE_KEYS = {
     "role",
@@ -39,6 +47,8 @@ MODEL_MESSAGE_KEYS = {
     "refusal",
     "audio",
 }
+HISTORY_EXTRA_KEYS = {"attachments"}
+NOTICE_NAME = "notice"
 
 
 class ChatbotStreamError(Exception):
@@ -56,6 +66,79 @@ def _preview_text(text: str, limit: int = 180) -> str:
     if len(compact) <= limit:
         return compact
     return compact[:limit] + "..."
+
+
+def _safe_original_name(filename: str | None) -> str:
+    name = Path(str(filename or "unnamed")).name.strip()
+    return name or "unnamed"
+
+
+def _safe_extension(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if not suffix:
+        return ""
+    if not re.fullmatch(r"\.[a-z0-9]{1,16}", suffix):
+        return ""
+    return suffix
+
+
+def _public_attachment_record(record: dict) -> dict:
+    return {
+        "attachmentId": record.get("attachmentId", ""),
+        "originalName": record.get("originalName", ""),
+        "storedName": record.get("storedName", ""),
+        "mimeType": record.get("mimeType", "application/octet-stream"),
+        "size": record.get("size", 0),
+        "sha256": record.get("sha256", ""),
+        "createdAt": record.get("createdAt", ""),
+        "relativePath": record.get("relativePath", ""),
+    }
+
+
+def _format_attachment_context(attachments: list[dict]) -> str:
+    if not attachments:
+        return ""
+    lines = ["", "", "该条客服会话消息引用了以下附件，必要时请用工具读取相对路径："]
+    for idx, item in enumerate(attachments, 1):
+        lines.append(
+            f"{idx}. {item.get('originalName', 'unnamed')} "
+            f"(attachmentId={item.get('attachmentId', '')}, "
+            f"path={item.get('relativePath', '')}, "
+            f"mime={item.get('mimeType', 'application/octet-stream')}, "
+            f"size={item.get('size', 0)} bytes)"
+        )
+    return "\n".join(lines)
+
+
+def _is_notice_message(message: dict) -> bool:
+    return (
+        str(message.get("role", "")).strip().lower() == "system"
+        and str(message.get("name", "")).strip().lower() == NOTICE_NAME
+    )
+
+
+def _history_time(message: dict) -> str:
+    return str(message.get("datetime") or message.get("time") or "").strip()
+
+
+def _public_history_messages(messages: list[dict]) -> list[dict]:
+    visible: list[dict] = []
+    for message in messages:
+        role = str(message.get("role", "")).strip().lower()
+        if _is_notice_message(message):
+            notice = {
+                "role": NOTICE_NAME,
+                "content": str(message.get("content") or ""),
+            }
+            notice_time = _history_time(message)
+            if notice_time:
+                notice["datetime"] = notice_time
+            visible.append(notice)
+            continue
+        if role == "system":
+            continue
+        visible.append(message)
+    return visible
 
 
 def _clone_message_fields(message: dict, *, include_datetime: bool) -> dict:
@@ -76,6 +159,14 @@ def _clone_message_fields(message: dict, *, include_datetime: bool) -> dict:
         cloned["datetime"] = message.get("datetime") or _now_iso()
     elif include_datetime and message.get("datetime"):
         cloned["datetime"] = message.get("datetime")
+    elif include_datetime and _is_notice_message(message) and message.get("time"):
+        cloned["time"] = message.get("time")
+
+    if include_datetime:
+        for key in HISTORY_EXTRA_KEYS:
+            value = message.get(key)
+            if isinstance(value, list):
+                cloned[key] = value
 
     if role == "assistant" and cloned.get("content") is None:
         cloned["content"] = None if "tool_calls" in cloned else ""
@@ -86,6 +177,10 @@ def _clone_message_fields(message: dict, *, include_datetime: bool) -> dict:
 def _normalize_message_for_model(message: dict) -> dict:
     cloned = _clone_message_fields(message, include_datetime=False)
     cloned.pop("datetime", None)
+    if cloned.get("role") == "user":
+        attachment_context = _format_attachment_context(message.get("attachments") or [])
+        if attachment_context:
+            cloned["content"] = f"{str(cloned.get('content') or '').strip()}{attachment_context}".strip()
     return cloned
 
 
@@ -158,6 +253,117 @@ class ChatbotHistoryStore:
 history_store = ChatbotHistoryStore()
 
 
+class ChatbotAttachmentStore:
+    def __init__(self):
+        self._locks: dict[str, Lock] = {}
+        self._locks_guard = Lock()
+
+    def files_dir(self, account_dir: Path) -> Path:
+        return account_dir / CHATBOT_DIRNAME / CHATBOT_FILES_DIRNAME
+
+    def metadata_path(self, account_dir: Path) -> Path:
+        return account_dir / CHATBOT_DIRNAME / CHATBOT_ATTACHMENTS_FILENAME
+
+    def _get_lock(self, account_dir: Path) -> Lock:
+        key = str(account_dir)
+        with self._locks_guard:
+            lock = self._locks.get(key)
+            if not lock:
+                lock = Lock()
+                self._locks[key] = lock
+            return lock
+
+    def load_index(self, account_dir: Path) -> dict[str, dict]:
+        path = self.metadata_path(account_dir)
+        if not path.exists():
+            return {}
+
+        index: dict[str, dict] = {}
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        record = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    attachment_id = str(record.get("attachmentId") or "").strip()
+                    if attachment_id:
+                        index[attachment_id] = _public_attachment_record(record)
+        except FileNotFoundError:
+            return {}
+        return index
+
+    def resolve_many(self, account_dir: Path, attachment_ids: list[str]) -> list[dict]:
+        if len(attachment_ids) > CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE:
+            raise HTTPException(status_code=400, detail=f"单次会话最多引用 {CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE} 个附件")
+        index = self.load_index(account_dir)
+        records: list[dict] = []
+        missing: list[str] = []
+        seen: set[str] = set()
+        for attachment_id in attachment_ids:
+            clean_id = str(attachment_id or "").strip()
+            if not clean_id or clean_id in seen:
+                continue
+            seen.add(clean_id)
+            record = index.get(clean_id)
+            if not record:
+                missing.append(clean_id)
+                continue
+            records.append(record)
+        if missing:
+            raise HTTPException(status_code=400, detail=f"附件不存在或无权访问: {', '.join(missing)}")
+        return records
+
+    async def save_uploads(self, account_dir: Path, uploads: list[UploadFile]) -> list[dict]:
+        if not uploads:
+            raise HTTPException(status_code=400, detail="缺少附件")
+        if len(uploads) > CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE:
+            raise HTTPException(status_code=400, detail=f"单次最多上传 {CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE} 个附件")
+
+        files_dir = self.files_dir(account_dir)
+        metadata_path = self.metadata_path(account_dir)
+        files_dir.mkdir(parents=True, exist_ok=True)
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+
+        records: list[dict] = []
+        for upload in uploads:
+            original_name = _safe_original_name(upload.filename)
+            raw = await upload.read()
+            if len(raw) > CHATBOT_MAX_ATTACHMENT_SIZE:
+                raise HTTPException(status_code=400, detail=f"附件过大(>100MB): {original_name}")
+
+            attachment_id = uuid.uuid4().hex
+            ext = _safe_extension(original_name)
+            stored_name = f"{attachment_id}{ext}"
+            target = files_dir / stored_name
+            target.write_bytes(raw)
+            mime_type = upload.content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+            record = {
+                "attachmentId": attachment_id,
+                "originalName": original_name,
+                "storedName": stored_name,
+                "mimeType": mime_type,
+                "size": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "createdAt": _now_iso(),
+                "relativePath": f"{CHATBOT_FILES_DIRNAME}/{stored_name}",
+            }
+            records.append(record)
+
+        lock = self._get_lock(account_dir)
+        with lock:
+            with metadata_path.open("a", encoding="utf-8") as fh:
+                for record in records:
+                    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return [_public_attachment_record(record) for record in records]
+
+
+attachment_store = ChatbotAttachmentStore()
+
+
 def _chatbot_root(account_dir: Path) -> Path:
     return account_dir / CHATBOT_DIRNAME
 
@@ -173,19 +379,21 @@ def _build_chatbot_workspace(account_dir: Path) -> Workspace:
     )
 
 
-def _build_initial_messages(history: list[dict], content: str) -> tuple[list[dict], list[dict]]:
-    initial_messages: list[dict] = []
+def _build_initial_messages(history: list[dict], content: str, attachments: list[dict]) -> tuple[list[dict], list[dict]]:
+    initial_messages: list[dict] = [
+        {"role": "system", "content": build_chatbot_system_content()}
+    ]
     prefix_to_persist: list[dict] = []
 
-    has_system = any(str(item.get("role", "")).strip().lower() == "system" for item in history)
-    if not has_system:
-        system_message = {"role": "system", "content": build_chatbot_system_content()}
-        initial_messages.append(system_message)
-        prefix_to_persist.append(system_message)
-
-    initial_messages.extend(_normalize_message_for_model(item) for item in history)
+    initial_messages.extend(
+        _normalize_message_for_model(item)
+        for item in history
+        if str(item.get("role", "")).strip().lower() != "system"
+    )
 
     user_message = {"role": "user", "content": content, "datetime": _now_iso()}
+    if attachments:
+        user_message["attachments"] = attachments
     initial_messages.append(_normalize_message_for_model(user_message))
     prefix_to_persist.append(user_message)
     return initial_messages, prefix_to_persist
@@ -219,7 +427,22 @@ def register_chatbot_routes(
     @router.get("/api/chatbot/history")
     def get_chatbot_history(x_fzt_key: Optional[str] = Header(default=None)):
         session = resolve_session(x_fzt_key)
-        return {"messages": history_store.load_messages(session.account_dir)}
+        return {"messages": _public_history_messages(history_store.load_messages(session.account_dir))}
+
+    @router.post("/api/chatbot/attachments")
+    async def upload_chatbot_attachments(
+        attachments: list[UploadFile] = File(...),
+        x_fzt_key: Optional[str] = Header(default=None),
+    ):
+        session = resolve_session(x_fzt_key)
+        saved = await attachment_store.save_uploads(session.account_dir, attachments)
+        logger.info(
+            "[chatbot] stage=attachments_uploaded account=%s count=%d bytes=%d",
+            getattr(session, "account_id", "-"),
+            len(saved),
+            sum(int(item.get("size") or 0) for item in saved),
+        )
+        return {"attachments": saved}
 
     @router.post("/api/chatbot")
     async def chat_stream(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
@@ -235,8 +458,19 @@ def register_chatbot_routes(
             or payload.get("text")
             or ""
         ).strip()
-        if not content:
-            raise HTTPException(status_code=400, detail="缺少聊天内容")
+
+        raw_attachment_ids = payload.get("attachmentIds") or []
+        if raw_attachment_ids is None:
+            raw_attachment_ids = []
+        if not isinstance(raw_attachment_ids, list):
+            raise HTTPException(status_code=400, detail="attachmentIds 必须是数组")
+        attachment_ids = [str(item).strip() for item in raw_attachment_ids if str(item or "").strip()]
+        attachments = attachment_store.resolve_many(session.account_dir, attachment_ids)
+
+        if not content and not attachments:
+            raise HTTPException(status_code=400, detail="缺少聊天内容或附件")
+        if not content and attachments:
+            content = "请查看本次上传的附件。"
 
         request_id = f"chatbot:{int(time.time() * 1000)}"
 
@@ -248,7 +482,7 @@ def register_chatbot_routes(
             raise HTTPException(status_code=500, detail="LLM 配置不完整")
 
         history = history_store.load_messages(session.account_dir)
-        initial_messages, prefix_to_persist = _build_initial_messages(history, content)
+        initial_messages, prefix_to_persist = _build_initial_messages(history, content, attachments)
         history_store.append_messages(session.account_dir, prefix_to_persist)
         ws = _build_chatbot_workspace(session.account_dir)
 
@@ -260,9 +494,10 @@ def register_chatbot_routes(
             len(initial_messages),
         )
         logger.info(
-            "[chatbot] request_id=%s history_chars=%d content_preview=%s",
+            "[chatbot] request_id=%s history_chars=%d attachments=%d content_preview=%s",
             request_id,
             sum(len(str(item.get("content", "") or "")) for item in history),
+            len(attachments),
             _preview_text(content),
         )
 

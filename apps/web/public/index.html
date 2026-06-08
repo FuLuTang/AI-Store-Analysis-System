@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="chat.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
@@ -339,7 +340,6 @@
         const chatAttachBtn = document.getElementById('chatAttachBtn');
         const chatSendBtn = document.getElementById('chatSendBtn');
         const chatStatusHint = document.getElementById('chatStatusHint');
-        const chatComposer = document.querySelector('.chat-composer');
         
         let filesData = [];
         let currentRunId = null;
@@ -348,7 +348,6 @@
         let pollingInterval = null;
         let sseSource = null;
         let progressClosed = false;
-        let chatSending = false;
         let chatMessagesCache = [];
         let chatHistoryLoaded = false;
         let chatHistoryLoadPromise = null;
@@ -548,15 +547,11 @@
         }
 
         function updateChatComposerState() {
-            chatSendBtn.disabled = chatSending;
-            chatInput.disabled = chatSending;
-            chatAttachBtn.disabled = chatSending;
-            chatAttachmentInput.disabled = chatSending;
-            chatStatusHint.textContent = chatSending ? '正在处理...' : '账号级多轮对话';
-            if (chatComposer) {
-                chatComposer.classList.toggle('is-busy', chatSending);
-                chatComposer.setAttribute('aria-busy', chatSending ? 'true' : 'false');
-            }
+            chatSendBtn.disabled = false;
+            chatInput.disabled = false;
+            chatAttachBtn.disabled = false;
+            chatAttachmentInput.disabled = false;
+            chatStatusHint.textContent = '账号级多轮对话';
         }
 
         function renderChatAttachmentDrafts() {
@@ -632,11 +627,9 @@
         async function sendChatMessage() {
             const content = chatInput.value.trim();
             const filesToUpload = [...chatPendingFiles];
-            if ((!content && filesToUpload.length === 0) || chatSending) return;
+            if (!content && filesToUpload.length === 0) return;
 
             chatInput.value = '';
-            chatSending = true;
-            updateChatComposerState();
             await loadChatHistory().catch(() => {});
 
             let userMessage = null;
@@ -698,8 +691,6 @@
                 }
                 assistantMessage.content = `对话失败：${err.message}`;
             } finally {
-                chatSending = false;
-                updateChatComposerState();
                 renderChatMessages();
             }
         }
@@ -1166,10 +1157,6 @@
         chatCloseBtn.onclick = () => setChatOpen(false);
         chatSendBtn.onclick = () => sendChatMessage();
         chatInput.addEventListener('keydown', (event) => {
-            if (chatSending) {
-                event.preventDefault();
-                return;
-            }
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 sendChatMessage();

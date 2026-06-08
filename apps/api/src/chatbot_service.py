@@ -50,37 +50,12 @@ MODEL_MESSAGE_KEYS = {
 }
 HISTORY_EXTRA_KEYS = {"attachments"}
 NOTICE_NAME = "notice"
-CHATBOT_ACTIVE_REQUESTS: set[str] = set()
-CHATBOT_ACTIVE_REQUESTS_LOCK = Lock()
 
 
 class ChatbotStreamError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
         self.message = message
-
-
-def _acquire_chatbot_request(account_id: object):
-    account_key = str(account_id or "").strip()
-    if not account_key:
-        raise HTTPException(status_code=400, detail="缺少账号信息")
-
-    with CHATBOT_ACTIVE_REQUESTS_LOCK:
-        if account_key in CHATBOT_ACTIVE_REQUESTS:
-            raise HTTPException(status_code=409, detail="当前会话正在处理中，请稍后再发消息")
-        CHATBOT_ACTIVE_REQUESTS.add(account_key)
-
-    released = False
-
-    def _release():
-        nonlocal released
-        if released:
-            return
-        released = True
-        with CHATBOT_ACTIVE_REQUESTS_LOCK:
-            CHATBOT_ACTIVE_REQUESTS.discard(account_key)
-
-    return _release
 
 
 def _now_iso() -> str:
@@ -520,10 +495,8 @@ def register_chatbot_routes(
     async def chat_stream(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
         t0 = time.perf_counter()
         session = resolve_session(x_fzt_key)
-        release_chatbot_request = _acquire_chatbot_request(getattr(session, "account_id", None))
         payload = await request.json()
         if not isinstance(payload, dict):
-            release_chatbot_request()
             raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
 
         content = str(
@@ -553,7 +526,6 @@ def register_chatbot_routes(
         api_key = preset.get("apiKey", "")
         model = preset.get("model", "")
         if not base_url or not api_key or not model:
-            release_chatbot_request()
             raise HTTPException(status_code=500, detail="LLM 配置不完整")
 
         history = history_store.load_messages(session.account_dir)
@@ -683,13 +655,7 @@ def register_chatbot_routes(
                     "datetime": _now_iso(),
                 }])
                 yield error_text.encode("utf-8")
-            finally:
-                release_chatbot_request()
 
-        try:
-            return StreamingResponse(_logged_stream(), media_type="text/plain; charset=utf-8")
-        except Exception:
-            release_chatbot_request()
-            raise
+        return StreamingResponse(_logged_stream(), media_type="text/plain; charset=utf-8")
 
     app.include_router(router)

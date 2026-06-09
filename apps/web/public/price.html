@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最优价格推算 - AI 分析系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+    <script src="chat.js" defer></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@6/dist/echarts.min.js"></script>
+    <style>
+        /* Overrides & Layout customizations for Optimal Price Estimation */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 1.5rem;
+            align-items: start;
+            margin-top: 1rem;
+        }
+
+        .dashboard-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .dashboard-main {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 900px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Status banner with matching theme variables */
+        .status-banner {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius-sm);
+            background: var(--placeholder-bg);
+            border: 1px solid var(--border);
+            color: var(--primary);
+            font-size: 0.9rem;
+            min-height: 44px;
+            font-weight: 500;
+            margin-bottom: 1.25rem;
+        }
+
+        /* Results & pricing recommendation elements */
+        .result-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .result-subtitle {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+            margin-top: 0.25rem;
+        }
+
+        .result-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 640px) {
+            .result-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .price-card {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            background: var(--card-bg);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            transition: border-color 0.2s ease;
+        }
+
+        .price-card:hover {
+            border-color: var(--border-hover);
+        }
+
+        .price-rank {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 1.8rem;
+            padding: 0 0.6rem;
+            border-radius: var(--radius-sm);
+            background: var(--primary-glow);
+            color: var(--primary);
+            font-size: 0.8rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+            border: 1px solid rgba(99, 102, 241, 0.15);
+        }
+
+        .price-value {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .price-reason {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            line-height: 1.55;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.75rem;
+        }
+
+        @media (max-width: 640px) {
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .meta-card {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.8rem;
+            background: var(--placeholder-bg);
+        }
+
+        .meta-card .label {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .meta-card .value {
+            color: var(--text);
+            font-weight: 700;
+            font-size: 0.92rem;
+            word-break: break-all;
+        }
+
+        .chart-shell {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--card-bg);
+            box-shadow: var(--shadow);
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .chart-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .chart-head strong {
+            color: var(--text);
+            font-size: 0.92rem;
+        }
+
+        .chart-note {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .chart-stage {
+            width: 100%;
+            height: 320px;
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+        }
+
+        @media (max-width: 900px) {
+            .chart-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .chart-card {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--placeholder-bg);
+            padding: 0.8rem;
+        }
+
+        .chart-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .chart-card-title {
+            color: var(--text);
+            font-size: 0.88rem;
+            font-weight: 700;
+        }
+
+        .chart-card-note {
+            color: var(--text-muted);
+            font-size: 0.76rem;
+        }
+
+        /* Precheck validation list and items */
+        .precheck-list,
+        .issue-list,
+        .warning-list {
+            display: grid;
+            gap: 0.5rem;
+            margin-top: 0.8rem;
+        }
+
+        .list-item {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem 0.8rem;
+            background: var(--placeholder-bg);
+            font-size: 0.86rem;
+            line-height: 1.5;
+            color: var(--text);
+        }
+
+        .list-item strong {
+            display: block;
+            margin-bottom: 0.25rem;
+            color: var(--text);
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .list-item.ok {
+            border-color: rgba(16, 185, 129, 0.25);
+            background: rgba(16, 185, 129, 0.06);
+            color: var(--success);
+        }
+
+        .list-item.warn {
+            border-color: rgba(245, 158, 11, 0.28);
+            background: rgba(245, 158, 11, 0.08);
+            color: var(--warning);
+        }
+
+        .list-item.err {
+            border-color: rgba(244, 63, 94, 0.28);
+            background: rgba(244, 63, 94, 0.08);
+            color: var(--error);
+        }
+
+        /* Badge design components */
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.35rem 0.6rem;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--input-bg);
+            color: var(--text-muted);
+            font-size: 0.76rem;
+        }
+
+        .badge.success {
+            color: var(--success);
+            border-color: rgba(16, 185, 129, 0.3);
+            background: rgba(16, 185, 129, 0.06);
+        }
+
+        .badge.warn {
+            color: var(--warning);
+            border-color: rgba(245, 158, 11, 0.28);
+            background: rgba(245, 158, 11, 0.08);
+        }
+
+        /* Running console panel */
+        .log-panel {
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--log-bg);
+            color: var(--log-text);
+            padding: 0.85rem;
+            height: 180px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.55;
+        }
+
+        .log-line {
+            display: flex;
+            gap: 0.45rem;
+            align-items: flex-start;
+            padding: 0.15rem 0;
+            word-break: break-all;
+        }
+
+        .log-time {
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .log-level {
+            flex-shrink: 0;
+            color: var(--accent);
+        }
+
+        .log-node {
+            color: var(--primary);
+            flex-shrink: 0;
+        }
+
+        .empty-state {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+            padding: 0.5rem 0;
+            text-align: center;
+        }
+    </style>
+    <script>
+        (function initTheme() {
+            const theme = localStorage.getItem('theme') || 'dark';
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
+            }
+        })();
+    </script>
+</head>
+<body>
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
+    <div class="container">
+        <nav>
+            <a href="index.html" class="active">用户工作台</a>
+            <a href="history.html">历史记录</a>
+            <a href="monitor.html">后台监控流</a>
+            <a href="admin.html">管理员配置</a>
+            <div class="nav-right">
+                <select id="costTierSelect" class="nav-select">
+                    <option value="medium">平衡优先</option>
+                    <option value="low">省钱优先</option>
+                    <option value="high">效果优先</option>
+                </select>
+                <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
+                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                    <i class="fas fa-sign-out-alt"></i> 退出
+                </button>
+            </div>
+        </nav>
+
+        <div class="workspace-switcher">
+            <a href="index.html" class="workspace-card workspace-card-analysis">
+                <div class="workspace-card-top">
+                    <div class="workspace-icon"><i class="fas fa-chart-line"></i></div>
+                    <div class="workspace-copy">
+                        <h2>经营分析诊断</h2>
+                        <p>导入门店经营数据，进入 AI 诊断工作台，输出结构化报告与优化建议。</p>
+                    </div>
+                </div>
+                <div class="workspace-cta"><i class="fas fa-arrow-right"></i><span>进入诊断工作台</span></div>
+            </a>
+            <a href="price.html" class="workspace-card workspace-card-price active">
+                <div class="workspace-card-top">
+                    <div class="workspace-icon"><i class="fas fa-tags"></i></div>
+                    <div class="workspace-copy">
+                        <h2>最优价格推算</h2>
+                        <p>上传销售明细、TXT 文本或 ZIP 压缩包，完成归一化换算并输出可解释的推荐价格。</p>
+                    </div>
+                </div>
+                <div class="workspace-cta"><i class="fas fa-arrow-right"></i><span>当前价格工作台</span></div>
+            </a>
+        </div>
+
+        <header>
+            <h1>最优价格推算</h1>
+            <p class="subtitle">上传销售明细、TXT 文本或 ZIP 压缩包，完成归一化换算并输出可解释的推荐价格。</p>
+        </header>
+
+        <div class="dashboard-grid">
+            <!-- 左侧：参数与操作 -->
+            <div class="dashboard-sidebar">
+                <div class="card sidebar-card">
+                    <h3><i class="fas fa-file-import"></i> 数据导入</h3>
+
+                    <div id="dropZone" class="drop-zone">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p id="fileName">拖放数据文件到此处</p>
+                        <span class="upload-hint">支持 JSON / CSV / Excel / TXT / ZIP，单文件小于 100MB</span>
+                        <input type="file" id="fileInput" hidden multiple accept=".json,.xlsx,.xls,.csv,.txt,.zip">
+                    </div>
+                    <div id="fileList" class="file-list"></div>
+
+                    <div id="uploadProgressArea" style="display:none; margin-bottom: 0.75rem;">
+                        <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.25rem; display:flex; justify-content:space-between;">
+                            <span><i class="fas fa-upload"></i> 上传进度</span>
+                            <span id="uploadProgressText">0%</span>
+                        </div>
+                        <div class="progress-track" style="height:6px;">
+                            <div class="progress-bar" id="uploadProgressBar" style="animation:none; background:var(--primary); background-size:100%;"></div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>商品名称</label>
+                        <input id="productNameInput" type="text" class="form-input" placeholder="例如：阿莫西林胶囊 0.25g*24粒">
+                        <div class="helper">名称越具体，命中历史记录的概率越高。</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>候选数量</label>
+                        <select id="candidateCountSelect" class="form-select">
+                            <option value="2" selected>2 个候选价格</option>
+                            <option value="3">3 个候选价格</option>
+                            <option value="4">4 个候选价格</option>
+                            <option value="5">5 个候选价格</option>
+                        </select>
+                    </div>
+
+
+
+                    <div class="action-bar flex-column" style="gap: 0.75rem; margin-bottom: 0;">
+                        <button id="startBtn" class="btn w-full" disabled>
+                            <i class="fas fa-play"></i> 开始价格推算
+                        </button>
+                        <button id="stopBtn" class="btn-danger w-full" style="display:none;" hidden>
+                            <i class="fas fa-stop-circle"></i> 强制停止
+                        </button>
+                        <a class="btn-secondary w-full" href="monitor.html" style="text-decoration:none; justify-content: center;">
+                            <i class="fas fa-eye"></i> 打开监控流
+                        </a>
+                    </div>
+                </div>
+
+                <!-- 状态卡片 -->
+                <div class="card sidebar-card">
+                    <h3><i class="fas fa-info-circle"></i> 当前状态</h3>
+                    <div style="font-size: 0.9rem; margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: var(--text-muted);">当前登录:</span>
+                        <strong id="authStateText" style="color: var(--text);">未检查</strong>
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; word-break: break-all;" id="authStateHint">
+                        会从本地保存 of X-FZT-Key 读取。
+                    </div>
+                    <hr style="margin: 0.75rem 0; border: none; border-top: 1px solid var(--border);">
+                    <div style="font-size: 0.9rem;">
+                        <span style="color: var(--text-muted);">支持格式:</span>
+                        <div style="margin-top: 0.25rem; font-weight: 500;">JSON / CSV / Excel / TXT / ZIP</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：执行结果与实时日志 -->
+            <div class="dashboard-main">
+                <!-- 顶部的状态横幅 -->
+                <div class="status-banner" id="statusBanner" style="margin-bottom: 0;">
+                    <i class="fas fa-circle-info"></i>
+                    <span id="statusBannerText">等待上传数据并启动价格推算。</span>
+                </div>
+
+                <!-- 系统处理进度 -->
+                <div class="card" id="progressCard" style="display: none; padding: 1.8rem 2rem;">
+                    <div class="progress-section" id="progressContainer" style="display:block; border-top:none; padding:0; margin:0; max-width:100%;">
+                        <div class="progress-header">
+                            <span class="progress-header-title"><i class="fas fa-tasks"></i> 系统处理进度 <span class="progress-header-hint">(预计 3-5 分钟)</span></span>
+                            <span class="progress-text" id="progressText">0%</span>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-bar" id="progressBar"></div>
+                        </div>
+                        <div id="currentStepText"></div>
+                    </div>
+                </div>
+
+                <!-- 推算结果卡片 -->
+                <div class="card" id="resultCard" style="padding: 1.8rem 2rem;">
+                    <div class="result-head">
+                        <div>
+                            <h3 style="margin: 0 0 0.25rem; font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                                <i class="fas fa-tags" style="color: var(--success);"></i> 推算结果
+                            </h3>
+                            <div class="result-subtitle" id="resultSubtitle">启动任务后，候选推荐价格会在这里显示。</div>
+                        </div>
+                        <span class="badge" id="resultBadge"><i class="fas fa-sparkles"></i> 等待结果</span>
+                    </div>
+
+                    <div class="result-grid" id="resultGrid" style="margin-top: 1rem;">
+                        <div class="empty-state">当前还没有推算结果。</div>
+                    </div>
+
+                    <div class="chart-shell">
+                        <div class="chart-head">
+                            <strong>渲染后的最终图表</strong>
+                            <div class="chart-controls" style="display: flex; align-items: center; gap: 0.5rem;">
+                                <label for="binWidthSelect" style="font-size: 0.8rem; color: var(--text-muted); cursor: pointer;">价格聚合颗粒度:</label>
+                                <select id="binWidthSelect" class="form-select" style="padding: 0.2rem 0.5rem; font-size: 0.78rem; width: auto; height: auto; margin: 0; line-height: 1.2; border-radius: var(--radius-sm); background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
+                                    <option value="0.01">原始价格 (0.01元)</option>
+                                    <option value="0.1">0.1 元</option>
+                                    <option value="0.2">0.2 元</option>
+                                    <option value="0.5" selected>0.5 元</option>
+                                    <option value="1.0">1.0 元</option>
+                                    <option value="2.0">2.0 元</option>
+                                    <option value="5.0">5.0 元</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="renderedCharts" class="chart-grid"></div>
+                    </div>
+
+                    <div class="meta-grid" id="resultMeta" style="margin-top: 1.25rem;"></div>
+                </div>
+
+                <!-- 实时日志卡片 -->
+                <div class="card" id="logCard" style="padding: 1.5rem 1.8rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <h3 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fas fa-terminal" style="color: var(--primary);"></i> 实时执行日志
+                        </h3>
+                        <button id="clearLogBtn" class="btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.78rem;">
+                            <i class="fas fa-broom"></i> 清空
+                        </button>
+                    </div>
+                    <div class="log-panel" id="logPanel" style="margin-top: 0; box-shadow: inset 0 2px 8px rgba(0,0,0,0.15);">
+                        <div class="empty-state" style="color: var(--text-muted);">等待任务启动后输出日志。</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const allowedDataExtensions = ['.json', '.xlsx', '.xls', '.csv', '.txt'];
+        const allowedArchiveExtensions = ['.zip'];
+        const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const productNameInput = document.getElementById('productNameInput');
+        const candidateCountSelect = document.getElementById('candidateCountSelect');
+        const costTierSelect = document.getElementById('costTierSelect');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const clearLogBtn = document.getElementById('clearLogBtn');
+        const statusBannerText = document.getElementById('statusBannerText');
+        const authStateText = document.getElementById('authStateText');
+        const authStateHint = document.getElementById('authStateHint');
+        const resultSubtitle = document.getElementById('resultSubtitle');
+        const resultBadge = document.getElementById('resultBadge');
+        const resultGrid = document.getElementById('resultGrid');
+        const renderedChartsEl = document.getElementById('renderedCharts');
+        const resultMeta = document.getElementById('resultMeta');
+        const progressBar = document.getElementById('progressBar');
+        const progressContainer = document.getElementById('progressContainer');
+        const currentStepText = document.getElementById('currentStepText');
+        const logPanel = document.getElementById('logPanel');
+
+        let selectedFiles = [];
+        let selectedLabels = [];
+        let currentResult = null;
+        let currentFullResult = null;
+        let pollingTimer = null;
+        let sseSource = null;
+        let latestProgress = 0;
+        let hasConnectedStream = false;
+        let renderedChartInstances = [];
+        let currentNormalizedPoints = [];
+        let currentPurchasePrice = null;
+        let currentCharts = [];
+
+        function authKey() {
+            return (localStorage.getItem('X-FZT-Key') || '').trim();
+        }
+
+        function authHeaders() {
+            const key = authKey();
+            return key ? { 'X-FZT-Key': key } : {};
+        }
+
+        function updateAuthState() {
+            const key = authKey();
+            if (key) {
+                authStateText.textContent = '已登录';
+                authStateHint.textContent = `Key: ${key.slice(0, 6)}...${key.slice(-4)}`;
+            } else {
+                authStateText.textContent = '未登录';
+                authStateHint.textContent = '请先登录后再运行推算。';
+            }
+        }
+
+        function setStatus(text) {
+            statusBannerText.textContent = text;
+        }
+
+        function setProgress(value) {
+            const next = Math.max(0, Math.min(100, Number(value) || 0));
+            latestProgress = Math.max(latestProgress, next);
+            progressBar.style.width = `${latestProgress}%`;
+            const pctText = document.getElementById('progressText');
+            if (pctText) pctText.textContent = `${Math.round(latestProgress)}%`;
+            const card = document.getElementById('progressCard');
+            if (card && latestProgress > 0) card.style.display = 'block';
+            if (latestProgress >= 100) {
+                progressBar.classList.add('is-terminal');
+                if (currentStepText) currentStepText.setAttribute('data-terminal', 'true');
+            }
+        }
+
+        function resetProgress() {
+            latestProgress = 0;
+            progressBar.style.width = '0%';
+            const pctText = document.getElementById('progressText');
+            if (pctText) pctText.textContent = '0%';
+            const card = document.getElementById('progressCard');
+            if (card) card.style.display = 'none';
+            if (currentStepText) currentStepText.textContent = '';
+        }
+
+        function connectStream() {
+            if (sseSource) return;
+            const key = authKey();
+            if (!key) return;
+            const urlParams = new URLSearchParams(window.location.search);
+            const queryRunId = urlParams.get('run_id');
+            let streamUrl = `/api/price-recommendations/stream?x-fzt-key=${encodeURIComponent(key)}`;
+            if (queryRunId) {
+                streamUrl += '&run_id=' + encodeURIComponent(queryRunId);
+            }
+            sseSource = new EventSource(streamUrl);
+            hasConnectedStream = true;
+            sseSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'reset') {
+                        clearLogs();
+                        return;
+                    }
+                    if (data.type === 'done') {
+                        disconnectStream();
+                        return;
+                    }
+                    handleStreamEvent(data);
+                } catch (e) {
+                    console.error('SSE parse error', e);
+                }
+            };
+            sseSource.onerror = () => {
+                disconnectStream();
+            };
+        }
+
+        function disconnectStream() {
+            if (sseSource) {
+                sseSource.close();
+                sseSource = null;
+            }
+        }
+
+        function handleStreamEvent(data) {
+            if (typeof data.progress === 'number') {
+                setProgress(data.progress);
+            }
+            if (data.type === 'log') {
+                const level = (data.level || 'info').toLowerCase();
+                if (level === 'status') {
+                    if (currentStepText) currentStepText.textContent = data.message || '';
+                    return;
+                }
+                appendLog(data);
+                if (data.message) setStatus(data.message);
+            } else if (data.type === 'progress') {
+                appendLog({
+                    time: data.time,
+                    level: 'debug',
+                    nodeId: data.nodeId,
+                    message: `progress ${data.current}/${data.total}`
+                });
+                if (data.total) {
+                    setProgress((data.current / data.total) * 100);
+                }
+            } else if (data.type === 'tally') {
+                appendLog({
+                    time: data.time,
+                    level: 'debug',
+                    nodeId: data.nodeId,
+                    message: JSON.stringify(data.tally || {})
+                });
+            } else if (data.type === 'workflow') {
+                appendLog({
+                    time: data.time,
+                    level: 'info',
+                    nodeId: 'workflow',
+                    message: data.workflow || ''
+                });
+            } else if (data.type !== 'reset') {
+                appendLog({
+                    time: data.time,
+                    level: data.level || 'info',
+                    nodeId: data.nodeId || data.type || '',
+                    message: data.message || data.workflow || data.status || JSON.stringify(data)
+                });
+            }
+        }
+
+        function appendLog(entry) {
+            const row = document.createElement('div');
+            row.className = 'log-line';
+            const time = document.createElement('span');
+            time.className = 'log-time';
+            time.textContent = `[${entry.time || '--:--:--'}]`;
+            const level = document.createElement('span');
+            level.className = 'log-level';
+            level.textContent = `[${entry.level || 'info'}]`;
+            const node = document.createElement('span');
+            node.className = 'log-node';
+            node.textContent = entry.nodeId ? `[${entry.nodeId}]` : '';
+            const msg = document.createElement('span');
+            msg.textContent = entry.message || '';
+            row.append(time, level, node, msg);
+            if (logPanel.querySelector('.empty-state')) {
+                logPanel.innerHTML = '';
+            }
+            logPanel.appendChild(row);
+            while (logPanel.children.length > 200) {
+                logPanel.removeChild(logPanel.firstChild);
+            }
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
+
+        function clearLogs() {
+            logPanel.innerHTML = '<div class="empty-state" style="color:#cbd5e1;">等待任务启动后输出日志。</div>';
+        }
+
+        function renderFileList() {
+            if (selectedFiles.length === 0) {
+                fileList.innerHTML = '';
+                dropZone.classList.remove('has-files');
+                document.getElementById('fileName').innerText = '拖放数据文件到此处';
+                return;
+            }
+            dropZone.classList.add('has-files');
+            document.getElementById('fileName').innerText = `已准备 ${selectedFiles.length} 个数据文件`;
+            fileList.innerHTML = '';
+            selectedFiles.forEach((file, index) => {
+                const item = document.createElement('div');
+                item.className = 'file-item';
+
+                const ext = getExtension(file.name);
+                let iconClass = 'fa-file-alt';
+                let iconStyle = 'color: var(--text-muted);';
+                if (ext === '.xlsx' || ext === '.xls') { iconClass = 'fa-file-excel'; iconStyle = 'color: #10b981;'; }
+                else if (ext === '.pdf') { iconClass = 'fa-file-pdf'; iconStyle = 'color: #ef4444;'; }
+                else if (ext === '.csv') { iconClass = 'fa-file-csv'; iconStyle = 'color: #6366f1;'; }
+                else if (ext === '.json') { iconClass = 'fa-file-code'; iconStyle = 'color: #6366f1;'; }
+                else if (ext === '.txt') { iconClass = 'fa-file-lines'; iconStyle = 'color: #0f766e;'; }
+
+                item.innerHTML = `
+                    <div class="file-progress-fill"></div>
+                    <span class="file-info" title="${file.name}">
+                        <i class="fas ${iconClass}" style="${iconStyle}"></i>
+                        <span class="file-name">${file.name}</span>
+                        <small style="color: var(--text-muted); margin-left: 0.25rem;">(${selectedLabels[index] || ''})</small>
+                    </span>
+                    <button class="file-remove-btn" onclick="window.removeFile(${index}, event)" title="删除文件">
+                        <i class="fas fa-times"></i>
+                    </button>
+                `;
+                fileList.appendChild(item);
+            });
+        }
+
+        window.removeFile = function(idx, event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            selectedFiles.splice(idx, 1);
+            selectedLabels.splice(idx, 1);
+            renderFileList();
+            syncButtons();
+            const hasData = selectedFiles.length > 0;
+            if (hasData) {
+                setStatus(`已加载 ${selectedFiles.length} 个数据文件，等待启动任务。`);
+            } else {
+                setStatus('等待上传数据并启动价格推算。');
+            }
+        };
+
+        async function expandZipFile(file) {
+            if (!window.JSZip) {
+                throw new Error('ZIP 解析组件尚未加载');
+            }
+            const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+            const files = [];
+            for (const entryName of Object.keys(zip.files)) {
+                const entry = zip.files[entryName];
+                if (entry.dir) continue;
+                const ext = getExtension(entry.name);
+                if (!allowedDataExtensions.includes(ext)) continue;
+                const bytes = await entry.async('uint8array');
+                const cleanName = entry.name.replace(/[\\/]+/g, '_').trim();
+                const name = `${file.name.replace(/\.[^.]+$/, '')}__${cleanName}`;
+                files.push(new File([bytes], name, { type: 'application/octet-stream' }));
+            }
+            return files;
+        }
+
+        async function normalizeFiles(list) {
+            const nextFiles = [];
+            const nextLabels = [];
+            for (const file of Array.from(list)) {
+                assertFileSize(file);
+                const ext = getExtension(file.name);
+                if (allowedDataExtensions.includes(ext)) {
+                    nextFiles.push(file);
+                    nextLabels.push('原始文件');
+                    continue;
+                }
+                if (allowedArchiveExtensions.includes(ext)) {
+                    const expanded = await expandZipFile(file);
+                    if (expanded.length === 0) {
+                        throw new Error(`压缩包 ${file.name} 内没有可用的数据文件`);
+                    }
+                    expanded.forEach((item) => {
+                        assertFileSize(item);
+                        nextFiles.push(item);
+                        nextLabels.push(`来自 ${file.name}`);
+                    });
+                    continue;
+                }
+                throw new Error(`不支持的文件格式: ${file.name}`);
+            }
+            return { files: nextFiles, labels: nextLabels };
+        }
+
+        function getExtension(name) {
+            const idx = name.lastIndexOf('.');
+            return idx >= 0 ? name.slice(idx).toLowerCase() : '';
+        }
+
+        async function handleFiles(list) {
+            try {
+                const { files, labels } = await normalizeFiles(list);
+                selectedFiles = files;
+                selectedLabels = labels;
+                renderFileList();
+                syncButtons();
+                if (selectedFiles.length > 0) {
+                    setStatus(`已加载 ${selectedFiles.length} 个数据文件，等待启动任务。`);
+                }
+            } catch (e) {
+                alert(e.message || '文件处理失败');
+            }
+        }
+
+        function syncButtons() {
+            const hasFiles = selectedFiles.length > 0;
+            const hasProduct = productNameInput.value.trim().length > 0;
+            startBtn.disabled = !(hasFiles && hasProduct);
+        }
+
+        function renderResult(data, fullText) {
+            if (!data) return;
+            if (typeof data === 'string') {
+                try {
+                    let jsonStr = data.trim();
+                    if (jsonStr.startsWith('```json')) {
+                        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+                    } else if (jsonStr.startsWith('```')) {
+                        jsonStr = jsonStr.replace(/```/g, '').trim();
+                    }
+                    data = JSON.parse(jsonStr);
+                } catch (e) {
+                    console.error("Failed to parse result in price.html:", e);
+                    return;
+                }
+            }
+            currentResult = data;
+            currentFullResult = fullText || '';
+            resultBadge.className = 'badge success';
+            resultBadge.innerHTML = '<i class="fas fa-sparkles"></i> 已完成';
+            const bestPrice = Number(data.bestPrice);
+            const metric = data.bestPriceMetric === 'profit' ? '利润' : '销售额';
+            resultSubtitle.textContent = Number.isFinite(bestPrice)
+                ? `${data.productName || '目标商品'} 的最优售价 ${formatPrice(bestPrice)} 元（按${metric}排序）`
+                : `${data.productName || '目标商品'} 的候选价格已生成。`;
+
+            const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
+            if (recommendations.length === 0) {
+                resultGrid.innerHTML = '<div class="empty-state">没有生成推算结果。</div>';
+            } else {
+                resultGrid.innerHTML = recommendations.map((item) => `
+                    <div class="price-card">
+                        <div class="price-rank">TOP ${item.rank ?? ''}</div>
+                        <div class="price-value">${formatPrice(item.price)} <span style="font-size:1rem;font-weight:700;color:var(--text-muted);">${escapeHtml(item.unit || '元')}</span></div>
+                        <div class="price-reason">${escapeHtml(item.reason || '暂无解释')}</div>
+                    </div>
+                `).join('');
+            }
+
+            const evidence = data.evidence || {};
+            const range = data.validPriceRange || {};
+            const normalizedPoints = Array.isArray(data.normalizedPoints) ? data.normalizedPoints : [];
+            const renderedFinalCharts = Array.isArray(data.renderedFinalCharts) ? data.renderedFinalCharts : [];
+            const timeGranularity = data.timeGranularity || data.dataFitting?.timeGranularity || '未指定';
+            resultMeta.innerHTML = [
+                metaCard('有效价格区间', `${formatPrice(range.min)} - ${formatPrice(range.max)}`),
+                metaCard('命中行数', String(evidence.matchedRows ?? 0)),
+                metaCard('归一化点数', String(normalizedPoints.length)),
+                metaCard('时间颗粒度', timeGranularity),
+                metaCard('图表数量', String(renderedFinalCharts.length)),
+                metaCard('最优售价', formatPrice(data.bestPrice)),
+            ].join('');
+
+            // 缓存全局数据以便动态重算分桶
+            currentNormalizedPoints = normalizedPoints;
+            currentPurchasePrice = data.dataFitting?.purchasePrice ?? data.evidence?.purchasePrice ?? null;
+            currentCharts = renderedFinalCharts;
+
+            const selectEl = document.getElementById('binWidthSelect');
+            const binWidth = selectEl ? parseFloat(selectEl.value) : 0.5;
+            updateCharts(binWidth);
+        }
+
+        function updateCharts(binWidth) {
+            if (!currentNormalizedPoints || currentNormalizedPoints.length === 0) {
+                if (renderedChartsEl) {
+                    renderedChartsEl.innerHTML = '<div class="empty-state">暂无可渲染的图表。</div>';
+                }
+                return;
+            }
+
+            // 按设定的价格区间分桶
+            const grouped = {};
+            currentNormalizedPoints.forEach(p => {
+                const price = Number(p.price);
+                const qty = Number(p.normalizedQty ?? p.rawQty ?? 0);
+                if (!Number.isFinite(price) || !Number.isFinite(qty)) return;
+
+                let bucketPrice;
+                if (binWidth <= 0.01) {
+                    bucketPrice = Math.round(price * 100) / 100;
+                } else {
+                    bucketPrice = Math.round(price / binWidth) * binWidth;
+                    bucketPrice = Math.round(bucketPrice * 100) / 100; // 避免 JS 浮点数精度问题
+                }
+
+                if (!grouped[bucketPrice]) {
+                    grouped[bucketPrice] = { qtySum: 0, count: 0 };
+                }
+                grouped[bucketPrice].qtySum += qty;
+                grouped[bucketPrice].count += 1;
+            });
+
+            const sortedPrices = Object.keys(grouped).map(Number).sort((a, b) => a - b);
+            const binnedPoints = sortedPrices.map(price => {
+                const g = grouped[price];
+                return {
+                    price: price,
+                    normalizedQty: g.qtySum / g.count // 使用周销售量的均值
+                };
+            });
+
+            const hasPurchasePrice = currentPurchasePrice !== null && currentPurchasePrice !== undefined && currentPurchasePrice > 0;
+            const updatedCharts = [];
+
+            if (currentCharts && currentCharts.length > 0) {
+                currentCharts.forEach(origChart => {
+                    if (origChart.source) {
+                        // 维度数据源风格（售价、销量、销售额、利润综合单图表）
+                        const source = [];
+                        binnedPoints.forEach(item => {
+                            const p = item.price;
+                            const q = item.normalizedQty;
+                            const rev = p * q;
+                            const row = [p, q, rev];
+                            if (hasPurchasePrice) {
+                                row.push((p - currentPurchasePrice) * q);
+                            }
+                            source.push(row);
+                        });
+
+                        const dims = ["售价", "销量", "销售额"];
+                        if (hasPurchasePrice) {
+                            dims.push("利润");
+                        }
+
+                        updatedCharts.push({
+                            ...origChart,
+                            dimensions: dims,
+                            source: source
+                        });
+                    } else if (origChart.points) {
+                        // 点集风格（多个拆分折线图）
+                        const points = [];
+                        binnedPoints.forEach(item => {
+                            const p = item.price;
+                            const q = item.normalizedQty;
+                            const rev = p * q;
+                            const prof = hasPurchasePrice ? (p - currentPurchasePrice) * q : rev;
+
+                            if (origChart.basis === "normalizedQty") {
+                                points.push([p, q]);
+                            } else if (origChart.basis === "sales_revenue") {
+                                points.push([p, rev]);
+                            } else if (origChart.basis === "profit" || origChart.basis === "sales_revenue_proxy") {
+                                points.push([p, prof]);
+                            } else if (origChart.basis === "revenue_profit") {
+                                points.push([rev, prof]);
+                            } else {
+                                points.push([p, q]);
+                            }
+                        });
+                        updatedCharts.push({
+                            ...origChart,
+                            points: points
+                        });
+                    }
+                });
+            } else {
+                // 默认售价综合分析备用图表
+                const source = [];
+                binnedPoints.forEach(item => {
+                    const p = item.price;
+                    const q = item.normalizedQty;
+                    const rev = p * q;
+                    const row = [p, q, rev];
+                    if (hasPurchasePrice) {
+                        row.push((p - currentPurchasePrice) * q);
+                    }
+                    source.push(row);
+                });
+                updatedCharts.push({
+                    name: "售价综合分析",
+                    xLabel: "售价",
+                    yAxisLeft: {"name": "销量", "unit": "件"},
+                    yAxisRight: {"name": "金额", "unit": "元"},
+                    dimensions: hasPurchasePrice ? ["售价", "销量", "销售额", "利润"] : ["售价", "销量", "销售额"],
+                    source: source,
+                });
+            }
+
+            renderRenderedCharts(updatedCharts, []);
+        }
+
+        function metaCard(label, value) {
+            return `<div class="meta-card"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div></div>`;
+        }
+
+        function listItem(title, body) {
+            return `<div class="list-item"><strong>${escapeHtml(title)}</strong><span style="white-space:pre-line;">${escapeHtml(body)}</span></div>`;
+        }
+
+        function flagBadge(label, status) {
+            const state = String(status || '').toLowerCase();
+            if (state === 'ok' || state === 'success') {
+                return `<span class="badge success"><i class="fas fa-circle-check"></i> ${label} 通过</span>`;
+            }
+            if (state === 'warning') {
+                return `<span class="badge warn"><i class="fas fa-circle-exclamation"></i> ${label} 注意</span>`;
+            }
+            return `<span class="badge"><i class="fas fa-circle-xmark"></i> ${label} 待确认</span>`;
+        }
+
+        function joinText(list) {
+            if (!Array.isArray(list) || list.length === 0) return '未识别';
+            return list.join('、');
+        }
+
+        function assertFileSize(file) {
+            if (file.size > MAX_FILE_SIZE_BYTES) {
+                const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+                throw new Error(`文件 ${file.name} 大小为 ${sizeMb}MB，单文件需小于 100MB`);
+            }
+        }
+
+        function disposeRenderedCharts() {
+            renderedChartInstances.forEach((chart) => {
+                try {
+                    chart.dispose();
+                } catch (e) {
+                    console.error(e);
+                }
+            });
+            renderedChartInstances = [];
+        }
+
+        function renderRenderedCharts(charts, normalizedPoints) {
+            disposeRenderedCharts();
+            if (!renderedChartsEl) return;
+            const finalCharts = Array.isArray(charts) ? charts : [];
+            if (finalCharts.length === 0 && Array.isArray(normalizedPoints) && normalizedPoints.length > 0) {
+                finalCharts.push({
+                    name: "售价综合分析",
+                    xLabel: "售价",
+                    yAxisLeft: {"name": "销量", "unit": "件"},
+                    yAxisRight: {"name": "金额", "unit": "元"},
+                    dimensions: ["售价", "销量", "销售额"],
+                    source: normalizedPoints.map((item) => [
+                        Number(item.price),
+                        Number(item.normalizedQty),
+                        Number(item.price) * Number(item.normalizedQty)
+                    ]),
+                });
+            }
+
+            if (finalCharts.length === 0) {
+                renderedChartsEl.innerHTML = '<div class="empty-state">暂无可渲染的图表。</div>';
+                return;
+            }
+
+            renderedChartsEl.innerHTML = finalCharts.map((chart, index) => {
+                let note = '';
+                if (Array.isArray(chart.source)) {
+                    note = `${escapeHtml(chart.xLabel || '售价')} / ${escapeHtml(chart.yAxisLeft?.name || '销量')}、${escapeHtml(chart.yAxisRight?.name || '金额')}`;
+                } else {
+                    note = `${escapeHtml(chart.xLabel || '售价')} / ${escapeHtml(chart.yLabel || 'y')}`;
+                }
+                return `
+                    <div class="chart-card">
+                        <div class="chart-card-head">
+                            <div class="chart-card-title">${escapeHtml(chart.name || `图表 ${index + 1}`)}</div>
+                            <div class="chart-card-note">${note}</div>
+                        </div>
+                        <div class="chart-stage" id="renderedChart_${index}"></div>
+                    </div>
+                `;
+            }).join('');
+
+            finalCharts.forEach((chart, index) => {
+                const el = document.getElementById(`renderedChart_${index}`);
+                if (!el || !window.echarts) return;
+                const instance = window.echarts.init(el);
+                renderedChartInstances.push(instance);
+
+                const hasSource = Array.isArray(chart.source) && chart.source.length > 0;
+                const hasPoints = Array.isArray(chart.points) && chart.points.length > 0;
+
+                if (!hasSource && !hasPoints) {
+                    instance.setOption({
+                        title: {
+                            text: '暂无数据',
+                            left: 'center',
+                            top: 'middle',
+                            textStyle: { color: '#94a3b8', fontSize: 14, fontWeight: 500 }
+                        }
+                    });
+                    return;
+                }
+
+                const option = {
+                    animationDuration: 500,
+                    grid: { left: 52, right: hasSource ? 52 : 24, top: hasSource ? 40 : 24, bottom: 46 },
+                    xAxis: {
+                        type: 'value',
+                        scale: true,
+                        name: chart.xLabel || '售价',
+                        nameTextStyle: { color: '#94a3b8' },
+                        axisLabel: { color: '#94a3b8', formatter: (value) => Number(value).toFixed(2) },
+                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                    }
+                };
+
+                if (hasSource) {
+                    option.legend = {
+                        data: chart.dimensions.slice(1),
+                        textStyle: { color: '#94a3b8' },
+                        top: 0
+                    };
+                    option.tooltip = {
+                        trigger: 'axis',
+                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                        borderColor: 'rgba(148, 163, 184, 0.25)',
+                        textStyle: { color: '#e2e8f0' },
+                        formatter(params) {
+                            if (!params || params.length === 0) return '';
+                            let html = `售价：${formatPrice(params[0].value[0])} 元<br/>`;
+                            params.forEach(p => {
+                                const val = p.value[p.seriesIndex + 1];
+                                const unit = p.seriesName === '销量' ? '件' : '元';
+                                html += `${escapeHtml(p.seriesName)}：${Number(val).toFixed(2)} ${unit}<br/>`;
+                            });
+                            return html;
+                        }
+                    };
+                    option.dataset = {
+                        dimensions: chart.dimensions,
+                        source: chart.source
+                    };
+                    option.yAxis = [
+                        {
+                            type: 'value',
+                            name: chart.yAxisLeft?.name || '销量',
+                            nameTextStyle: { color: '#94a3b8' },
+                            axisLabel: { color: '#94a3b8' },
+                            splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                        },
+                        {
+                            type: 'value',
+                            name: chart.yAxisRight?.name || '金额',
+                            nameTextStyle: { color: '#94a3b8' },
+                            axisLabel: { color: '#94a3b8' },
+                            splitLine: { show: false }
+                        }
+                    ];
+                    option.series = chart.dimensions.slice(1).map((name) => {
+                        const isQty = name === '销量';
+                        return {
+                            name: name,
+                            type: 'line',
+                            smooth: true,
+                            yAxisIndex: isQty ? 0 : 1,
+                            encode: { x: '售价', y: name },
+                            symbol: 'circle',
+                            symbolSize: 8,
+                            lineStyle: { width: 3 },
+                            itemStyle: {
+                                color: name === '销量' ? '#38bdf8' : (name === '利润' ? '#10b981' : '#f59e0b')
+                            }
+                        };
+                    });
+                } else {
+                    const seriesData = chart.points
+                        .map((pair) => [Number(pair?.[0]), Number(pair?.[1])])
+                        .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+                        .sort((a, b) => a[0] - b[0]);
+
+                    option.tooltip = {
+                        trigger: 'axis',
+                        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                        borderColor: 'rgba(148, 163, 184, 0.25)',
+                        textStyle: { color: '#e2e8f0' },
+                        formatter(params) {
+                            const point = params?.[0];
+                            if (!point) return '';
+                            const [x, y] = point.data || [];
+                            return `${escapeHtml(chart.xLabel || 'X')}：${Number(x).toFixed(2)}<br/>${escapeHtml(chart.yLabel || 'Y')}：${Number(y).toFixed(2)}`;
+                        }
+                    };
+                    option.yAxis = {
+                        type: 'value',
+                        name: chart.yLabel || 'y',
+                        nameTextStyle: { color: '#94a3b8' },
+                        axisLabel: { color: '#94a3b8' },
+                        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } }
+                    };
+                    option.series = [
+                        {
+                            type: 'line',
+                            smooth: true,
+                            symbol: 'circle',
+                            symbolSize: 8,
+                            data: seriesData,
+                            lineStyle: { width: 3, color: '#38bdf8' },
+                            itemStyle: { color: '#0ea5e9', borderColor: '#e0f2fe', borderWidth: 1.5 },
+                            areaStyle: {
+                                color: {
+                                    type: 'linear',
+                                    x: 0,
+                                    y: 0,
+                                    x2: 0,
+                                    y2: 1,
+                                    colorStops: [
+                                        { offset: 0, color: 'rgba(56, 189, 248, 0.28)' },
+                                        { offset: 1, color: 'rgba(56, 189, 248, 0.03)' }
+                                    ]
+                                }
+                            }
+                        }
+                    ];
+                }
+
+                instance.setOption(option);
+            });
+        }
+
+        function formatPercent(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return '0%';
+            return `${Math.round(num * 100)}%`;
+        }
+
+        function formatPrice(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return '-';
+            return num.toFixed(2);
+        }
+
+        function escapeHtml(text) {
+            return String(text)
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function setUploadProgress(pct) {
+            const bar = document.getElementById('uploadProgressBar');
+            const text = document.getElementById('uploadProgressText');
+            const area = document.getElementById('uploadProgressArea');
+            if (bar) bar.style.width = Math.round(pct) + '%';
+            if (text) text.textContent = Math.round(pct) + '%';
+            if (area) area.style.display = 'block';
+            document.querySelectorAll('.file-item').forEach(el => {
+                el.classList.add('uploading');
+                const fill = el.querySelector('.file-progress-fill');
+                if (fill) fill.style.width = Math.round(pct) + '%';
+            });
+        }
+
+        function hideUploadProgress() {
+            const area = document.getElementById('uploadProgressArea');
+            if (area) area.style.display = 'none';
+            document.querySelectorAll('.file-item').forEach(el => {
+                el.classList.remove('uploading');
+                const fill = el.querySelector('.file-progress-fill');
+                if (fill) fill.style.width = '0%';
+            });
+        }
+
+        function startRecommendation() {
+            if (selectedFiles.length === 0) {
+                alert('请先选择数据文件');
+                return;
+            }
+            const productName = productNameInput.value.trim();
+            if (!productName) {
+                alert('请先输入商品名称');
+                return;
+            }
+
+            const formData = new FormData();
+            selectedFiles.forEach((file) => formData.append('files', file));
+            formData.append('productName', productName);
+            formData.append('candidateCount', candidateCountSelect.value || '2');
+            formData.append('costTier', costTierSelect.value || 'medium');
+
+            startBtn.disabled = true;
+            stopBtn.hidden = false;
+            resetProgress();
+            setUploadProgress(0);
+            setStatus('正在上传数据文件...');
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/price-recommendations');
+
+            const headers = authHeaders();
+            for (const [k, v] of Object.entries(headers)) {
+                xhr.setRequestHeader(k, v);
+            }
+
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    setUploadProgress(pct);
+                    setStatus(pct < 100 ? `正在上传数据文件... ${pct}%` : '上传完成，等待后端处理...');
+                }
+            };
+
+            xhr.onload = function () {
+                hideUploadProgress();
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        setStatus('任务已提交，正在运行...');
+                        connectStream();
+                        if (!pollingTimer) {
+                            pollingTimer = setInterval(refreshStatus, 2000);
+                        }
+                        refreshStatus();
+                    } catch (e) {
+                        alert('解析响应失败: ' + e.message);
+                        stopBtn.hidden = true;
+                        startBtn.disabled = false;
+                        setStatus('启动失败，请重试。');
+                    }
+                } else {
+                    let msg = xhr.responseText;
+                    try {
+                        const errData = JSON.parse(xhr.responseText);
+                        msg = typeof errData.detail === 'string' ? errData.detail : JSON.stringify(errData.detail || errData);
+                    } catch (_) {}
+                    alert('启动失败: ' + msg);
+                    stopBtn.hidden = true;
+                    startBtn.disabled = false;
+                    setStatus('启动失败，请重试。');
+                }
+            };
+
+            xhr.onerror = function () {
+                hideUploadProgress();
+                alert('网络错误，启动失败');
+                stopBtn.hidden = true;
+                startBtn.disabled = false;
+                setStatus('启动失败，请重试。');
+            };
+
+            xhr.send(formData);
+        }
+
+        async function refreshStatus() {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                const queryRunId = urlParams.get('run_id');
+                let statusUrl = '/api/price-recommendations/status';
+                if (queryRunId) {
+                    statusUrl += '?run_id=' + encodeURIComponent(queryRunId);
+                }
+                const resp = await fetch(statusUrl, { headers: authHeaders() });
+                const data = await resp.json();
+                
+                const status = data.status;
+                const isHistoryMode = !!queryRunId;
+                const terminal = !['queued', 'running'].includes(status);
+                
+                if (!isHistoryMode && ['queued', 'running'].includes(status)) {
+                    setStatus(status === 'running' ? '任务正在运行中...' : '任务正在排队...');
+                    stopBtn.hidden = false;
+                    startBtn.disabled = true;
+                    connectStream();
+                    if (!pollingTimer) {
+                        pollingTimer = setInterval(refreshStatus, 2000);
+                    }
+                } else {
+                    if (pollingTimer) {
+                        clearInterval(pollingTimer);
+                        pollingTimer = null;
+                    }
+                    stopBtn.hidden = true;
+                    if (isHistoryMode) {
+                        startBtn.disabled = true;
+                        productNameInput.disabled = true;
+                        candidateCountSelect.disabled = true;
+                        costTierSelect.disabled = true;
+                        dropZone.style.pointerEvents = 'none';
+                        dropZone.style.opacity = '0.7';
+                    } else {
+                        startBtn.disabled = selectedFiles.length === 0 || !productNameInput.value.trim();
+                    }
+                    
+                    if (status === 'completed' || status === 'error' || status === 'aborted') {
+                        if (!sseSource) connectStream();
+                    }
+
+                    if (status === 'completed') {
+                        setStatus(isHistoryMode ? '正在查看历史推算记录。' : '推算完成。');
+                    } else if (status === 'aborted') {
+                        setStatus(isHistoryMode ? '历史任务已停止。' : '任务已停止。');
+                    } else if (status === 'error') {
+                        setStatus(data.errorMessage ? `任务失败：${data.errorMessage}` : '任务失败。');
+                    }
+                }
+
+                if (data.result) {
+                    renderResult(data.result, data.fullResult || '');
+                    if (isHistoryMode && data.result.productName) {
+                        productNameInput.value = data.result.productName;
+                        if (data.result.candidateCount) {
+                            candidateCountSelect.value = String(data.result.candidateCount);
+                        }
+                    }
+                }
+                if (typeof data.result === 'object' && data.result && data.result.recommendations) {
+                    currentResult = data.result;
+                }
+                if (terminal && status !== 'completed' && data.errorMessage) {
+                    resultSubtitle.textContent = data.errorMessage;
+                    resultBadge.className = 'badge warn';
+                    resultBadge.innerHTML = '<i class="fas fa-triangle-exclamation"></i> 失败';
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+        dropZone.ondragover = (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        };
+        dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            handleFiles(e.dataTransfer.files);
+        };
+
+        productNameInput.oninput = syncButtons;
+        candidateCountSelect.onchange = syncButtons;
+        costTierSelect.onchange = syncButtons;
+
+        startBtn.onclick = startRecommendation;
+        stopBtn.onclick = async () => {
+            if (!confirm('确认要强制停止当前价格推算任务吗？')) return;
+            try {
+                await fetch('/api/price-recommendations/stop', { method: 'POST', headers: authHeaders() });
+                await refreshStatus();
+            } catch (e) {
+                console.error(e);
+            }
+        };
+        clearLogBtn.onclick = clearLogs;
+        const binWidthSelect = document.getElementById('binWidthSelect');
+        if (binWidthSelect) {
+            binWidthSelect.onchange = (e) => {
+                updateCharts(parseFloat(e.target.value));
+            };
+        }
+        window.addEventListener('resize', () => {
+            renderedChartInstances.forEach((chart) => chart.resize());
+        });
+
+        async function init() {
+            updateAuthState();
+            const key = authKey();
+            if (!key) {
+                setStatus('未登录，点击右上角登录后再运行任务。');
+            } else {
+                try {
+                    const resp = await fetch('/api/auth/verify', { method: 'POST', headers: authHeaders() });
+                    if (!resp.ok) {
+                        setStatus('登录状态失效，请重新登录。');
+                    }
+                } catch (e) {
+                    setStatus('无法验证登录状态。');
+                }
+            }
+            await refreshStatus();
+            syncButtons();
+        }
+
+        setInterval(() => {
+            updateAuthState();
+        }, 30000);
+
+        init();
+
+        window.toggleTheme = function() {
+            const isDark = document.documentElement.classList.toggle('dark-theme');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateThemeIcon();
+        };
+
+        function updateThemeIcon() {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                const isDark = document.documentElement.classList.contains('dark-theme');
+                icon.className = isDark ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+        setTimeout(updateThemeIcon, 0);
+    </script>
+</body>
+</html>

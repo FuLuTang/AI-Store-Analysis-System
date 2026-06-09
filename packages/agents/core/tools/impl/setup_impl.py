@@ -1,5 +1,6 @@
 """底层纯函数：workspace 生命周期管理"""
 import json
+from typing import Callable, Optional
 
 from ...workspace import Workspace
 
@@ -38,7 +39,10 @@ def cleanup_workspace_impl(ws: Workspace, mode: str = "large") -> str:
         return f"workspace {ws.report_id} 大文件已清理，保留 audit trail"
 
 
-def list_tables_impl(ws: Workspace) -> str:
+def list_tables_impl(
+    ws: Workspace,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     """列出 DuckDB 中可用表"""
     import duckdb
     con = duckdb.connect(ws.duckdb_path)
@@ -47,7 +51,10 @@ def list_tables_impl(ws: Workspace) -> str:
             "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
         ).fetchall()
         names = [r[0] for r in rows]
-        return f"DuckDB 可用表 ({len(names)}): {', '.join(names)}" if names else "DuckDB 中暂无表"
+        result = f"DuckDB 可用表 ({len(names)}): {', '.join(names)}" if names else "DuckDB 中暂无表"
+        if emit_log:
+            emit_log("custom_agent", {"level": "info", "message": "✅ list_tables 调用成功"})
+        return result
     finally:
         con.close()
 
@@ -61,12 +68,15 @@ def design_plan_impl(ws: Workspace, plan_json: str) -> str:
     return f"Plan registered: {len(plan)} steps"
 
 
-def read_plan_short_impl(ws: Workspace) -> str:
+def read_plan_short_impl(
+    ws: Workspace,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     """读取 plan.json，返回简短版本。由 model wrapper 自动注入。
 
     展示规则：
       只展示当前 in_progress（或 failed）步骤的完整信息，
-      已完成和 pending 步骤不展示任何细节，只计个数。
+      已完成和 pending 步骤不展示任何细节，只显示title。
       目的是强制 LLM 必须调 check_plan 才能解锁下一步的指令。
     """
 
@@ -75,36 +85,44 @@ def read_plan_short_impl(ws: Workspace) -> str:
         return "(plan 尚未初始化)"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
-    total = len(plan)
-    done = 0
-    pending = 0
-
-    lines: list[str] = []
+    done_lines = []
+    current_lines = []
+    pending_lines = []
 
     for idx, step in enumerate(plan):
         status = step["status"]
         if status == "success":
-            done += 1
-            continue  # 已完成的不展示
+            done_lines.append(f"- [已完成步骤] {step['title']}")
         elif status in ("in_progress", "partial", "failed"):
-            lines.append(f"--- 当前步骤：{step['title']} ---")
-            lines.append(f"detail: {step['detail']}")
-            check = step.get("check", "")
-            if check:
-                lines.append(f"check: {check.strip().split(chr(10))[0]}")
+            current_lines.append(f"--- 当前步骤：{step['title']} ---")
+            current_lines.append(f"detail: {step['detail']}")
             errors = step.get("errors", [])
             if errors:
-                lines.append(f"errors: {'; '.join(errors)}")
-            lines.append("")
-            lines.append(f"完成后调 check_plan({idx}) 验证并查看下一步。")
+                current_lines.append(f"errors: {'; '.join(errors)}")
+            current_lines.append("")
+            current_lines.append(f"完成后调 check_plan({idx}) 验证并查看下一步的detail信息。")
         elif status == "pending":
-            pending += 1
-            continue  # 不展示
+            pending_lines.append(f"- [待做步骤] {step['title']}")
 
-    if pending:
-        lines.append(f"剩余 {pending} 步待完成（已通过 check_plan 后会解锁）。")
+    final_lines = []
+    if done_lines:
+        final_lines.append("已完成步骤：")
+        final_lines.extend(done_lines)
+        final_lines.append("")
 
-    if not lines:
-        lines.append("所有步骤已完成。")
+    if current_lines:
+        final_lines.extend(current_lines)
 
-    return "\n".join(lines)
+    if pending_lines:
+        if current_lines:
+            final_lines.append("")
+        final_lines.append("后续待做步骤：")
+        final_lines.extend(pending_lines)
+
+    if not current_lines:
+        final_lines.append("所有步骤已完成。请调用 finish_task 结束任务。")
+
+    result = "\n".join(final_lines)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": "✅ read_plan_short 调用成功: plan.json"})
+    return result

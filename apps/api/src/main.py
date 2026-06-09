@@ -9,7 +9,7 @@ import uuid
 import datetime
 import hashlib
 import logging
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from threading import Lock
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +29,19 @@ from packages.agents.core.errors import PipelineAbortedError
 from packages.agents.registry import create_pipeline
 from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
 from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
+from packages.price_recommendation.models import (
+    DEFAULT_CANDIDATE_COUNT,
+    MAX_CANDIDATE_COUNT,
+    PRICE_RECOMMENDATION_TASK_TYPE,
+    PRICE_SUPPORTED_EXTENSIONS,
+)
+from packages.price_recommendation.service import (
+    read_price_service_result,
+    run_price_precheck,
+    run_price_workflow,
+)
+from apps.api.src.chatbot_service import register_chatbot_routes
+from packages.agents.core.file_domains import SERVICE_DOCS_DOMAIN, join_domain_path, split_domain_path
 
 load_dotenv()
 
@@ -63,6 +76,7 @@ app.add_middleware(
 STORAGE_DIR = ROOT_DIR / "storage"
 _ensure_file_log()
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
+SERVICE_DOCS_DIR = STORAGE_DIR / "service_docs"
 LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
 MAX_UPLOAD_FILE_SIZE = 100 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
@@ -75,12 +89,18 @@ PRESET_SECRET = os.getenv("LLM_PRESET_SECRET", "").strip()
 
 GLOBAL_AGENT_PIPELINE = "custom"
 
+SERVICE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def normalize_reasoning_effort(value: Optional[str]) -> str:
     if not isinstance(value, str):
         return DEFAULT_REASONING_EFFORT
     effort = value.strip().lower()
     return effort if effort in REASONING_EFFORT_OPTIONS else DEFAULT_REASONING_EFFORT
+
+
+def normalize_cost_tier(value: Optional[str]) -> str:
+    return normalize_reasoning_effort(value)
 
 
 def _default_llm_presets() -> dict:
@@ -99,7 +119,12 @@ def _default_llm_presets() -> dict:
     return {
         "low": {"call": _sub_config("low"), "fastcall": _sub_config("low")},
         "medium": {"call": _sub_config("medium"), "fastcall": _sub_config("medium")},
-        "high": {"call": _sub_config("high"), "fastcall": _sub_config("high")}
+        "high": {"call": _sub_config("high"), "fastcall": _sub_config("high")},
+        "chatbot": {
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "model": model,
+        },
     }
 
 
@@ -175,6 +200,22 @@ def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
         }
 
 
+def _sanitize_chatbot_preset(raw: Optional[dict], fallback: dict) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    base_url = data.get("baseUrl", fallback.get("baseUrl", ""))
+    api_key = data.get("apiKeyEnc")
+    if isinstance(api_key, str):
+        api_key = _decrypt_text(api_key)
+    else:
+        api_key = data.get("apiKey", fallback.get("apiKey", ""))
+    model = data.get("model", fallback.get("model", ""))
+    return {
+        "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback.get("baseUrl", "")),
+        "apiKey": api_key.strip() if isinstance(api_key, str) else str(fallback.get("apiKey", "")),
+        "model": model.strip() if isinstance(model, str) else str(fallback.get("model", "")),
+    }
+
+
 def _load_llm_presets() -> dict:
     defaults = _default_llm_presets()
     if LLM_PRESETS_FILE.exists():
@@ -184,6 +225,7 @@ def _load_llm_presets() -> dict:
             if isinstance(source, dict):
                 for effort in REASONING_EFFORT_OPTIONS:
                     defaults[effort] = _sanitize_preset_item(source.get(effort), defaults[effort])
+                defaults["chatbot"] = _sanitize_chatbot_preset(source.get("chatbot"), defaults["chatbot"])
         except Exception:
             pass
     return defaults
@@ -213,6 +255,9 @@ def set_global_api_key(raw_key: str):
                 preset["call"]["apiKey"] = key_value
             if "fastcall" in preset:
                 preset["fastcall"]["apiKey"] = key_value
+        chatbot_preset = GLOBAL_LLM_PRESETS.get("chatbot")
+        if isinstance(chatbot_preset, dict):
+            chatbot_preset["apiKey"] = key_value
         save_llm_presets_locked()
 
 
@@ -230,6 +275,16 @@ def get_llm_preset(reasoning_effort: Optional[str]) -> dict:
     return preset
 
 
+def get_chatbot_preset() -> dict:
+    with LLM_PRESETS_LOCK:
+        preset = GLOBAL_LLM_PRESETS.get("chatbot", {}).copy()
+    return {
+        "baseUrl": preset.get("baseUrl", ""),
+        "apiKey": preset.get("apiKey", ""),
+        "model": preset.get("model", ""),
+    }
+
+
 def get_all_llm_presets() -> dict:
     with LLM_PRESETS_LOCK:
         return {k: v.copy() for k, v in GLOBAL_LLM_PRESETS.items()}
@@ -239,22 +294,29 @@ def save_llm_presets_locked():
     LLM_PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
     safe_presets = {}
     for effort, preset in GLOBAL_LLM_PRESETS.items():
-        call_config = preset.get("call", {})
-        fast_config = preset.get("fastcall", {})
-        safe_presets[effort] = {
-            "call": {
-                "baseUrl": call_config.get("baseUrl", ""),
-                "apiKeyEnc": _encrypt_text(call_config.get("apiKey", "")),
-                "model": call_config.get("model", ""),
-                "reasoningEffort": call_config.get("reasoningEffort", effort)
-            },
-            "fastcall": {
-                "baseUrl": fast_config.get("baseUrl", ""),
-                "apiKeyEnc": _encrypt_text(fast_config.get("apiKey", "")),
-                "model": fast_config.get("model", ""),
-                "reasoningEffort": fast_config.get("reasoningEffort", effort)
+        if effort in REASONING_EFFORT_OPTIONS:
+            call_config = preset.get("call", {})
+            fast_config = preset.get("fastcall", {})
+            safe_presets[effort] = {
+                "call": {
+                    "baseUrl": call_config.get("baseUrl", ""),
+                    "apiKeyEnc": _encrypt_text(call_config.get("apiKey", "")),
+                    "model": call_config.get("model", ""),
+                    "reasoningEffort": call_config.get("reasoningEffort", effort)
+                },
+                "fastcall": {
+                    "baseUrl": fast_config.get("baseUrl", ""),
+                    "apiKeyEnc": _encrypt_text(fast_config.get("apiKey", "")),
+                    "model": fast_config.get("model", ""),
+                    "reasoningEffort": fast_config.get("reasoningEffort", effort)
+                }
             }
-        }
+        elif effort == "chatbot":
+            safe_presets["chatbot"] = {
+                "baseUrl": preset.get("baseUrl", ""),
+                "apiKeyEnc": _encrypt_text(preset.get("apiKey", "")),
+                "model": preset.get("model", ""),
+            }
     LLM_PRESETS_FILE.write_text(
         json.dumps({"presets": safe_presets}, ensure_ascii=False, indent=2),
         encoding="utf-8"
@@ -269,6 +331,8 @@ def update_llm_presets(raw_presets: dict):
         for effort in REASONING_EFFORT_OPTIONS:
             if effort in raw_presets:
                 next_presets[effort] = _sanitize_preset_item(raw_presets.get(effort), next_presets[effort])
+        if "chatbot" in raw_presets:
+            next_presets["chatbot"] = _sanitize_chatbot_preset(raw_presets.get("chatbot"), next_presets.get("chatbot", {}))
         GLOBAL_LLM_PRESETS.clear()
         GLOBAL_LLM_PRESETS.update(next_presets)
         save_llm_presets_locked()
@@ -276,6 +340,72 @@ def update_llm_presets(raw_presets: dict):
 
 def require_admin_authorization(x_admin_token: Optional[str]):
     return  # 内部工具，不做管理员鉴权
+
+
+def _service_docs_rel_path(path: str) -> str:
+    domain, rel = split_domain_path(path, allowed_domains=(SERVICE_DOCS_DOMAIN,))
+    if domain != SERVICE_DOCS_DOMAIN:
+        raise HTTPException(status_code=400, detail=f"仅支持 {SERVICE_DOCS_DOMAIN}/ 域")
+    return rel
+
+
+def _service_docs_abs_path(path: str) -> Path:
+    rel = _service_docs_rel_path(path)
+    target = (SERVICE_DOCS_DIR / rel).resolve()
+    try:
+        target.relative_to(SERVICE_DOCS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="路径越界")
+    return target
+
+
+def _service_docs_kind(path: Path) -> str:
+    if path.is_dir():
+        return "directory"
+    ext = path.suffix.lower()
+    if ext in {".md"}:
+        return "markdown"
+    if ext in {".txt", ".log"}:
+        return "text"
+    if ext == ".json":
+        return "json"
+    if ext in {".csv"}:
+        return "csv"
+    if ext in {".xlsx", ".xls"}:
+        return "excel"
+    if ext in {".pdf"}:
+        return "pdf"
+    if ext in {".docx", ".doc"}:
+        return "word"
+    return "file"
+
+
+def _service_docs_item(path: Path, root: Path) -> dict:
+    rel = path.relative_to(root).as_posix()
+    item = {
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, rel),
+        "name": path.name,
+        "isDir": path.is_dir(),
+        "kind": _service_docs_kind(path),
+        "size": 0 if path.is_dir() else path.stat().st_size,
+        "sizeHuman": "0B" if path.is_dir() else f"{path.stat().st_size}B",
+    }
+    if not path.is_dir():
+        item["ext"] = path.suffix.lower()
+    return item
+
+
+def _list_service_docs_entries(target: Path) -> list[dict]:
+    entries: list[dict] = []
+    if not target.exists():
+        return entries
+    if target.is_file():
+        return [_service_docs_item(target, SERVICE_DOCS_DIR)]
+    for p in sorted(target.rglob("*")):
+        if any(part.startswith(".") for part in p.relative_to(SERVICE_DOCS_DIR).parts):
+            continue
+        entries.append(_service_docs_item(p, SERVICE_DOCS_DIR))
+    return entries
 
 
 # ── 账号 / Run 目录辅助 ──
@@ -427,8 +557,8 @@ class SessionState:
     @property
     def logs_path(self) -> Path:
         if self.run_dir:
-            return self.run_dir / "logs.json"
-        return self.account_dir / "latest_logs.json"
+            return self.run_dir / "logs.jsonl"
+        return self.account_dir / "latest_logs.jsonl"
 
     @property
     def report_path(self) -> Path:
@@ -441,7 +571,7 @@ class SessionManager:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self._sessions: Dict[str, SessionState] = {}
+        self._sessions: Dict[Tuple[str, str], SessionState] = {}
         self._lock = Lock()
 
     def _default_config(self) -> dict:
@@ -515,10 +645,12 @@ class SessionManager:
         state["_runDir"] = str(run_dir)
         return state
 
-    def get_session(self, user_key: str, create_if_missing: bool = True) -> SessionState:
+    def get_session(self, user_key: str, create_if_missing: bool = True, task_type: str = "diagnosis") -> SessionState:
         key_hash, slug, account_dir = self._account_dir(user_key)
+        task_type = (task_type or "diagnosis").strip() or "diagnosis"
+        cache_key = (key_hash, task_type)
         with self._lock:
-            existing = self._sessions.get(key_hash)
+            existing = self._sessions.get(cache_key)
             if existing:
                 _save_account_json(account_dir, user_key, key_hash)
                 return existing
@@ -531,9 +663,11 @@ class SessionManager:
             _save_account_json(account_dir, user_key, key_hash)
             cfg = self._load_profile(account_dir)
             session = SessionState(user_key=user_key, key_hash=key_hash, account_slug=slug, account_dir=account_dir, config=cfg)
+            session.task_type = task_type
 
-            saved = self._try_load_session(account_dir)
+            saved = self._try_load_session(account_dir, task_type=task_type)
             if saved:
+                session.task_type = saved.get("taskType") or task_type
                 session.status = saved.get("status", "idle")
                 session.error_message = saved.get("errorMessage", "")
                 session.result = saved.get("result")
@@ -542,22 +676,30 @@ class SessionManager:
                 rd = saved.get("_runDir")
                 if rd:
                     session.run_dir = Path(rd)
-                    logs_file = session.run_dir / "logs.json"
-                    if logs_file.exists():
-                        try:
-                            session.logs = json.loads(logs_file.read_text(encoding="utf-8"))
-                        except Exception:
-                            pass
+                    session.logs = _load_logs_from_file(session)
 
-            self._sessions[key_hash] = session
+            self._sessions[cache_key] = session
             return session
 
     def get_legacy_session(self) -> SessionState:
         return self.get_session(LEGACY_ACCOUNT_KEY, create_if_missing=True)
 
-    def drop_session(self, key_hash: str):
+    def save_profile(self, session: SessionState):
+        session.account_dir.mkdir(parents=True, exist_ok=True)
+        session.profile_path.write_text(
+            json.dumps({
+                "reasoningEffort": normalize_reasoning_effort(session.config.get("reasoningEffort"))
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
+    def drop_session(self, key_hash: str, task_type: Optional[str] = None):
         with self._lock:
-            self._sessions.pop(key_hash, None)
+            if task_type:
+                self._sessions.pop((key_hash, task_type), None)
+                return
+            for cache_key in [k for k in self._sessions if k[0] == key_hash]:
+                self._sessions.pop(cache_key, None)
 
 
 session_manager = SessionManager(ACCOUNTS_DIR)
@@ -579,7 +721,11 @@ def _ensure_session_dirs(session: SessionState):
 def persist_latest_logs(session: SessionState):
     _ensure_session_dirs(session)
     try:
-        session.logs_path.write_text(json.dumps(session.logs, ensure_ascii=False, indent=2), encoding="utf-8")
+        event = session.logs[-1] if session.logs else None
+        if not event:
+            return
+        with session.logs_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
@@ -599,7 +745,8 @@ def reset_events(session: SessionState):
     with session.event_lock:
         event = {"type": "reset", "time": _now_time()}
         session.logs.append(event)
-        # 不 overwrite 文件，只保留原有日志
+        persist_latest_logs(session)
+        # 不 overwrite 文件，只追加一行日志
 
 
 def add_status(session: SessionState, node_id: str, status: str):
@@ -624,6 +771,8 @@ def add_log(session: SessionState, node_id: str, message):
             payload["error_details"] = _mask_sensitive_text(str(message["error_details"]))
         if "progress" in message:
             payload["progress"] = message["progress"]
+        if "terminal" in message:
+            payload["terminal"] = bool(message["terminal"])
     else:
         level = "info"
         safe_msg = _mask_sensitive_text(str(message))
@@ -664,14 +813,34 @@ def sanitize_settings(raw: Optional[dict]) -> dict:
     }
 
 
-def resolve_session(x_fzt_key: Optional[str]) -> SessionState:
+def resolve_session(x_fzt_key: Optional[str], task_type: str = "diagnosis") -> SessionState:
     key = (x_fzt_key or "").strip()
     if not key:
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        return session_manager.get_session(key, create_if_missing=False)
+        return session_manager.get_session(key, create_if_missing=False, task_type=task_type)
     except KeyError:
         raise HTTPException(status_code=401, detail="Invalid or expired key")
+
+
+def _normalize_candidate_count(value: Optional[int]) -> int:
+    if not isinstance(value, int):
+        return DEFAULT_CANDIDATE_COUNT
+    return min(max(value, 1), MAX_CANDIDATE_COUNT)
+
+
+async def _read_uploaded_files(files: List[UploadFile], supported_extensions: set[str]) -> list[dict]:
+    decoded_files: list[dict] = []
+    for uploaded_file in files:
+        filename = uploaded_file.filename or "unnamed"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in supported_extensions:
+            raise HTTPException(status_code=400, detail=f"不支持的文件格式: {ext or '未知'}，支持: {', '.join(sorted(supported_extensions))}")
+        raw = await uploaded_file.read()
+        if len(raw) > MAX_UPLOAD_FILE_SIZE:
+            raise HTTPException(status_code=400, detail=f"文件过大(>{MAX_UPLOAD_FILE_SIZE_LABEL}): {filename}")
+        decoded_files.append({"name": filename, "bytes": raw})
+    return decoded_files
 
 
 
@@ -750,6 +919,105 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
         "presets": get_all_llm_presets()
     }
 
+
+@app.get("/api/admin/service-docs")
+def list_admin_service_docs(path: str = "service_docs/", x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    return {
+        "status": "ok",
+        "path": path,
+        "entries": _list_service_docs_entries(target),
+    }
+
+
+@app.get("/api/admin/service-docs/file")
+def read_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail=f"不是文件: {path}")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail=f"非文本文件，无法直接读取: {path}")
+    return {
+        "status": "ok",
+        "path": path,
+        "content": content,
+    }
+
+
+@app.get("/api/admin/service-docs/download")
+def download_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail=f"不是文件: {path}")
+    return FileResponse(str(target), filename=target.name)
+
+
+@app.post("/api/admin/service-docs/file")
+async def save_admin_service_doc_file(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    path = str(payload.get("path") or "").strip()
+    content = payload.get("content")
+    if not path:
+        raise HTTPException(status_code=400, detail="缺少 path")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="content 必须是字符串")
+    target = _service_docs_abs_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return {
+        "status": "ok",
+        "path": path,
+        "bytesWritten": len(content.encode("utf-8")),
+    }
+
+
+@app.post("/api/admin/service-docs/upload")
+async def upload_admin_service_doc_file(
+    file: UploadFile = File(...),
+    path: Optional[str] = Form(default=None),
+    x_admin_token: Optional[str] = Header(default=None),
+):
+    require_admin_authorization(x_admin_token)
+    target_path = path.strip() if isinstance(path, str) and path.strip() else None
+    if target_path:
+        target = _service_docs_abs_path(target_path)
+    else:
+        target = _service_docs_abs_path(f"{SERVICE_DOCS_DOMAIN}/{file.filename}")
+    raw = await file.read()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+    return {
+        "status": "ok",
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()),
+        "bytesWritten": len(raw),
+        "mimeType": file.content_type or "application/octet-stream",
+    }
+
+
+@app.delete("/api/admin/service-docs/file")
+def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return {"status": "ok", "path": path}
+
 @app.get("/api/status")
 def get_status(
     run_id: Optional[str] = Query(None),
@@ -768,8 +1036,6 @@ def get_status(
         }
         
     run_dir = session.account_dir / "runs" / session.task_type / target_run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / target_run_id
         
     status = session.status if target_run_id == session.run_id else "completed"
     error_msg = session.error_message if target_run_id == session.run_id else ""
@@ -803,6 +1069,9 @@ def get_status(
     else:
         safe_error = ""
         
+    if isinstance(result_str, (dict, list)):
+        result_str = json.dumps(result_str, ensure_ascii=False)
+        
     return {
         "status": status,
         "errorMessage": safe_error,
@@ -813,26 +1082,54 @@ def get_status(
 
 
 @app.get("/api/logs")
-def get_logs(x_fzt_key: Optional[str] = Header(default=None)):
-    resolve_session(x_fzt_key)  # 确保 session 缓存存在
-    return {"logs": _load_logs_from_file(resolve_session(x_fzt_key))}
+def get_logs(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
+    session = resolve_session(x_fzt_key)  # 确保 session 缓存存在
+    return {"logs": _load_logs_from_file(session, run_id)}
 
 
-def _load_logs_from_file(session) -> list:
+def _load_logs_from_file(session, run_id: Optional[str] = None) -> list:
     """强制从文件加载日志，不依赖 session.logs 的内存状态。"""
     try:
-        if session.run_dir:
-            p = session.run_dir / "logs.json"
-            if p.exists():
-                return json.loads(p.read_text(encoding="utf-8"))
+        run_dir = session.run_dir
+        if run_id:
+            run_dir = session.account_dir / "runs" / session.task_type / run_id
+        if run_dir:
+            jsonl_path = run_dir / "logs.jsonl"
+            if jsonl_path.exists():
+                lines = [line.strip() for line in jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                return [json.loads(line) for line in lines]
+
+            legacy_path = run_dir / "logs.json"
+            if legacy_path.exists():
+                loaded = json.loads(legacy_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    return loaded
+                if isinstance(loaded, dict):
+                    return [loaded]
     except Exception:
         pass
     return []
 
 
-async def sse_generator(session: SessionState):
+async def sse_generator(session: SessionState, run_id: Optional[str] = None):
     """SSE 日志推送，适配前端 EventSource('/api/stream')"""
-    session.logs = _load_logs_from_file(session)
+    session.logs = _load_logs_from_file(session, run_id)
+
+    target_status = session.status
+    if run_id:
+        try:
+            run_dir = session.account_dir / "runs" / session.task_type / run_id
+            session_json_path = run_dir / "session.json"
+            if session_json_path.exists():
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                target_status = sdata.get("status", "completed")
+            else:
+                target_status = "completed"
+        except Exception:
+            target_status = "completed"
 
     last_idx = 0
     yield f"data: {json.dumps({'type': 'reset', 'time': _now_time()})}\n\n"
@@ -845,7 +1142,7 @@ async def sse_generator(session: SessionState):
                 yield f"data: {json.dumps(session.logs[i], ensure_ascii=False)}\n\n"
             last_idx = len(session.logs)
 
-        if session.status in ("completed", "error", "aborted") and last_idx >= len(session.logs):
+        if target_status in ("completed", "error", "aborted") and last_idx >= len(session.logs):
             yield f"data: {json.dumps({'type': 'done', 'time': _now_time()})}\n\n"
             break
 
@@ -857,10 +1154,11 @@ async def sse_generator(session: SessionState):
 
 @app.get("/api/stream")
 async def stream(
+    run_id: Optional[str] = Query(None),
     x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
 ):
     session = resolve_session(x_fzt_key)
-    return StreamingResponse(sse_generator(session), media_type="text/event-stream")
+    return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
 
 
 
@@ -925,6 +1223,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
                 _save_session_json(session)
                 return
             session.status = "completed"
+        add_log(session, "system", {"level": "status", "message": "", "progress": 100, "terminal": True})
         _update_run_status_in_meta(session, "completed")
         save_latest_report(session)
         _save_session_json(session)
@@ -960,6 +1259,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
             
     except (PipelineAbortedError, asyncio.CancelledError):
         add_log(session, "system", "⚠️ 任务被用户强制终止。")
+        add_log(session, "system", {"level": "status", "message": "", "terminal": True})
         with session.runtime_lock:
             session.status = "aborted"
             session.error_message = "任务被用户强行终止。"
@@ -967,6 +1267,7 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         _save_session_json(session)
     except Exception as e:
         add_log(session, "system", f"管线执行失败: {str(e)}")
+        add_log(session, "system", {"level": "status", "message": "", "terminal": True})
         with session.runtime_lock:
             session.status = "error"
             session.error_message = str(e)
@@ -974,14 +1275,246 @@ async def run_pipeline_task(session: SessionState, pipeline_name: str, active_pr
         _save_session_json(session)
 
 
+async def run_price_recommendation_task(session: SessionState, decoded_files: list[dict], product_name: str, candidate_count: int):
+    """Run the price recommendation workflow for a price_recommendation session."""
+    with session.runtime_lock:
+        if session.force_stop or session.status == "aborted":
+            return
+        session.status = "running"
+    reset_events(session)
+    emit_event(session, "workflow", {"workflow": PRICE_RECOMMENDATION_TASK_TYPE})
+
+    def check_aborted():
+        ensure_not_stopped(session)
+
+    try:
+        ws_dir = session.run_dir / "workspace" if session.run_dir else None
+        if not ws_dir:
+            raise RuntimeError("价格推荐 workspace 未初始化")
+
+        active_preset = get_llm_preset(session.config.get("reasoningEffort", "high"))
+
+        from packages.agents.core.models import DatasetBundle, RawFile
+        from packages.agents.registry import create_pipeline
+
+        bundle = DatasetBundle(
+            tables=[],
+            raw_files=[RawFile(name=df["name"], data=df["bytes"]) for df in decoded_files]
+        )
+
+        pipe = create_pipeline(
+            name="price_recommendation",
+            llm_preset=active_preset,
+            check_aborted=check_aborted,
+            workspace_dir=ws_dir,
+            product_name=product_name,
+            candidate_count=candidate_count,
+        )
+        pipe.set_event_callbacks(
+            on_status=lambda nid, st: add_status(session, nid, st),
+            on_log=lambda nid, msg: add_log(session, nid, msg),
+            on_progress=lambda nid, cur, tot: add_progress(session, nid, cur, tot),
+            on_tally=lambda nid, t: add_tally(session, nid, t),
+        )
+
+        await pipe.run(bundle)
+
+        disk_result, disk_full = read_price_service_result(session.run_dir)
+        session.result = json.dumps(disk_result, ensure_ascii=False) if disk_result else ""
+        session.full_result = disk_full if disk_full else ""
+        with session.runtime_lock:
+            if session.force_stop or session.status == "aborted":
+                _save_session_json(session)
+                return
+            session.status = "completed"
+        _update_run_status_in_meta(session, "completed")
+        _save_session_json(session)
+    except (TaskAbortedError, asyncio.CancelledError):
+        add_log(session, "price_done", {"level": "error", "message": "价格推荐任务被用户强制终止。", "progress": 100})
+        with session.runtime_lock:
+            session.status = "aborted"
+            session.error_message = "任务被用户强行终止。"
+        _update_run_status_in_meta(session, "aborted")
+        _save_session_json(session)
+    except Exception as e:
+        add_log(session, "price_done", {"level": "error", "message": f"价格推荐任务失败: {str(e)}", "error_details": str(e)})
+        with session.runtime_lock:
+            session.status = "error"
+            session.error_message = str(e)
+        _update_run_status_in_meta(session, "error")
+        _save_session_json(session)
+
+
+@app.post("/api/price-recommendations/precheck")
+async def price_recommendation_precheck(
+    files: List[UploadFile] = File(...),
+    productName: str = Form(...),
+    x_fzt_key: Optional[str] = Header(default=None),
+    reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
+):
+    resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    product_name = (productName or "").strip()
+    if not product_name:
+        raise HTTPException(status_code=400, detail="缺少 productName")
+    decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
+    return run_price_precheck(decoded_files, product_name)
+
+
+@app.post("/api/price-recommendations")
+async def start_price_recommendation(
+    files: List[UploadFile] = File(...),
+    productName: str = Form(...),
+    x_fzt_key: Optional[str] = Header(default=None),
+    reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
+    candidateCount: Optional[int] = Form(None),
+):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    product_name = (productName or "").strip()
+    if not product_name:
+        raise HTTPException(status_code=400, detail="缺少 productName")
+    with session.runtime_lock:
+        if session.status in ("queued", "running"):
+            raise HTTPException(status_code=400, detail="任务正在运行中")
+
+    decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
+
+    session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort or "high")
+    candidate_count = _normalize_candidate_count(candidateCount)
+    with session.runtime_lock:
+        if session.status in ("queued", "running"):
+            raise HTTPException(status_code=400, detail="任务正在运行中")
+        session.status = "queued"
+        session.force_stop = False
+        session.error_message = ""
+        session.result = None
+        session.full_result = None
+        session.run_id = None
+        session.run_dir = None
+
+    _ensure_run_dir(session)
+    # 记录运行历史
+    file_names = [df["name"] for df in decoded_files]
+    try:
+        _add_run_to_meta(session, file_names)
+    except Exception as e:
+        logger.error("Failed to record run metadata: %s", str(e))
+    _save_session_json(session)
+    session._pipeline_task = asyncio.create_task(
+        run_price_recommendation_task(session, decoded_files, product_name, candidate_count)
+    )
+    return {
+        "status": "started",
+        "taskType": PRICE_RECOMMENDATION_TASK_TYPE,
+        "workflow": PRICE_RECOMMENDATION_TASK_TYPE,
+        "runId": session.run_id,
+    }
+
+
+@app.get("/api/price-recommendations/status")
+def get_price_recommendation_status(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    
+    target_run_id = run_id or session.run_id
+    if not target_run_id:
+        return {
+            "status": "idle",
+            "errorMessage": "",
+            "result": None,
+            "fullResult": None,
+            "runId": None
+        }
+
+    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
+
+    status = session.status if target_run_id == session.run_id else "completed"
+    error_msg = session.error_message if target_run_id == session.run_id else ""
+    result = session.result if target_run_id == session.run_id else None
+    full_result = session.full_result if target_run_id == session.run_id else None
+
+    if run_dir.exists():
+        session_json_path = run_dir / "session.json"
+        if session_json_path.exists():
+            try:
+                sdata = json.loads(session_json_path.read_text(encoding="utf-8"))
+                status = sdata.get("status", "completed")
+                error_msg = sdata.get("errorMessage", "")
+                result = sdata.get("result")
+                full_result = sdata.get("fullResult")
+            except Exception:
+                pass
+        try:
+            disk_result, disk_full = read_price_service_result(run_dir)
+            result = disk_result if disk_result is not None else result
+            full_result = disk_full if disk_full is not None else full_result
+        except Exception:
+            pass
+
+    safe_error = ""
+    if status == "aborted":
+        safe_error = "任务被用户强行终止。"
+    elif status == "error":
+        safe_error = f"任务执行失败: {error_msg}" if error_msg else "任务执行失败"
+
+    if isinstance(result, (dict, list)):
+        result = json.dumps(result, ensure_ascii=False)
+
+    return {
+        "status": status,
+        "errorMessage": safe_error,
+        "result": result,
+        "fullResult": full_result,
+        "runId": target_run_id
+    }
+
+
+@app.get("/api/price-recommendations/logs")
+def get_price_recommendation_logs(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Header(default=None)
+):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    return {"logs": _load_logs_from_file(session, run_id)}
+
+
+@app.get("/api/price-recommendations/stream")
+async def stream_price_recommendation(
+    run_id: Optional[str] = Query(None),
+    x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
+):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
+
+
+@app.post("/api/price-recommendations/stop")
+def stop_price_recommendation(x_fzt_key: Optional[str] = Header(default=None)):
+    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    with session.runtime_lock:
+        if session.status in ("queued", "running"):
+            session.force_stop = True
+            session.status = "aborted"
+            session.error_message = "任务被用户强行终止。"
+            add_log(session, "price_done", {"level": "error", "message": "用户强制终止了价格推荐任务。", "progress": 100})
+            _save_session_json(session)
+            task = getattr(session, "_pipeline_task", None)
+            if task and not task.done():
+                task.cancel()
+    return {"status": "ok"}
+
+
 @app.post("/api/analyze")
 async def analyze(
     files: List[UploadFile] = File(...),
     x_fzt_key: Optional[str] = Header(default=None),
-    reasoningEffort: Optional[str] = Form(None)
+    reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
 ):
     session = resolve_session(x_fzt_key)
-    session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort)
+    session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
             raise HTTPException(status_code=400, detail="任务正在运行中")
@@ -1067,10 +1600,14 @@ async def download_report_zip(
     if not target_run_id:
         raise HTTPException(status_code=404, detail="未找到任何运行记录")
         
-    run_dir = session.account_dir / "runs" / session.task_type / target_run_id
-    if not run_dir.exists():
-        # 退化/向后兼容路径
-        run_dir = session.account_dir / "runs" / target_run_id
+    task_type = session.task_type
+    runs = _load_runs(session.account_dir)
+    for r in runs:
+        if r.get("runId") == target_run_id:
+            task_type = r.get("taskType", task_type)
+            break
+            
+    run_dir = session.account_dir / "runs" / task_type / target_run_id
         
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"运行目录不存在: {target_run_id}")
@@ -1159,9 +1696,12 @@ async def toggle_report_public(
     share_url = f"{origin}/public.html?run_id={run_id}&sign={sign}"
     
     # Also update session.json if it exists inside the run_dir
-    run_dir = session.account_dir / "runs" / session.task_type / run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / run_id
+    task_type = "diagnosis"
+    for r in runs:
+        if r.get("runId") == run_id:
+            task_type = r.get("taskType", task_type)
+            break
+    run_dir = session.account_dir / "runs" / task_type / run_id
     if run_dir.exists():
         session_json_path = run_dir / "session.json"
         if session_json_path.exists():
@@ -1204,9 +1744,8 @@ def delete_report(
     _save_runs(session.account_dir, runs)
     
     # Delete physically
-    run_dir = session.account_dir / "runs" / session.task_type / run_id
-    if not run_dir.exists():
-        run_dir = session.account_dir / "runs" / run_id
+    task_type = target_run.get("taskType", "diagnosis")
+    run_dir = session.account_dir / "runs" / task_type / run_id
         
     if run_dir.exists() and run_dir.is_dir():
         try:
@@ -1259,8 +1798,6 @@ def get_public_report_status(
         
     task_type = target_run.get("taskType", "diagnosis")
     run_dir = target_account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = target_account_dir / "runs" / run_id
         
     session_json_path = run_dir / "session.json"
     if not session_json_path.exists():
@@ -1290,6 +1827,9 @@ def get_public_report_status(
             user_key = adata.get("keyMask", user_key)
         except Exception:
             pass
+
+    if isinstance(result_str, (dict, list)):
+        result_str = json.dumps(result_str, ensure_ascii=False)
 
     return {
         "status": sdata.get("status", "completed"),
@@ -1445,11 +1985,15 @@ def get_report_asset(
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    target_run_dir = session.account_dir / "runs" / "diagnosis" / run_id
+    task_type = "diagnosis"
+    runs = _load_runs(session.account_dir)
+    for r in runs:
+        if r.get("runId") == run_id:
+            task_type = r.get("taskType", "diagnosis")
+            break
+    target_run_dir = session.account_dir / "runs" / task_type / run_id
     if not target_run_dir.exists():
-        target_run_dir = session.account_dir / "runs" / run_id
-        if not target_run_dir.exists():
-            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="Run not found")
 
     asset_path = target_run_dir / "workspace" / "output" / filename
     if not asset_path.exists() or not asset_path.is_file():
@@ -1507,9 +2051,7 @@ def get_public_report_asset(
 
     task_type = target_run.get("taskType", "diagnosis")
     run_dir = target_account_dir / "runs" / task_type / run_id
-    if not run_dir.exists():
-        run_dir = target_account_dir / "runs" / run_id
-
+ 
     asset_path = run_dir / "workspace" / "output" / filename
     if not asset_path.exists() or not asset_path.is_file():
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -1527,6 +2069,13 @@ def get_public_report_asset(
         media_type = "image/gif"
 
     return FileResponse(asset_path, media_type=media_type)
+
+
+register_chatbot_routes(
+    app,
+    resolve_session=resolve_session,
+    get_chatbot_preset=get_chatbot_preset,
+)
 
 
 # 挂载静态文件 (使用绝对路径更稳健)

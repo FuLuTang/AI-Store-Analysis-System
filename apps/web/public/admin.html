@@ -24,7 +24,7 @@
     <div class="container">
         <nav>
             <a href="index.html">用户工作台</a>
-            <a href="history.html">历史诊断记录</a>
+            <a href="history.html">历史记录</a>
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html" class="active">管理员配置</a>
             <div class="nav-right">
@@ -49,9 +49,10 @@
 
             <h3 style="margin-bottom: 0.8rem;">LLM 预设管理</h3>
             <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
-                配置 low / medium / high 三档的 baseUrl、apiKey、model、reasoning_effort。
+                配置 low / medium / high 三档的 baseUrl、apiKey、model、reasoning_effort，并可在同页修改 ChatBot 的独立连接参数。
             </p>
             <div id="presetContainer"></div>
+
             <div class="modal-actions" style="margin-top: 1rem;">
                 <button class="btn" id="saveBtn"><i class="fas fa-save"></i> 保存全部预设</button>
             </div>
@@ -126,7 +127,31 @@
                         </div>
                     </div>
                 `;
-            }).join('');
+            }).join('') + (() => {
+                const chatbotConfig = currentPresets.chatbot || { baseUrl: '', apiKey: '', model: '' };
+                return `
+                    <div style="margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border);">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+                            <h2 style="margin: 0; text-transform: uppercase; color: var(--text-primary);">ChatBot</h2>
+                            <span style="color: var(--text-muted); font-size: 0.9rem;">/api/chatbot 使用的独立连接参数</span>
+                        </div>
+                        <div style="padding: 1rem; border: 1px dashed var(--border); border-radius: var(--radius); background: #fafafa;">
+                            <div class="form-group">
+                                <label>API Base URL</label>
+                                <input type="text" data-section="chatbot" data-key="baseUrl" value="${escapeHtml(chatbotConfig.baseUrl || '')}" placeholder="https://api.deepseek.com">
+                            </div>
+                            <div class="form-group">
+                                <label>API Key</label>
+                                <input type="password" data-section="chatbot" data-key="apiKey" value="${escapeHtml(chatbotConfig.apiKey || '')}" placeholder="sk-...">
+                            </div>
+                            <div class="form-group">
+                                <label>模型名称</label>
+                                <input type="text" data-section="chatbot" data-key="model" value="${escapeHtml(chatbotConfig.model || '')}" placeholder="deepseek-chat">
+                            </div>
+                        </div>
+                    </div>
+                `;
+            })();
         }
 
         function collectPresetsFromForm() {
@@ -137,6 +162,7 @@
                     fastcall: { baseUrl: '', apiKey: '', model: '', reasoningEffort: '' }
                 };
             });
+            next.chatbot = { baseUrl: '', apiKey: '', model: '' };
 
             document.querySelectorAll('[data-effort][data-type][data-key]').forEach(el => {
                 const effort = el.dataset.effort;
@@ -144,6 +170,13 @@
                 const key = el.dataset.key;
                 if (next[effort] && next[effort][type] && ['baseUrl', 'apiKey', 'model', 'reasoningEffort'].includes(key)) {
                     next[effort][type][key] = el.value.trim();
+                }
+            });
+
+            document.querySelectorAll('[data-section="chatbot"][data-key]').forEach(el => {
+                const key = el.dataset.key;
+                if (next.chatbot && ['baseUrl', 'apiKey', 'model'].includes(key)) {
+                    next.chatbot[key] = el.value.trim();
                 }
             });
             return next;

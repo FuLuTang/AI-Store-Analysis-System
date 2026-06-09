@@ -29,10 +29,26 @@ if not logger.handlers:
 class AgentLoop:
     """薄封装：OpenAI SDK 客户端 + messages 管理 + tool 执行。"""
 
-    def __init__(self, client: OpenAI, ws: Workspace, llm_preset: dict, emit_log=None, emit_status=None, analysis_params: str = "", check_aborted=None):
+    def __init__(
+        self,
+        client: OpenAI,
+        ws: Workspace,
+        llm_preset: dict,
+        emit_log=None,
+        emit_status=None,
+        analysis_params: str = "",
+        check_aborted=None,
+        task_type: str = "diagnosis",
+        product_name: str = "",
+        candidate_count: int = 2,
+        bootstrap_messages: list[dict] | None = None,
+    ):
         self.ws = ws
         self.analysis_params = analysis_params
         self._check_aborted = check_aborted
+        self.task_type = task_type
+        self.product_name = product_name
+        self.candidate_count = candidate_count
         
         # Resolve 'call' settings (智能模型)
         call_cfg = llm_preset.get("call", {}) if isinstance(llm_preset, dict) else {}
@@ -59,20 +75,106 @@ class AgentLoop:
         self._total_cache_hit = 0
         self._total_cache_miss = 0
         self.messages: list[dict] = []
-        self.tools = available_tool_call_for_agent(ws)
+        self.tools = available_tool_call_for_agent(ws, task_type=self.task_type)
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
-        self.tool_map = build_tool_map(ws, emit_log=self._emit_log, emit_status=self._emit_status)
+        self._finished = False
+        self._finish_success = True
+        self._finish_text = ""
+        self.bootstrap_messages = bootstrap_messages or []
+
+        def on_finish(success: bool, text: str):
+            self._finished = True
+            self._finish_success = success
+            self._finish_text = text
+
+        self.tool_map = build_tool_map(
+            ws,
+            task_type=self.task_type,
+            emit_log=self._emit_log,
+            emit_status=self._emit_status,
+            on_finish=on_finish,
+        )
         self._round = 0
         self._progress = 15  # 进度起点（pipeline 已推到 15%）
 
     def run(self) -> dict:
         """主循环：构建初始 messages → 发请求 → 处理 tool_calls → 循环直到收到最终回答。"""
         try:
-            self.messages = [
-                {"role": "system", "content": build_system_content(self.analysis_params)},
-                {"role": "user", "content": build_user_content(self.ws, self.analysis_params)},
-            ]
+            if self.task_type == "price_recommendation":
+                from ..price_recommendation.prompt_builder import (
+                    build_system_content as build_price_sys,
+                    build_user_content as build_price_user,
+                )
+                sys_content = build_price_sys()
+                user_content = build_price_user(self.product_name, self.candidate_count)
+                self.messages = [
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_content},
+                ]
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
+                else:
+                    # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
+                    init_files_json = self.tool_map["list_files"](subdir="")
+                    self.messages.extend([
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_init_list_files",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_files",
+                                        "arguments": '{"subdir": ""}'
+                                    }
+                                }
+                            ]
+                        },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_init_list_files",
+                        "name": "list_files",
+                        "content": init_files_json
+                    },
+                ])
+            else:
+                sys_content = build_system_content(self.analysis_params)
+                user_content = build_user_content(self.ws, self.analysis_params)
+                self.messages = [
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_content},
+                ]
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
+                else:
+                    # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
+                    init_files_json = self.tool_map["list_files"](subdir="")
+                    self.messages.extend([
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_init_list_files",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_files",
+                                        "arguments": '{"subdir": ""}'
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call_init_list_files",
+                            "name": "list_files",
+                            "content": init_files_json
+                        },
+                    ])
 
             self._emit_status("custom_agent", "active")
             self._emit_log("custom_agent", {"level": "info", "message": f"🚀 启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个"})
@@ -92,7 +194,9 @@ class AgentLoop:
                             raise
 
                     # ── 保存 assistant message ──
-                    self.messages.append(self._normalize_assistant_message(sr))
+                    norm_msg = self._normalize_assistant_message(sr)
+                    self.messages.append(norm_msg)
+                    self._write_message_log(norm_msg, mode="a")
 
                     # ── 缓存 & token 日志（仅文件日志，不推 SSE）──
                     if sr.usage:
@@ -156,28 +260,41 @@ class AgentLoop:
                                         if s_idx >= 0 and total_steps > 0:
                                             done_milestone = get_step_milestone(s_idx, total_steps)
                                             self._progress = max(self._progress, done_milestone)
+                                        if r.get("all_done"):
+                                            self._finished = True
+                                            self._finish_success = True
+                                            self._finish_text = json.dumps({
+                                                "status": "auto_finished",
+                                                "message": "所有计划步骤已完成，agent 自动结束。",
+                                                "step_index": s_idx,
+                                            }, ensure_ascii=False)
                                 except Exception:
                                     pass
 
-                            self.messages.append({
+                            tool_msg = {
                                 "role": "tool",
                                 "tool_call_id": tc["id"],
+                                "name": tc["name"],
                                 "content": result,
-                            })
+                            }
+                            self.messages.append(tool_msg)
+                            self._write_message_log(tool_msg, mode="a")
 
-                        # plan 全部完成后，注入收尾请求，不继续普通循环
-                        if _is_plan_done(self.ws):
-                            self._emit_log("custom_agent", {"level": "status", "message": "📋 所有步骤已完成，生成最终总结..."})
-                            self.messages.append({
-                                "role": "user",
-                                "content": "所有计划步骤已全部完成。请提供一份简洁的最终总结（约200字），包含健康状态、核心结论和交付物清单。不要调用任何工具。"
-                            })
-                            self._round += 1
-                            sr = self._call_api()
-                            self.messages.append(self._normalize_assistant_message(sr))
-                            self._emit_log("custom_agent", {"level": "info", "message": f"✅ 分析完成，最终回答 {len(sr.content)} 字"})
-                            self._emit_status("custom_agent", "success")
-                            return self._with_usage(self._parse_final_output(sr.content))
+                            if self._finished:
+                                break
+
+                        if self._finished:
+                            if self._finish_success:
+                                self._emit_log("custom_agent", {"level": "info", "message": f"✅ 任务成功结束"})
+                                self._emit_status("custom_agent", "success")
+                                return self._with_usage(self._parse_final_output(self._finish_text))
+                            else:
+                                self._emit_log("custom_agent", {"level": "error", "message": f"❌ 任务报错终止，原因：{self._finish_text}"})
+                                self._emit_status("custom_agent", "error")
+                                raise RuntimeError(self._finish_text)
+
+                    if not self._finished and self._round < max_rounds - 1:
+                        self._inject_diagnosis_plan_context()
 
             except Exception as e:
                 # 用户强制停止 → 让 PipelineAbortedError 透传
@@ -373,8 +490,8 @@ class AgentLoop:
         """统一 assistant message 格式，处理 reasoning_content / think 标签。
 
         规则（DeepSeek 文档）：
-          - 有 tool_calls：reasoning_content 必须保留
-          - 无 tool_calls：reasoning_content 丢弃
+          - reasoning_content 只要存在就保留，避免思考链在后续轮次里丢失
+          - 有 tool_calls 时必须保留 reasoning_content，即使为空
           - content 中如果有 <think>...</think>，解析到 reasoning_content 字段
         """
         content = sr.content
@@ -388,13 +505,16 @@ class AgentLoop:
 
         saved = {"role": "assistant", "content": content}
 
+        if reasoning:
+            saved["reasoning_content"] = reasoning
+
         if sr.tool_calls:
             saved["tool_calls"] = [
                 {"id": tc["id"], "type": "function",
                  "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                 for tc in sr.tool_calls
             ]
-            # 有 tool_calls 时必须传 reasoning_content，即使为空
+            # 有 tool_calls 时必须显式带上 reasoning_content 字段
             saved["reasoning_content"] = reasoning or ""
 
         return saved
@@ -445,6 +565,22 @@ class AgentLoop:
                     self._total_cache_hit, self._total_cache_miss, total)
         return result
 
+    def _inject_diagnosis_plan_context(self) -> None:
+        """把当前 plan short 作为 system 消息追加到对话尾部，供下一轮请求使用。"""
+        try:
+            from .tools.impl.setup_impl import read_plan_short_impl
+
+            text = read_plan_short_impl(self.ws)
+            if text and text.strip():
+                sys_msg = {
+                    "role": "system",
+                    "content": text,
+                }
+                self.messages.append(sys_msg)
+                self._write_message_log(sys_msg, mode="a")
+        except Exception:
+            pass
+
     def _parse_final_output(self, content: str) -> dict:
         """从最终回答中解析 AgentResult JSON。"""
         try:
@@ -458,6 +594,20 @@ class AgentLoop:
             except json.JSONDecodeError:
                 pass
         return {"full_report": content, "cards": [], "metrics": [], "mapping": [], "warnings": []}
+
+    def _write_message_log(self, message: dict, mode: str = "a") -> None:
+        """将单条消息实时追加/写入到 workspace/agent_messages.jsonl，保障断电不丢失。"""
+        try:
+            import datetime
+            log_entry = {
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                **message
+            }
+            log_file = self.ws.resolve("agent_messages.jsonl")
+            with open(log_file, mode, encoding="utf-8") as f:
+                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to write agent dialogue log: {e}")
 
 
 # ── helpers ──
@@ -524,13 +674,15 @@ def _tool_target(name: str, args_json: str) -> str:
 
     # 按工具名返回可读的描述
     labels = {
-        "read_document": lambda a: f"读取 {a.get('path', '?')}",
         "read_document_structure": lambda a: f"读取 {a.get('path', '?')} 结构",
-        "read_file": lambda a: f"读取 {a.get('path', '?')}",
+        "read_file": lambda a: f"读取 {a.get('path', '?')} 原文",
         "write_file": lambda a: f"写入 {a.get('path', '?')}",
+        "replace_text": lambda a: f"替换 {a.get('path', '?')} 中的指定文本",
+        "copy_file": lambda a: f"复制 {a.get('source_path', '?')} 到 {a.get('destination_path', '?')}",
         "list_files": lambda a: f"列出 {a.get('subdir', '根目录')}/ 目录",
         "run_python": lambda a: f"执行 {a.get('script_path', '?')}",
         "search_files": lambda a: f"检索关键词 {a.get('pattern', '?')}",
+        "search": lambda a: f"检索关键词 {a.get('pattern', '?')}",
         "query_sqlite": lambda a: f"查询 SQLite {a.get('path', '?')}",
         "duckdb_register_parquet": lambda a: f"注册表 {a.get('table_name', '?')}",
         "list_tables": lambda a: "列出所有表",

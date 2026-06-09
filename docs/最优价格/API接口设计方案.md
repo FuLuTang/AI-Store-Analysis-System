@@ -4,6 +4,14 @@
 
 当前阶段先固定外围 workflow 与接口契约，内部算法、曲线拟合方式、定价模型可以后续替换。
 
+当前 MVP 已实现：
+
+- 快速预检接口。
+- 异步价格推荐任务接口。
+- 独立 status / logs / stream / stop。
+- `price_recommendation` 任务类型的内存 session 隔离与物理目录隔离。
+- 确定性基准推荐结果生成。复杂价格弹性、曲线拟合和 Agent Runner 后续接入。
+
 ## 1. 核心流程图
 
 ```mermaid
@@ -52,7 +60,7 @@ graph TD
   - `files`: 一个或多个文件。每文件最大 **100MB**。
   - `productName`: 商品名称，必填。
   - `reasoningEffort`: 可选，默认 `low`。预检阶段原则上使用低成本模型。
-- **支持格式**: `.json` / `.xlsx` / `.xls` / `.csv`，后续可复用现有上传解析能力扩展更多格式。
+- **支持格式**: `.json` / `.xlsx` / `.xls` / `.csv` / `.txt`。其中 `.txt` 会按文本内容进行宽松匹配，允许无固定格式输入，后续流程再由 LLM 或 Agent 兜底。
 
 **响应 (200, 通过)**:
 
@@ -133,6 +141,8 @@ graph TD
 }
 ```
 
+启动接口会在入队前再次执行快速预检。预检不通过时直接返回 `400`，`detail` 中包含完整预检结果。
+
 **错误**:
 
 | 状态码 | 含义 |
@@ -174,17 +184,16 @@ graph TD
         "confidence": 0.76
       }
     ],
-    "validPriceRange": {
-      "min": 15.9,
-      "max": 22.9,
-      "unit": "元"
-    },
-    "evidence": {
-      "matchedRows": 128,
-      "priceField": "售价",
-      "salesField": "销量",
-      "timeField": "日期"
-    },
+  "validPriceRange": {
+    "min": 15.9,
+    "max": 22.9,
+    "unit": "元"
+  },
+  "timeGranularity": "日",
+  "evidence": {
+    "matchedRows": 128,
+    "timeGranularity": "日"
+  },
     "warnings": []
   },
   "fullResult": "Markdown 格式的完整说明，可选"
@@ -280,7 +289,7 @@ graph TD
 
 ## 4. 结果 JSON 规范
 
-价格推荐任务的最终结果文件建议固定为：
+价格推荐任务的最终结果文件固定为：
 
 ```text
 workspace/output/price_recommendation.json
@@ -308,9 +317,7 @@ workspace/output/price_recommendation.json
   },
   "evidence": {
     "matchedRows": 128,
-    "priceField": "售价",
-    "salesField": "销量",
-    "timeField": "日期",
+    "timeGranularity": "日",
     "notes": []
   },
   "warnings": []
@@ -330,6 +337,7 @@ workspace/output/price_recommendation.json
 | `recommendations[].reason` | string | 推荐理由，必须基于数据证据 |
 | `recommendations[].confidence` | number | 0 到 1 的置信度 |
 | `validPriceRange` | object | 建议可接受价格区间 |
+| `timeGranularity` | string | 本次归一化使用的时间颗粒度 |
 | `evidence` | object | 字段匹配、样本量、关键证据 |
 | `warnings` | array | 数据不足、字段弱匹配等警告 |
 
@@ -350,7 +358,7 @@ workspace/output/price_recommendation.json
 
 ### 5.2 低成本 LLM 判断
 
-低成本 LLM 只做快速辅助判断：
+低成本 LLM 只做快速辅助判断。当前 MVP 先实现确定性预检，fastcall/low LLM 作为后续增强点：
 
 - 商品名称是否过宽或过模糊。
 - 上传文件是否像销售/价格相关数据。
@@ -398,6 +406,23 @@ storage/accounts/{account_slug}/runs/price_recommendation/{run_id}/
 5. **向后兼容**：
    - 现有的门店经营诊断任务依旧存放在 `storage/accounts/{account_slug}/runs/{run_id}/` 下，保持原样不用改动。
    - 历史旧数据和旧的 `latest_run.json` 留在原地不做强制迁移。
+
+### 内存 Session 隔离
+
+价格推荐任务不复用诊断任务的内存状态对象。后端 session 缓存维度为：
+
+```text
+(key_hash, task_type)
+```
+
+同一用户可以同时拥有：
+
+```text
+(key_hash, diagnosis)
+(key_hash, price_recommendation)
+```
+
+两者的 `status`、`logs`、`result`、`run_id`、`run_dir`、后台任务句柄互不覆盖。
 
 ### session.json 元数据
 

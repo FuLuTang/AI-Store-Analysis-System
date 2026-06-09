@@ -1,12 +1,16 @@
 """底层纯函数：workspace 文件读写与列表侦察"""
 import json
+import shutil
+from typing import Callable, Optional
 from pathlib import Path
 from ...workspace import Workspace
+from ...file_domains import join_domain_path, split_domain_path
 
 
 DEFAULT_READ_LINES = 2000
 MAX_READ_LINES = 2000
 MAX_READ_BYTES = 500 * 1024  # 500KB
+FORBIDDEN_READ_BASENAMES = {"plan.json"}
 
 
 def _format_size(size: int) -> str:
@@ -28,9 +32,25 @@ def _is_binary_sample(sample: bytes) -> bool:
         return True
 
 
-def read_file_impl(ws: Workspace, path: str, offset: int = 0, limit: int = DEFAULT_READ_LINES, head: int = None, tail: int = None) -> str:
+def read_file_impl(
+    ws: Workspace,
+    path: str,
+    offset: int = 0,
+    limit: int = DEFAULT_READ_LINES,
+    head: int = None,
+    tail: int = None,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
     """读取文件内容，支持分页(offset/limit)以及首尾快捷读取(head/tail)。"""
-    p = ws.resolve(path)
+    try:
+        p = ws.resolve_read(path)
+    except ValueError as e:
+        return json.dumps({"error": str(e), "path": path}, ensure_ascii=False)
+    if p.name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({
+            "error": f"不允许使用 read_file 读取受限文件: {path}",
+            "path": path,
+        }, ensure_ascii=False)
     if not p.exists():
         return json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
     if not p.is_file():
@@ -155,11 +175,28 @@ def read_file_impl(ws: Workspace, path: str, offset: int = 0, limit: int = DEFAU
         payload["note"] = f"已通过 head/tail 截断，共省略了 {skipped_count} 行。"
         payload["truncated"] = True
 
-    return json.dumps(payload, ensure_ascii=False)
+    result = json.dumps(payload, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ read_file 调用成功: {path}"})
+    return result
 
 
-def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwrite") -> str:
-    p = ws.resolve(path)
+def write_file_impl(
+    ws: Workspace,
+    path: str,
+    content: str,
+    mode: str = "overwrite",
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
+    p = ws.resolve_write(path)
+    if p.name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({"error": f"不允许使用 write_file 修改受限文件: {path}"}, ensure_ascii=False)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in p.resolve().parents or p.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {path}"}, ensure_ascii=False)
+    except Exception:
+        pass
     p.parent.mkdir(parents=True, exist_ok=True)
     mode = (mode or "overwrite").strip().lower()
     if mode not in {"overwrite", "append"}:
@@ -174,7 +211,7 @@ def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwri
         tmp.replace(p)
 
     size = p.stat().st_size
-    return json.dumps({
+    result = json.dumps({
         "ok": True,
         "path": path,
         "mode": mode,
@@ -182,66 +219,241 @@ def write_file_impl(ws: Workspace, path: str, content: str, mode: str = "overwri
         "size": size,
         "size_human": _format_size(size),
     }, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ write_file 调用成功: {path}"})
+    return result
 
 
-def list_files_impl(ws: Workspace, subdir: str = "") -> list[dict]:
-    target = ws.resolve(subdir) if subdir else ws.dir.resolve()
-    ws_dir_abs = ws.dir.resolve()
-    files = []
-    for p in sorted(target.rglob("*")):
-        if not p.is_file():
-            continue
-        rel_parts = p.relative_to(ws_dir_abs).parts
-        if any(part.startswith(".") for part in rel_parts):
-            continue
-        
-        size = p.stat().st_size
-        ext = p.suffix.lower()
-        
-        # 判定 kind
-        if ext in {".xlsx", ".xls"}:
-            kind = "excel"
-        elif ext == ".csv":
-            kind = "csv"
-        elif ext == ".pdf":
-            kind = "pdf"
-        elif ext in {".docx", ".doc"}:
-            kind = "word"
-        elif ext in {".txt", ".log"}:
-            kind = "text"
-        elif ext == ".md":
-            kind = "markdown"
-        elif ext == ".json":
-            kind = "json"
-        elif ext in {".sqlite", ".db"}:
-            kind = "sqlite"
-        elif ext in {".zip", ".tar", ".gz", ".rar"}:
-            kind = "archive"
-        elif ext == ".py":
-            kind = "python"
-        else:
-            kind = "other"
-            
-        # 判定 recommended_tool
-        if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
-            rec_tool = "read_document_structure"
-        elif kind == "text":
-            if size < 100 * 1024:  # 小于 100KB
-                rec_tool = "read_file"
-            else:
-                rec_tool = "search_files"
-        elif kind == "python":
-            rec_tool = "read_file"
-        else:
-            rec_tool = "run_python"
+def replace_text_impl(
+    ws: Workspace,
+    path: str,
+    old_text: str,
+    new_text: str,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
+    p = ws.resolve_write(path)
+    if p.name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({"error": f"不允许使用 replace_text 修改受限文件: {path}"}, ensure_ascii=False)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in p.resolve().parents or p.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {path}"}, ensure_ascii=False)
+    except Exception:
+        pass
+    if not p.exists():
+        return json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
+    if not p.is_file():
+        return json.dumps({"error": f"不是文件: {path}"}, ensure_ascii=False)
+    if old_text == "":
+        return json.dumps({"error": "old_text 不能为空", "path": path}, ensure_ascii=False)
 
-        files.append({
-            "path": str(p.relative_to(ws_dir_abs)),
-            "name": p.name,
-            "size": size,
-            "size_human": _format_size(size),
-            "ext": ext,
-            "kind": kind,
-            "recommended_tool": rec_tool
+    try:
+        content = p.read_text(encoding="utf-8")
+    except Exception as e:
+        return json.dumps({"error": f"文件读取失败: {e}", "path": path}, ensure_ascii=False)
+
+    match_count = content.count(old_text)
+    if match_count == 0:
+        return json.dumps({
+            "error": "未找到要替换的文本，要求唯一匹配但当前匹配数为 0",
+            "path": path,
+            "match_count": 0,
+        }, ensure_ascii=False)
+    if match_count >= 2:
+        return json.dumps({
+            "error": f"找到多处匹配，要求唯一匹配但当前匹配数为 {match_count}",
+            "path": path,
+            "match_count": match_count,
+        }, ensure_ascii=False)
+
+    updated = content.replace(old_text, new_text, 1)
+    tmp = p.with_name(f".{p.name}.tmp")
+    tmp.write_text(updated, encoding="utf-8")
+    tmp.replace(p)
+
+    result = json.dumps({
+        "ok": True,
+        "path": path,
+        "match_count": 1,
+        "bytes_written": len(updated.encode("utf-8")),
+        "size": p.stat().st_size,
+        "size_human": _format_size(p.stat().st_size),
+    }, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ replace_text 调用成功: {path}"})
+    return result
+
+
+def copy_file_impl(
+    ws: Workspace,
+    source_path: str,
+    destination_path: str,
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> str:
+    if Path(destination_path).name in FORBIDDEN_READ_BASENAMES:
+        return json.dumps({"error": f"不允许将文件复制到受限文件名: {destination_path}"}, ensure_ascii=False)
+    try:
+        src = ws.resolve_read(source_path)
+    except ValueError as e:
+        return json.dumps({"error": str(e), "source_path": source_path}, ensure_ascii=False)
+    dst = ws.resolve_write(destination_path)
+    old_scripts_dir = ws.scripts_dir / "old_session_scripts"
+    try:
+        if old_scripts_dir.resolve() in dst.resolve().parents or dst.resolve() == old_scripts_dir.resolve():
+            return json.dumps({"error": f"不允许修改或写入 old_session_scripts 目录中的文件: {destination_path}"}, ensure_ascii=False)
+    except Exception:
+        pass
+
+    if not src.exists():
+        return json.dumps({"error": f"源文件不存在: {source_path}"}, ensure_ascii=False)
+    if not src.is_file():
+        return json.dumps({"error": f"源路径不是文件: {source_path}"}, ensure_ascii=False)
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+
+    size = dst.stat().st_size
+    result = json.dumps({
+        "ok": True,
+        "source_path": source_path,
+        "destination_path": destination_path,
+        "size": size,
+        "size_human": _format_size(size),
+    }, ensure_ascii=False)
+    if emit_log:
+        emit_log("custom_agent", {
+            "level": "info",
+            "message": f"✅ copy_file 调用成功: {source_path} -> {destination_path}"
         })
+    return result
+
+
+def list_files_impl(
+    ws: Workspace,
+    subdir: str = "",
+    emit_log: Optional[Callable[[str, str | dict], None]] = None,
+) -> list[dict]:
+    files = []
+    try:
+        if ws.has_multi_read_roots:
+            if subdir:
+                target = ws.resolve_read(subdir)
+                domain, _ = split_domain_path(subdir, allowed_domains=ws.read_roots.keys())
+                domains = [(domain, target)]
+            else:
+                domains = [(domain, root.resolve()) for domain, root in ws.read_roots.items()]
+            for domain, root in domains:
+                candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+                for p in candidates:
+                    if not p.is_file():
+                        continue
+                    rel_parts = p.relative_to(root).parts
+                    if any(part.startswith(".") for part in rel_parts):
+                        continue
+
+                    size = p.stat().st_size
+                    ext = p.suffix.lower()
+                    if ext in {".xlsx", ".xls"}:
+                        kind = "excel"
+                    elif ext == ".csv":
+                        kind = "csv"
+                    elif ext == ".pdf":
+                        kind = "pdf"
+                    elif ext in {".docx", ".doc"}:
+                        kind = "word"
+                    elif ext in {".txt", ".log"}:
+                        kind = "text"
+                    elif ext == ".md":
+                        kind = "markdown"
+                    elif ext == ".json":
+                        kind = "json"
+                    elif ext in {".sqlite", ".db"}:
+                        kind = "sqlite"
+                    elif ext in {".zip", ".tar", ".gz", ".rar"}:
+                        kind = "archive"
+                    elif ext == ".py":
+                        kind = "python"
+                    else:
+                        kind = "other"
+
+                    if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
+                        rec_tool = "read_document_structure"
+                    elif kind == "text":
+                        rec_tool = "read_file" if size < 100 * 1024 else "search"
+                    elif kind == "python":
+                        rec_tool = "read_file"
+                    else:
+                        rec_tool = "run_python"
+
+                    files.append({
+                        "path": join_domain_path(domain, str(p.relative_to(root)).replace("\\", "/")),
+                        "name": p.name,
+                        "size": size,
+                        "size_human": _format_size(size),
+                        "ext": ext,
+                        "kind": kind,
+                        "recommended_tool": rec_tool
+                    })
+        else:
+            target = ws.resolve_read(subdir) if subdir else ws.read_root.resolve()
+            ws_dir_abs = ws.read_root.resolve()
+            candidates = [target] if target.is_file() else sorted(target.rglob("*"))
+            for p in candidates:
+                if not p.is_file():
+                    continue
+                rel_parts = p.relative_to(ws_dir_abs).parts
+                if any(part.startswith(".") for part in rel_parts):
+                    continue
+
+                size = p.stat().st_size
+                ext = p.suffix.lower()
+
+                if ext in {".xlsx", ".xls"}:
+                    kind = "excel"
+                elif ext == ".csv":
+                    kind = "csv"
+                elif ext == ".pdf":
+                    kind = "pdf"
+                elif ext in {".docx", ".doc"}:
+                    kind = "word"
+                elif ext in {".txt", ".log"}:
+                    kind = "text"
+                elif ext == ".md":
+                    kind = "markdown"
+                elif ext == ".json":
+                    kind = "json"
+                elif ext in {".sqlite", ".db"}:
+                    kind = "sqlite"
+                elif ext in {".zip", ".tar", ".gz", ".rar"}:
+                    kind = "archive"
+                elif ext == ".py":
+                    kind = "python"
+                else:
+                    kind = "other"
+
+                if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
+                    rec_tool = "read_document_structure"
+                elif kind == "text":
+                    if size < 100 * 1024:
+                        rec_tool = "read_file"
+                    else:
+                        rec_tool = "search"
+                elif kind == "python":
+                    rec_tool = "read_file"
+                else:
+                    rec_tool = "run_python"
+
+                files.append({
+                    "path": str(p.relative_to(ws_dir_abs)),
+                    "name": p.name,
+                    "size": size,
+                    "size_human": _format_size(size),
+                    "ext": ext,
+                    "kind": kind,
+                    "recommended_tool": rec_tool
+                })
+    except ValueError as e:
+        return [{"error": str(e), "path": subdir or ""}]
+    if emit_log:
+        emit_log("custom_agent", {"level": "info", "message": f"✅ list_files 调用成功: {subdir or '.'}"})
     return files

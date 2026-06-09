@@ -37,6 +37,7 @@ def identity() -> str:
         "你是一个自主经营数据分析 Agent。"
         "你可以通过调用工具来读取文件、查询 DuckDB 数据库、提取文档表格、执行 Python 脚本，最终产出完整的分析报告。"
         "你必须按计划逐步推进，每完成一步后调用 check_plan 验证并前进到下一步。"
+        "当计划的全部步骤完成，或者遇到无法继续的严重错误时，必须调用 finish_task 结束/终止当前任务。"
     )
 
 
@@ -47,6 +48,7 @@ def security_rules() -> str:
         "- duckdb_query 只能执行只读 SELECT 查询，禁止 INSERT/DROP/DELETE/ALTER\n"
         "- DuckDB 表名列名含中文或括号时需要双引号引用，如 SELECT \"毛利(元)\" FROM \"月营业数据\"，不要用反引号\n"
         "- Python 代码只能操作 workspace 内目录\n"
+        "- 在 `scripts/old_session_scripts/` 目录下（如果存在）存有该用户最近几次运行生成的旧 Python 脚本（按 run_id 文件夹分类）。如果你发现有可复用的清洗/归一化脚本，你可以通过 `run_python` 直接执行它们（系统会自动将它们复制到你的根 `scripts/` 目录中）。注意：你没有直接修改或写入 `old_session_scripts/` 目录的权限。\n"
         "- 禁止结尾写客套话"
     )
 
@@ -58,7 +60,6 @@ def security_rules() -> str:
 def build_user_content(ws, analysis_params: str = "") -> str:
     return join_parts(
         current_time(),
-        plan_progress(ws),
         workspace_summary(ws),
         user_analysis_params(analysis_params),
         task_instruction(),
@@ -104,6 +105,7 @@ def workspace_summary(ws) -> str:
 def task_instruction() -> str:
     return (
         "按 plan 中的步骤逐步推进。每完成一步后，必须调用 check_plan(step_index) 验证并前进到下一步。"
+        "所有步骤全部完成后（或者遇到不可恢复的错误），调用 finish_task 结束任务。"
     )
 
 

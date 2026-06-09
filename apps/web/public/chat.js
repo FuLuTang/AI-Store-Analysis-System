@@ -86,6 +86,8 @@
         let chatHistoryLoaded = false;
         let chatHistoryLoadPromise = null;
         let chatPendingFiles = [];
+        let lastChatUpdate = '';
+        let chatPollTimer = null;
 
         onMarkedLoaded = () => {
             if (chatHistoryLoaded) {
@@ -146,6 +148,15 @@
             return { ...record };
         }
 
+        function messageUpdateValue(record) {
+            return String((record && (record.datetime || record.time)) || '');
+        }
+
+        function updateLastChatUpdate(messages) {
+            const values = (messages || []).map(messageUpdateValue).filter(Boolean);
+            if (values.length) lastChatUpdate = values[values.length - 1];
+        }
+
         function formatChatTimestamp(record) {
             if (!record || !record.datetime) return '';
             const dt = new Date(record.datetime);
@@ -155,6 +166,7 @@
 
         function setChatMessages(messages) {
             chatMessagesCache = (messages || []).map(normalizeChatRecord).filter(Boolean);
+            updateLastChatUpdate(chatMessagesCache);
             chatHistoryLoaded = true;
             renderChatMessages();
         }
@@ -179,6 +191,7 @@
 
             const history = chatMessagesCache.filter(msg => {
                 if (msg.role === 'notice') return String(msg.content || '').trim().length > 0;
+                if (msg.role === 'card') return true;
                 if (msg.role === 'user') return true;
                 if (msg.role !== 'assistant') return false;
                 return String(msg.content || '').trim().length > 0;
@@ -193,6 +206,8 @@
                     <div class="chat-notice">
                         <span class="markdown-body chat-markdown">${formatChatContent(msg.content)}</span>
                     </div>
+                ` : msg.role === 'card' ? `
+                    ${renderChatCard(msg)}
                 ` : `
                 <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
                     <div class="chat-message-role">
@@ -206,7 +221,39 @@
                 </div>
                 `}
             `).join('');
+            bindChatCardActions();
             chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function renderChatCard(msg) {
+            const options = Array.isArray(msg.options) ? msg.options : [];
+            const choice = msg.choice || '';
+            const buttons = (choice ? [choice] : options).map(option => `
+                <button type="button"
+                    class="chat-card-option ${choice === option ? 'selected' : ''}"
+                    data-card-name="${escapeChatHtml(msg.name || '')}"
+                    data-card-choice="${escapeChatHtml(option)}"
+                    ${choice ? 'disabled' : ''}>
+                    ${escapeChatHtml(option)}
+                </button>
+            `).join('');
+            return `
+                <div class="chat-card">
+                    <div class="chat-card-title">${escapeChatHtml(msg.title || '请求确认')}</div>
+                    <div class="chat-card-detail">${formatChatContent(msg.detail || '')}</div>
+                    ${buttons ? `<div class="chat-card-options">${buttons}</div>` : ''}
+                    ${formatChatTimestamp(msg) ? `<div class="chat-card-time">${formatChatTimestamp(msg)}</div>` : ''}
+                </div>
+            `;
+        }
+
+        function bindChatCardActions() {
+            chatMessages.querySelectorAll('.chat-card-option:not([disabled])').forEach(btn => {
+                btn.onclick = () => submitChatCardChoice(
+                    btn.getAttribute('data-card-name') || '',
+                    btn.getAttribute('data-card-choice') || ''
+                );
+            });
         }
 
         function updateChatComposerState() {
@@ -272,8 +319,10 @@
         async function loadChatHistory() {
             if (chatHistoryLoadPromise) return chatHistoryLoadPromise;
             chatHistoryLoadPromise = (async () => {
-                chatHistoryLoaded = false;
-                renderChatMessages();
+                if (!chatHistoryLoaded) {
+                    chatHistoryLoaded = false;
+                    renderChatMessages();
+                }
                 try {
                     const response = await fetch('/api/chatbot/history', { headers: authHeaders() });
                     if (!response.ok) {
@@ -285,6 +334,7 @@
                     }
                     const data = await response.json();
                     setChatMessages(Array.isArray(data.messages) ? data.messages : []);
+                    if (data.last_update) lastChatUpdate = data.last_update;
                 } catch (err) {
                     chatMessages.innerHTML = `<div class="chat-empty-state">聊天记录加载失败：${escapeChatHtml(err.message)}</div>`;
                     chatHistoryLoaded = true;
@@ -293,6 +343,58 @@
                 }
             })();
             return chatHistoryLoadPromise;
+        }
+
+        async function refreshChatStatus() {
+            try {
+                const response = await fetch('/api/chatbot/status', { headers: authHeaders() });
+                if (response.status === 401) {
+                    clearAuthAndReturn();
+                    return;
+                }
+                if (response.status === 429) return;
+                if (!response.ok) return;
+                const data = await response.json();
+                chatStatusHint.textContent = data.state || '账号级多轮对话';
+                const nextUpdate = data.last_update || '';
+                if (nextUpdate && nextUpdate !== lastChatUpdate) {
+                    await loadChatHistory();
+                }
+            } catch (_) {}
+        }
+
+        function ensureChatPolling() {
+            if (chatPollTimer) return;
+            chatPollTimer = setInterval(refreshChatStatus, 3000);
+        }
+
+        async function submitChatCardChoice(name, choice) {
+            if (!name || !choice) return;
+            const token = sessionStorage.getItem('authToken') || '';
+            try {
+                chatStatusHint.textContent = '提交授权选择...';
+                const response = await fetch('/api/chatbot', {
+                    method: 'POST',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        choice,
+                        detail: token
+                    })
+                });
+                if (response.status === 401) {
+                    clearAuthAndReturn();
+                    return;
+                }
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.detail || '提交授权选择失败');
+                }
+                await loadChatHistory();
+                await refreshChatStatus();
+            } catch (err) {
+                chatStatusHint.textContent = `授权失败：${err.message}`;
+            }
         }
 
         async function sendChatMessage() {
@@ -304,8 +406,6 @@
             await loadChatHistory().catch(() => {});
 
             let userMessage = null;
-            let assistantMessage = null;
-
             try {
                 const uploadedAttachments = await uploadChatAttachments(filesToUpload);
                 chatPendingFiles = [];
@@ -317,9 +417,8 @@
                     attachments: uploadedAttachments,
                     datetime: new Date().toISOString()
                 };
-                assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
                 chatMessagesCache.push(userMessage);
-                chatMessagesCache.push(assistantMessage);
+                updateLastChatUpdate(chatMessagesCache);
                 renderChatMessages();
 
                 const response = await fetch('/api/chatbot', {
@@ -346,24 +445,11 @@
                     throw new Error(errorText);
                 }
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    assistantMessage.content += decoder.decode(value, { stream: true });
-                    renderChatMessages();
-                }
-                assistantMessage.content += decoder.decode();
-                if (!assistantMessage.content.trim()) {
-                    assistantMessage.content = '当前没有返回可显示的内容。';
-                }
-                await loadChatHistory().catch(() => {});
+                chatStatusHint.textContent = '输入中...';
+                await refreshChatStatus();
             } catch (err) {
-                if (!assistantMessage) {
-                    assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
-                    chatMessagesCache.push(assistantMessage);
-                }
+                const assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
+                chatMessagesCache.push(assistantMessage);
                 assistantMessage.content = `对话失败：${err.message}`;
             } finally {
                 renderChatMessages();
@@ -392,6 +478,7 @@
         loadChatHistory().catch((err) => {
             console.error('Initial chatbot history load failed', err);
         });
+        ensureChatPolling();
         updateChatComposerState();
     });
 })();

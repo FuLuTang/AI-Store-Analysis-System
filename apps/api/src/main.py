@@ -2143,7 +2143,7 @@ def get_public_report_asset(
 
 register_chatbot_routes(
     app,
-    resolve_session=resolve_session,
+    resolve_session=lambda auth_token: resolve_session(auth_token, task_type="chatbot"),
     get_chatbot_preset=get_chatbot_preset,
 )
 

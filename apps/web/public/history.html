@@ -163,11 +163,11 @@
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
-                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
+                <span id="accountDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm); margin-right: 4px;">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
-                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                <button class="nav-btn danger" onclick="window.logout()">
                     <i class="fas fa-sign-out-alt"></i> 退出
                 </button>
             </div>
@@ -205,20 +205,33 @@
     <script>
         // ========== 鉴权守卫 ==========
         function authHeaders() {
-            const key = localStorage.getItem('X-FZT-Key') || '';
-            return { 'X-FZT-Key': key };
+            const key = sessionStorage.getItem('authToken') || '';
+            return { 'X-Auth-Token': key };
         }
 
+        function clearAuthAndReturn() {
+            sessionStorage.removeItem('authToken');
+            sessionStorage.removeItem('accountName');
+            window.location.href = '/login.html';
+        }
+
+        window.logout = async function() {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
+            } catch(e) {}
+            clearAuthAndReturn();
+        };
+
         (async function authGuard() {
-            const key = localStorage.getItem('X-FZT-Key');
+            const key = sessionStorage.getItem('authToken');
             if (!key) { window.location.href = '/login.html'; return; }
             try {
-                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
-                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; return; }
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-Auth-Token': key } });
+                if (!r.ok) { clearAuthAndReturn(); return; }
                 const data = await r.json();
-                if (data.status === 'ok' && data.userKey) {
-                    const disp = document.getElementById('userKeyDisplay');
-                    if (disp) disp.innerText = `密钥: ${data.userKey}`;
+                if (data.status === 'ok' && data.account) {
+                    const disp = document.getElementById('accountDisplay');
+                    if (disp) disp.innerText = `账号: ${data.account}`;
                 }
             } catch(e) { window.location.href = '/login.html'; }
         })();
@@ -245,6 +258,7 @@
         async function loadRuns() {
             try {
                 const res = await fetch('/api/reports', { headers: authHeaders() });
+                if (res.status === 401) { clearAuthAndReturn(); return; }
                 if (!res.ok) throw new Error('拉取列表失败');
                 const data = await res.json();
                 renderList(data.runs || []);
@@ -364,6 +378,7 @@
                     body: JSON.stringify({ public: isPublic })
                 });
                 
+                if (res.status === 401) { clearAuthAndReturn(); return; }
                 if (!res.ok) throw new Error('修改失败');
                 const data = await res.json();
                 
@@ -451,8 +466,8 @@
 
         // ========== 下载产物 ==========
         function downloadArchive(runId) {
-            const key = localStorage.getItem('X-FZT-Key') || '';
-            const url = `/api/reports/download?x-fzt-key=${encodeURIComponent(key)}&run_id=${encodeURIComponent(runId)}`;
+            const key = sessionStorage.getItem('authToken') || '';
+            const url = `/api/reports/download?auth-token=${encodeURIComponent(key)}&run_id=${encodeURIComponent(runId)}`;
             window.open(url, '_blank');
         }
 
@@ -465,6 +480,7 @@
                     method: 'DELETE',
                     headers: authHeaders()
                 });
+                if (res.status === 401) { clearAuthAndReturn(); return; }
                 if (!res.ok) throw new Error('删除失败');
                 
                 // 动画移除 DOM

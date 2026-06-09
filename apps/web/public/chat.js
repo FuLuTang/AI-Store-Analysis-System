@@ -95,8 +95,14 @@
 
         // Auth helper
         function authHeaders() {
-            const key = localStorage.getItem('X-FZT-Key') || '';
-            return { 'X-FZT-Key': key };
+            const key = sessionStorage.getItem('authToken') || '';
+            return { 'X-Auth-Token': key };
+        }
+
+        function clearAuthAndReturn() {
+            sessionStorage.removeItem('authToken');
+            sessionStorage.removeItem('accountName');
+            window.location.href = '/login.html';
         }
 
         function escapeChatHtml(text) {
@@ -246,6 +252,10 @@
                 body: formData
             });
             if (!response.ok) {
+                if (response.status === 401) {
+                    clearAuthAndReturn();
+                    throw new Error('登录状态失效，请重新登录');
+                }
                 let errorText = '附件上传失败';
                 try {
                     const errorData = await response.json();
@@ -267,6 +277,10 @@
                 try {
                     const response = await fetch('/api/chatbot/history', { headers: authHeaders() });
                     if (!response.ok) {
+                        if (response.status === 401) {
+                            clearAuthAndReturn();
+                            return;
+                        }
                         throw new Error(await response.text() || '历史记录加载失败');
                     }
                     const data = await response.json();
@@ -318,6 +332,10 @@
                 });
 
                 if (!response.ok) {
+                    if (response.status === 401) {
+                        clearAuthAndReturn();
+                        throw new Error('登录状态失效，请重新登录');
+                    }
                     let errorText = '请求失败';
                     try {
                         const errorData = await response.json();

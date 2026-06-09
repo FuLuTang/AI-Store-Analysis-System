@@ -472,16 +472,16 @@ def register_chatbot_routes(
     router = APIRouter()
 
     @router.get("/api/chatbot/history")
-    def get_chatbot_history(x_fzt_key: Optional[str] = Header(default=None)):
-        session = resolve_session(x_fzt_key)
+    def get_chatbot_history(x_auth_token: Optional[str] = Header(default=None)):
+        session = resolve_session(x_auth_token)
         return {"messages": _public_history_messages(history_store.load_messages(session.account_dir))}
 
     @router.post("/api/chatbot/attachments")
     async def upload_chatbot_attachments(
         attachments: list[UploadFile] = File(...),
-        x_fzt_key: Optional[str] = Header(default=None),
+        x_auth_token: Optional[str] = Header(default=None),
     ):
-        session = resolve_session(x_fzt_key)
+        session = resolve_session(x_auth_token)
         saved = await attachment_store.save_uploads(session.account_dir, attachments)
         logger.info(
             "[chatbot] stage=attachments_uploaded account=%s count=%d bytes=%d",
@@ -492,9 +492,9 @@ def register_chatbot_routes(
         return {"attachments": saved}
 
     @router.post("/api/chatbot")
-    async def chat_stream(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
+    async def chat_stream(request: Request, x_auth_token: Optional[str] = Header(default=None)):
         t0 = time.perf_counter()
-        session = resolve_session(x_fzt_key)
+        session = resolve_session(x_auth_token)
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")

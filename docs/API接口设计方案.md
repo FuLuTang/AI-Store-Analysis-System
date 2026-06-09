@@ -1,6 +1,6 @@
-# AI 门店分析系统 API 接口方案 (v2.2 - 带身份鉴权)
+# AI 门店分析系统 API 接口方案 (v3.0 - 账号密码与 Token 鉴权)
 
-本方案在单用户分析逻辑基础上，引入了基于 **User Key** 的多租户隔离机制。
+本方案在单用户分析逻辑基础上，引入账号名、密码登录与临时 token 鉴权机制。客户端登录后保存完整 token，后续用户侧接口通过 `X-Auth-Token` Header 或 `auth-token` 查询参数携带 token。
 
 ## 1. 核心流程图 (带鉴权)
 
@@ -11,9 +11,12 @@ sequenceDiagram
     participant Auth as 鉴权/限流模块
     participant Worker as 背景分析线程
 
-    Client->>API: POST /api/analyze (multipart)
-    API->>Auth: 校验 Key 有效性
-    alt Key 错误
+    Client->>API: POST /api/auth/login
+    API->>Auth: 校验账号名与 bcrypt 密码哈希
+    API-->>Client: 返回完整 token
+    Client->>API: POST /api/analyze (multipart + X-Auth-Token)
+    API->>Auth: 校验 token 日志与软/硬过期
+    alt token 错误或过期
         API-->>Client: 401 Unauthorized
     else 系统忙碌 — 该用户任务进行中
         API-->>Client: 400 Bad Request
@@ -24,26 +27,28 @@ sequenceDiagram
     end
 
     Worker->>Worker: 分析中...
-    Worker->>API: 写入 storage/accounts/hash/latest_report.md
+    Worker->>API: 写入 storage/accounts/{account_id}/runs/diagnosis/{run_id}/workspace/output
 ```
 
 ## 2. 鉴权规范
 
 ### 2.1 用户鉴权
 
-用户接口通过 HTTP Header 携带：
+用户接口通过 HTTP Header 或 SSE 查询参数携带完整 token：
 
-- **Header Name**: `x-fzt-key`
-- **Value**: 用户的唯一通行证（如 `fzt_abc123...`）
+- **Header Name**: `X-Auth-Token`
+- **Query Name**: `auth-token`，用于 `EventSource` 或下载链接等不方便设置 Header 的场景
+- **Value**: 登录或注册接口返回的完整 token
 
-> 所有核心接口均要求提供有效的 `x-fzt-key`，不传 key 将返回 401 Unauthorized。
+> 所有核心用户接口均要求提供有效 token，不传 token 或 token 过期将返回 401 Unauthorized。接口返回的 `account` 仅为 `abc***` 形式的展示字段，不参与鉴权或账号定位。
 
 ### 2.2 管理员鉴权
 
 管理员接口通过 HTTP Header 携带：
 
-- **Header Name**: `x-admin-token`
+- **Header Name**: `X-Admin-Token`
 - **Value**: 与服务端环境变量 `ADMIN_TOKEN` 一致的口令
+- **说明**: 管理员鉴权独立于用户 token / 客服 token 链路。
 
 ---
 
@@ -53,25 +58,45 @@ sequenceDiagram
 
 #### [POST] /api/auth/register
 
-- **说明**: 申请一个新的 User Key。受限流保护（3分钟内5次）。
-- **Body (JSON, 可选)**: `{"apiKey": "sk-..."}` 或 `{"openaiKey": "sk-..."}`，两者均用于设置全局 LLM API Key。
-- **响应 (200)**: `{"userKey": "fzt_完整Key_仅显示一次", "status": "ok"}`
+- **说明**: 创建账号，写入 bcrypt 密码哈希，并返回登录 token。受限流保护（3分钟内5次）。
+- **Body (JSON)**: `{"username": "store001", "password": "Password123"}`
+- **响应 (200)**: `{"token": "完整用户token", "status": "ok", "account": "sto***"}`
 - **错误 (429)**: 注册过于频繁
 - **错误 (500)**: 账号初始化失败
 
+#### [POST] /api/auth/login
+
+- **说明**: 使用账号名和密码登录。
+- **Body (JSON)**: `{"username": "store001", "password": "Password123"}`
+- **响应 (200)**: `{"token": "完整用户token", "status": "ok", "account": "sto***"}`
+- **错误 (401)**: 账号或密码错误
+
 #### [POST] /api/auth/verify
 
-- **说明**: 校验当前 Key 是否有效。
-- **Header**: `x-fzt-key` (必填)
-- **响应 (200)**: `{"status": "ok", "userKey": "fzt_掩码版"}`
-- **错误 (401)**: Invalid or expired key
+- **说明**: 校验当前 token 是否有效。
+- **Header**: `X-Auth-Token` (必填)
+- **响应 (200)**: `{"status": "ok", "account": "sto***"}`
+- **错误 (401)**: Invalid or expired token
+
+#### [POST] /api/auth/service-token
+
+- **说明**: 使用有效用户 token 创建客服 token。
+- **Body (JSON)**: `{"token": "完整用户token"}`
+- **响应 (200)**: `{"token": "完整客服token", "status": "ok", "account": "sto***"}`
+- **错误 (401)**: 用户 token 无效或已过期
+
+#### [POST] /api/auth/logout
+
+- **说明**: 撤销当前 token。
+- **Header**: `X-Auth-Token` (必填)
+- **响应 (200)**: `{"status": "ok"}`
 
 ### 3.2 核心分析类
 
 #### [POST] /api/analyze
 
 - **说明**: Multipart 上传入口，提交文件并启动分析。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **Body (Multipart)**: `files` 字段，一个或多个文件。每文件最大 **100MB**，支持 `.json` / `.xlsx` / `.csv` 格式。可选字段 `reasoningEffort` (`low` / `medium` / `high`，默认 `medium`)。
 - **响应 (200)**: `{"status": "started", "pipeline": "multifile"}`
 - **错误 (400)**: 任务正在运行中 / 文件过大(>100MB) / JSON 解析失败 / 文件读取失败
@@ -79,7 +104,7 @@ sequenceDiagram
 #### [GET] /api/status
 
 - **说明**: 获取该账户最近一次任务的状态与结果。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**:
 
 ```json
@@ -94,19 +119,19 @@ sequenceDiagram
 #### [GET] /api/logs
 
 - **说明**: 获取该账户最近一次任务的日志快照（全量日志数组）。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**: `[{log_entry}, ...]` — 日志事件数组，每条含 `type`、`time`、`nodeId` 等字段。
 
 #### [GET] /api/stream
 
 - **说明**: SSE 日志流，供前端实时刷新监控面板。
-- **Query**: `?x-fzt-key=...`（必填，通过 URL 查询参数传递，适配 EventSource 场景）
+- **Query**: `?auth-token=...`（必填，通过 URL 查询参数传递，适配 EventSource 场景）
 - **响应**: `text/event-stream`，首条事件 `{"type":"reset","time":"HH:MM:SS"}`，后续为日志事件 JSON
 
 #### [POST] /api/stop
 
 - **说明**: 强行停止该账户下的分析任务。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**: `{"status": "ok"}`
 
 ### 3.3 客服会话类
@@ -114,7 +139,7 @@ sequenceDiagram
 #### [GET] /api/chatbot/history
 
 - **说明**: 读取当前账号的客服会话历史消息。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**:
 
 ```json
@@ -147,7 +172,7 @@ sequenceDiagram
 #### [POST] /api/chatbot/attachments
 
 - **说明**: 上传客服会话附件。图片、PDF、Excel、CSV、压缩包等都按附件处理。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **Body**: `multipart/form-data`
   - `attachments`: 附件文件，可传多个
 - **限制**:
@@ -184,7 +209,7 @@ sequenceDiagram
 #### [POST] /api/chatbot
 
 - **说明**: 发送一条聊天消息，和账号下的客服会话交互，并以流式文本返回结果。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **Body (JSON)**:
 
 ```json
@@ -213,7 +238,7 @@ sequenceDiagram
 
 - **相关配置**: 客服会话的连接参数来自全局预设 `chatbot` 段，由管理员接口维护，并通过 `/api/admin/llm-presets` 读取和更新。
 
-### 3.4 管理员接口 (需 Header: x-admin-token)
+### 3.4 管理员接口 (需 Header: X-Admin-Token)
 
 #### [GET] /api/admin/llm-presets
 
@@ -292,7 +317,8 @@ sequenceDiagram
 
 ## 4. 存储隔离规约
 
-系统会根据 `x-fzt-key` 的 SHA256 哈希值定位存储路径：
+系统会根据账号名生成账号目录，token 只用于请求鉴权：
 
-- **路径**: `/storage/accounts/{sha256(key)}/`
-- **内容**: 包含该用户的 `profile.json` (配置), `latest_report.md` (报告), `latest_logs.json` (日志)。
+- **路径**: `/storage/accounts/{账号名前三位}_{SHA256(账号名)前六位}/`
+- **内容**: 包含该账号的 `account.json`、`account_tokens.jsonl`、`profile.json`、`analysis_params.json`、`runs/` 等数据。
+- **任务目录**: `/storage/accounts/{account_id}/runs/{task_type}/{run_id}/`

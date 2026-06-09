@@ -21,6 +21,7 @@ TOOL_BLACKLIST_BY_TASK_TYPE: dict[str, set[str]] = {
         "read_plan",
         "check_plan",
         "finish_task",
+        "run_python",
     },
 }
 
@@ -260,26 +261,40 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                            "description": "功能路径（例如 'ai_analyse/diagnosis/launch_diagnosis'）"
                         }
                     },
                     "required": ["path"],
                 },
             ),
             _make_tool(
+                name="get_user_service_token",
+                description="请求用户授权代理操作。只有当你需要代表用户执行系统操作时调用；调用后系统会向用户展示确认卡片，用户同意后你会收到客服 token。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "一句话说明为什么需要用户授权代理操作。"
+                        }
+                    },
+                    "required": ["reason"],
+                },
+            ),
+            _make_tool(
                 name="execute_system_function",
-                description="执行指定的系统服务功能。必须传入准确的功能路径与符合说明要求的参数对象。",
+                description="执行指定系统服务功能。执行前必须先调用 get_user_service_token 获得客服 token，并把该 token 放入 params.service_token。",
                 parameters={
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                            "description": "功能路径（例如 'ai_analyse/diagnosis/launch_diagnosis'）"
                         },
                         "params": {
                             "type": "object",
-                            "description": "具体入参键值对。请务必提前通过查看功能说明工具（view_system_function_doc）确认此参数对象中应当包含哪些属性及如何填写。"
-                        }
+                            "description": "功能参数对象；必须包含 service_token 字段，其他字段按 view_system_function_doc 的说明填写。"
+                        },
                     },
                     "required": ["path", "params"],
                 },
@@ -490,9 +505,9 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
 
     if task_type == "chatbot":
         from .tools.impl.system_function_impl import (
+            execute_system_function_impl,
             list_system_functions_impl,
             view_system_function_doc_impl,
-            execute_system_function_impl,
         )
 
         def _list_system_functions() -> str:
@@ -501,12 +516,19 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         def _view_system_function_doc(path: str) -> str:
             return view_system_function_doc_impl(path)
 
-        def _execute_system_function(path: str, params: dict) -> str:
-            return execute_system_function_impl(ws, path, params, llm_preset)
+        def _get_user_service_token(reason: str) -> str:
+            return json.dumps({
+                "status": "pending_user_authorization",
+                "reason": str(reason or "").strip(),
+            }, ensure_ascii=False)
+
+        def _execute_system_function(path: str, params: dict | str) -> str:
+            return execute_system_function_impl(ws, path, params, llm_preset or {})
 
         tool_map.update({
             "list_system_functions": _list_system_functions,
             "view_system_function_doc": _view_system_function_doc,
+            "get_user_service_token": _get_user_service_token,
             "execute_system_function": _execute_system_function,
         })
 

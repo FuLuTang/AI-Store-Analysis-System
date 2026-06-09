@@ -18,7 +18,7 @@ def list_system_functions_impl() -> str:
     # 构建树形结构字典
     tree = {}
     for p in sys_functions_dir.rglob("*.py"):
-        if p.name == "__init__.py":
+        if p.name == "__init__.py" or p.name.startswith("_"):
             continue
         try:
             rel_parts = p.relative_to(sys_functions_dir).parts

@@ -40,7 +40,8 @@ from packages.price_recommendation.service import (
     run_price_precheck,
     run_price_workflow,
 )
-from apps.api.src.chat_bridge import register_chat_routes
+from apps.api.src.chatbot_service import register_chatbot_routes
+from packages.agents.core.file_domains import SERVICE_DOCS_DOMAIN, join_domain_path, split_domain_path
 
 load_dotenv()
 
@@ -75,6 +76,7 @@ app.add_middleware(
 STORAGE_DIR = ROOT_DIR / "storage"
 _ensure_file_log()
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
+SERVICE_DOCS_DIR = STORAGE_DIR / "service_docs"
 LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
 MAX_UPLOAD_FILE_SIZE = 100 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
@@ -87,12 +89,18 @@ PRESET_SECRET = os.getenv("LLM_PRESET_SECRET", "").strip()
 
 GLOBAL_AGENT_PIPELINE = "custom"
 
+SERVICE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def normalize_reasoning_effort(value: Optional[str]) -> str:
     if not isinstance(value, str):
         return DEFAULT_REASONING_EFFORT
     effort = value.strip().lower()
     return effort if effort in REASONING_EFFORT_OPTIONS else DEFAULT_REASONING_EFFORT
+
+
+def normalize_cost_tier(value: Optional[str]) -> str:
+    return normalize_reasoning_effort(value)
 
 
 def _default_llm_presets() -> dict:
@@ -111,7 +119,12 @@ def _default_llm_presets() -> dict:
     return {
         "low": {"call": _sub_config("low"), "fastcall": _sub_config("low")},
         "medium": {"call": _sub_config("medium"), "fastcall": _sub_config("medium")},
-        "high": {"call": _sub_config("high"), "fastcall": _sub_config("high")}
+        "high": {"call": _sub_config("high"), "fastcall": _sub_config("high")},
+        "chatbot": {
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "model": model,
+        },
     }
 
 
@@ -187,6 +200,22 @@ def _sanitize_preset_item(raw: Optional[dict], fallback: dict) -> dict:
         }
 
 
+def _sanitize_chatbot_preset(raw: Optional[dict], fallback: dict) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    base_url = data.get("baseUrl", fallback.get("baseUrl", ""))
+    api_key = data.get("apiKeyEnc")
+    if isinstance(api_key, str):
+        api_key = _decrypt_text(api_key)
+    else:
+        api_key = data.get("apiKey", fallback.get("apiKey", ""))
+    model = data.get("model", fallback.get("model", ""))
+    return {
+        "baseUrl": base_url.strip() if isinstance(base_url, str) else str(fallback.get("baseUrl", "")),
+        "apiKey": api_key.strip() if isinstance(api_key, str) else str(fallback.get("apiKey", "")),
+        "model": model.strip() if isinstance(model, str) else str(fallback.get("model", "")),
+    }
+
+
 def _load_llm_presets() -> dict:
     defaults = _default_llm_presets()
     if LLM_PRESETS_FILE.exists():
@@ -196,6 +225,7 @@ def _load_llm_presets() -> dict:
             if isinstance(source, dict):
                 for effort in REASONING_EFFORT_OPTIONS:
                     defaults[effort] = _sanitize_preset_item(source.get(effort), defaults[effort])
+                defaults["chatbot"] = _sanitize_chatbot_preset(source.get("chatbot"), defaults["chatbot"])
         except Exception:
             pass
     return defaults
@@ -225,6 +255,9 @@ def set_global_api_key(raw_key: str):
                 preset["call"]["apiKey"] = key_value
             if "fastcall" in preset:
                 preset["fastcall"]["apiKey"] = key_value
+        chatbot_preset = GLOBAL_LLM_PRESETS.get("chatbot")
+        if isinstance(chatbot_preset, dict):
+            chatbot_preset["apiKey"] = key_value
         save_llm_presets_locked()
 
 
@@ -242,6 +275,16 @@ def get_llm_preset(reasoning_effort: Optional[str]) -> dict:
     return preset
 
 
+def get_chatbot_preset() -> dict:
+    with LLM_PRESETS_LOCK:
+        preset = GLOBAL_LLM_PRESETS.get("chatbot", {}).copy()
+    return {
+        "baseUrl": preset.get("baseUrl", ""),
+        "apiKey": preset.get("apiKey", ""),
+        "model": preset.get("model", ""),
+    }
+
+
 def get_all_llm_presets() -> dict:
     with LLM_PRESETS_LOCK:
         return {k: v.copy() for k, v in GLOBAL_LLM_PRESETS.items()}
@@ -251,22 +294,29 @@ def save_llm_presets_locked():
     LLM_PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
     safe_presets = {}
     for effort, preset in GLOBAL_LLM_PRESETS.items():
-        call_config = preset.get("call", {})
-        fast_config = preset.get("fastcall", {})
-        safe_presets[effort] = {
-            "call": {
-                "baseUrl": call_config.get("baseUrl", ""),
-                "apiKeyEnc": _encrypt_text(call_config.get("apiKey", "")),
-                "model": call_config.get("model", ""),
-                "reasoningEffort": call_config.get("reasoningEffort", effort)
-            },
-            "fastcall": {
-                "baseUrl": fast_config.get("baseUrl", ""),
-                "apiKeyEnc": _encrypt_text(fast_config.get("apiKey", "")),
-                "model": fast_config.get("model", ""),
-                "reasoningEffort": fast_config.get("reasoningEffort", effort)
+        if effort in REASONING_EFFORT_OPTIONS:
+            call_config = preset.get("call", {})
+            fast_config = preset.get("fastcall", {})
+            safe_presets[effort] = {
+                "call": {
+                    "baseUrl": call_config.get("baseUrl", ""),
+                    "apiKeyEnc": _encrypt_text(call_config.get("apiKey", "")),
+                    "model": call_config.get("model", ""),
+                    "reasoningEffort": call_config.get("reasoningEffort", effort)
+                },
+                "fastcall": {
+                    "baseUrl": fast_config.get("baseUrl", ""),
+                    "apiKeyEnc": _encrypt_text(fast_config.get("apiKey", "")),
+                    "model": fast_config.get("model", ""),
+                    "reasoningEffort": fast_config.get("reasoningEffort", effort)
+                }
             }
-        }
+        elif effort == "chatbot":
+            safe_presets["chatbot"] = {
+                "baseUrl": preset.get("baseUrl", ""),
+                "apiKeyEnc": _encrypt_text(preset.get("apiKey", "")),
+                "model": preset.get("model", ""),
+            }
     LLM_PRESETS_FILE.write_text(
         json.dumps({"presets": safe_presets}, ensure_ascii=False, indent=2),
         encoding="utf-8"
@@ -281,6 +331,8 @@ def update_llm_presets(raw_presets: dict):
         for effort in REASONING_EFFORT_OPTIONS:
             if effort in raw_presets:
                 next_presets[effort] = _sanitize_preset_item(raw_presets.get(effort), next_presets[effort])
+        if "chatbot" in raw_presets:
+            next_presets["chatbot"] = _sanitize_chatbot_preset(raw_presets.get("chatbot"), next_presets.get("chatbot", {}))
         GLOBAL_LLM_PRESETS.clear()
         GLOBAL_LLM_PRESETS.update(next_presets)
         save_llm_presets_locked()
@@ -288,6 +340,72 @@ def update_llm_presets(raw_presets: dict):
 
 def require_admin_authorization(x_admin_token: Optional[str]):
     return  # 内部工具，不做管理员鉴权
+
+
+def _service_docs_rel_path(path: str) -> str:
+    domain, rel = split_domain_path(path, allowed_domains=(SERVICE_DOCS_DOMAIN,))
+    if domain != SERVICE_DOCS_DOMAIN:
+        raise HTTPException(status_code=400, detail=f"仅支持 {SERVICE_DOCS_DOMAIN}/ 域")
+    return rel
+
+
+def _service_docs_abs_path(path: str) -> Path:
+    rel = _service_docs_rel_path(path)
+    target = (SERVICE_DOCS_DIR / rel).resolve()
+    try:
+        target.relative_to(SERVICE_DOCS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="路径越界")
+    return target
+
+
+def _service_docs_kind(path: Path) -> str:
+    if path.is_dir():
+        return "directory"
+    ext = path.suffix.lower()
+    if ext in {".md"}:
+        return "markdown"
+    if ext in {".txt", ".log"}:
+        return "text"
+    if ext == ".json":
+        return "json"
+    if ext in {".csv"}:
+        return "csv"
+    if ext in {".xlsx", ".xls"}:
+        return "excel"
+    if ext in {".pdf"}:
+        return "pdf"
+    if ext in {".docx", ".doc"}:
+        return "word"
+    return "file"
+
+
+def _service_docs_item(path: Path, root: Path) -> dict:
+    rel = path.relative_to(root).as_posix()
+    item = {
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, rel),
+        "name": path.name,
+        "isDir": path.is_dir(),
+        "kind": _service_docs_kind(path),
+        "size": 0 if path.is_dir() else path.stat().st_size,
+        "sizeHuman": "0B" if path.is_dir() else f"{path.stat().st_size}B",
+    }
+    if not path.is_dir():
+        item["ext"] = path.suffix.lower()
+    return item
+
+
+def _list_service_docs_entries(target: Path) -> list[dict]:
+    entries: list[dict] = []
+    if not target.exists():
+        return entries
+    if target.is_file():
+        return [_service_docs_item(target, SERVICE_DOCS_DIR)]
+    for p in sorted(target.rglob("*")):
+        if any(part.startswith(".") for part in p.relative_to(SERVICE_DOCS_DIR).parts):
+            continue
+        entries.append(_service_docs_item(p, SERVICE_DOCS_DIR))
+    return entries
 
 
 # ── 账号 / Run 目录辅助 ──
@@ -801,6 +919,105 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
         "presets": get_all_llm_presets()
     }
 
+
+@app.get("/api/admin/service-docs")
+def list_admin_service_docs(path: str = "service_docs/", x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    return {
+        "status": "ok",
+        "path": path,
+        "entries": _list_service_docs_entries(target),
+    }
+
+
+@app.get("/api/admin/service-docs/file")
+def read_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail=f"不是文件: {path}")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail=f"非文本文件，无法直接读取: {path}")
+    return {
+        "status": "ok",
+        "path": path,
+        "content": content,
+    }
+
+
+@app.get("/api/admin/service-docs/download")
+def download_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail=f"不是文件: {path}")
+    return FileResponse(str(target), filename=target.name)
+
+
+@app.post("/api/admin/service-docs/file")
+async def save_admin_service_doc_file(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    path = str(payload.get("path") or "").strip()
+    content = payload.get("content")
+    if not path:
+        raise HTTPException(status_code=400, detail="缺少 path")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="content 必须是字符串")
+    target = _service_docs_abs_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return {
+        "status": "ok",
+        "path": path,
+        "bytesWritten": len(content.encode("utf-8")),
+    }
+
+
+@app.post("/api/admin/service-docs/upload")
+async def upload_admin_service_doc_file(
+    file: UploadFile = File(...),
+    path: Optional[str] = Form(default=None),
+    x_admin_token: Optional[str] = Header(default=None),
+):
+    require_admin_authorization(x_admin_token)
+    target_path = path.strip() if isinstance(path, str) and path.strip() else None
+    if target_path:
+        target = _service_docs_abs_path(target_path)
+    else:
+        target = _service_docs_abs_path(f"{SERVICE_DOCS_DOMAIN}/{file.filename}")
+    raw = await file.read()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+    return {
+        "status": "ok",
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()),
+        "bytesWritten": len(raw),
+        "mimeType": file.content_type or "application/octet-stream",
+    }
+
+
+@app.delete("/api/admin/service-docs/file")
+def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    target = _service_docs_abs_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {path}")
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return {"status": "ok", "path": path}
+
 @app.get("/api/status")
 def get_status(
     run_id: Optional[str] = Query(None),
@@ -1134,6 +1351,7 @@ async def price_recommendation_precheck(
     productName: str = Form(...),
     x_fzt_key: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
 ):
     resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
     product_name = (productName or "").strip()
@@ -1149,6 +1367,7 @@ async def start_price_recommendation(
     productName: str = Form(...),
     x_fzt_key: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
     candidateCount: Optional[int] = Form(None),
 ):
     session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
@@ -1161,7 +1380,7 @@ async def start_price_recommendation(
 
     decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
 
-    session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort or "high")
+    session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort or "high")
     candidate_count = _normalize_candidate_count(candidateCount)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
@@ -1291,10 +1510,11 @@ def stop_price_recommendation(x_fzt_key: Optional[str] = Header(default=None)):
 async def analyze(
     files: List[UploadFile] = File(...),
     x_fzt_key: Optional[str] = Header(default=None),
-    reasoningEffort: Optional[str] = Form(None)
+    reasoningEffort: Optional[str] = Form(None),
+    costTier: Optional[str] = Form(None),
 ):
     session = resolve_session(x_fzt_key)
-    session.config["reasoningEffort"] = normalize_reasoning_effort(reasoningEffort)
+    session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
             raise HTTPException(status_code=400, detail="任务正在运行中")
@@ -1851,11 +2071,10 @@ def get_public_report_asset(
     return FileResponse(asset_path, media_type=media_type)
 
 
-register_chat_routes(
+register_chatbot_routes(
     app,
     resolve_session=resolve_session,
-    get_llm_preset=get_llm_preset,
-    normalize_reasoning_effort=normalize_reasoning_effort,
+    get_chatbot_preset=get_chatbot_preset,
 )
 
 

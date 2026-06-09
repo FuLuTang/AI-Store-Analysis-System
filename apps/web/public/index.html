@@ -9,13 +9,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="chat.js" defer></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <script>
         (function initTheme() {
             const theme = localStorage.getItem('theme') || 'dark';
-            if (theme === 'light') {
-                document.documentElement.classList.add('light-theme');
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
             }
         })();
     </script>
@@ -30,10 +31,10 @@
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
-                <select id="reasoningEffortSelect" class="nav-select">
-                    <option value="medium">medium（默认）</option>
-                    <option value="low">low（快速）</option>
-                    <option value="high">high（深度）</option>
+                <select id="costTierSelect" class="nav-select">
+                    <option value="medium">平衡优先</option>
+                    <option value="low">省钱优先</option>
+                    <option value="high">效果优先</option>
                 </select>
                 <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
@@ -227,33 +228,7 @@
         </div>
     </div>
 
-    <button id="chatFab" class="chat-fab" type="button" aria-label="打开对话助手" aria-expanded="false">
-        <i class="fas fa-comments"></i>
-    </button>
 
-    <section id="chatPanel" class="chat-panel" aria-hidden="true">
-        <div class="chat-panel-header">
-            <div>
-                <h3><i class="fas fa-comments"></i> 对话追问</h3>
-                <div id="chatRunBadge" class="chat-run-badge">未绑定分析批次</div>
-            </div>
-            <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-        <div id="chatMessages" class="chat-messages">
-            <div class="chat-empty-state">请先完成一次分析，然后在这里继续追问。</div>
-        </div>
-        <div class="chat-composer">
-            <textarea id="chatInput" class="chat-input" placeholder="继续追问这次分析的结论、原因或建议..." rows="3"></textarea>
-            <div class="chat-composer-actions">
-                <span id="chatStatusHint" class="chat-status-hint">基于当前分析结果多轮对话</span>
-                <button id="chatSendBtn" class="btn" type="button">
-                    <i class="fas fa-paper-plane"></i> 发送
-                </button>
-            </div>
-        </div>
-    </section>
 
     <script>
         // ========== marked 图片渲染自定义 ==========
@@ -278,6 +253,12 @@
                 }
             }
         });
+        if (typeof marked.setOptions === 'function') {
+            marked.setOptions({
+                gfm: true,
+                breaks: true,
+            });
+        }
 
         // ========== 鉴权守卫 ==========
         function authHeaders() {
@@ -315,16 +296,7 @@
         const exampleBtn = document.getElementById('exampleBtn');
         const downloadArea = document.getElementById('downloadArea');
         const downloadBtn = document.getElementById('downloadBtn');
-        const reasoningEffortSelect = document.getElementById('reasoningEffortSelect');
-        const chatFab = document.getElementById('chatFab');
-        const chatPanel = document.getElementById('chatPanel');
-        const chatCloseBtn = document.getElementById('chatCloseBtn');
-        const chatMessages = document.getElementById('chatMessages');
-        const chatInput = document.getElementById('chatInput');
-        const chatSendBtn = document.getElementById('chatSendBtn');
-        const chatRunBadge = document.getElementById('chatRunBadge');
-        const chatStatusHint = document.getElementById('chatStatusHint');
-        
+        const costTierSelect = document.getElementById('costTierSelect');
         let filesData = [];
         let currentRunId = null;
         let currentReport = null;
@@ -332,8 +304,6 @@
         let pollingInterval = null;
         let sseSource = null;
         let progressClosed = false;
-        let chatSending = false;
-        const chatHistories = {};
         
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
@@ -424,143 +394,11 @@
             }
         }
 
-        function getActiveChatRunId() {
-            const queryRunId = new URLSearchParams(window.location.search).get('run_id');
-            return currentRunId || queryRunId || null;
-        }
 
-        function getChatHistory(runId = getActiveChatRunId()) {
-            const key = runId || '__empty__';
-            if (!chatHistories[key]) chatHistories[key] = [];
-            return chatHistories[key];
-        }
-
-        function escapeChatHtml(text) {
-            return String(text || '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
-
-        function formatChatContent(text) {
-            return escapeChatHtml(text).replace(/\n/g, '<br>');
-        }
-
-        function syncChatRunContext() {
-            const runId = getActiveChatRunId();
-            chatRunBadge.textContent = runId ? `run: ${runId}` : '未绑定分析批次';
-            renderChatMessages();
-        }
-
-        function setChatOpen(open) {
-            chatPanel.classList.toggle('open', open);
-            chatPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
-            chatFab.setAttribute('aria-expanded', open ? 'true' : 'false');
-            if (open) {
-                syncChatRunContext();
-                setTimeout(() => chatInput.focus(), 50);
-            }
-        }
-
-        function renderChatMessages() {
-            const runId = getActiveChatRunId();
-            if (!runId) {
-                chatMessages.innerHTML = '<div class="chat-empty-state">请先完成一次分析，然后在这里继续追问。</div>';
-                return;
-            }
-
-            const history = getChatHistory(runId).filter(msg => msg.role === 'user' || msg.role === 'assistant');
-            if (history.length === 0) {
-                chatMessages.innerHTML = '<div class="chat-empty-state">可以继续追问这次分析里的结论、证据、风险或建议。</div>';
-                return;
-            }
-
-            chatMessages.innerHTML = history.map(msg => `
-                <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
-                    <div class="chat-message-role">${msg.role === 'user' ? '你' : 'AI'}</div>
-                    <div class="chat-message-bubble">${formatChatContent(msg.content)}</div>
-                </div>
-            `).join('');
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        }
-
-        function updateChatComposerState() {
-            chatSendBtn.disabled = chatSending;
-            chatInput.disabled = chatSending;
-            chatStatusHint.textContent = chatSending ? 'AI 正在回复...' : '基于当前分析结果多轮对话';
-        }
-
-        async function sendChatMessage() {
-            const content = chatInput.value.trim();
-            if (!content || chatSending) return;
-
-            const runId = getActiveChatRunId();
-            if (!runId) {
-                chatMessages.innerHTML = '<div class="chat-empty-state">当前没有可追问的分析批次。请先完成一次分析。</div>';
-                return;
-            }
-
-            const history = getChatHistory(runId);
-            const requestMessages = history.concat([{ role: 'user', content }]);
-            history.push({ role: 'user', content });
-            const assistantMessage = { role: 'assistant', content: '' };
-            history.push(assistantMessage);
-
-            chatInput.value = '';
-            chatSending = true;
-            updateChatComposerState();
-            renderChatMessages();
-
-            try {
-                const response = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        runId,
-                        reasoningEffort: reasoningEffortSelect.value || 'medium',
-                        messages: requestMessages
-                    })
-                });
-
-                if (!response.ok) {
-                    let errorText = '请求失败';
-                    try {
-                        const errorData = await response.json();
-                        errorText = errorData.detail || errorText;
-                    } catch (_) {
-                        errorText = await response.text() || errorText;
-                    }
-                    throw new Error(errorText);
-                }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    assistantMessage.content += decoder.decode(value, { stream: true });
-                    renderChatMessages();
-                }
-                assistantMessage.content += decoder.decode();
-                if (!assistantMessage.content.trim()) {
-                    assistantMessage.content = '当前没有返回可显示的内容。';
-                }
-            } catch (err) {
-                assistantMessage.content = `对话失败：${err.message}`;
-            } finally {
-                chatSending = false;
-                updateChatComposerState();
-                renderChatMessages();
-            }
-        }
 
         window.onload = async () => {
             updateThemeIcon();
             await checkStatus();
-            syncChatRunContext();
-            updateChatComposerState();
         };
 
         window.toggleTheme = function() {
@@ -619,7 +457,6 @@
                 const res = await fetch(statusUrl, { headers: authHeaders() });
                 const data = await res.json();
                 currentRunId = data.runId || null;
-                syncChatRunContext();
 
                 if (data.status === 'completed') {
                     downloadArea.style.display = 'block';
@@ -948,7 +785,7 @@
                 });
             } catch (e) { /* 静默失败 */ }
 
-            const reasoningEffort = document.getElementById('reasoningEffortSelect').value || 'medium';
+            const costTier = document.getElementById('costTierSelect').value || 'medium';
 
             startBtn.disabled = true;
             stopBtn.style.display = 'inline-flex';
@@ -964,7 +801,7 @@
             try {
                 const formData = new FormData();
                 filesData.forEach(file => formData.append('files', file));
-                formData.append('reasoningEffort', reasoningEffort);
+                formData.append('costTier', costTier);
 
                 const response = await fetch('/api/analyze', {
                     method: 'POST',
@@ -1008,15 +845,7 @@
             window.open(url, '_blank');
         };
 
-        chatFab.onclick = () => setChatOpen(!chatPanel.classList.contains('open'));
-        chatCloseBtn.onclick = () => setChatOpen(false);
-        chatSendBtn.onclick = () => sendChatMessage();
-        chatInput.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                sendChatMessage();
-            }
-        });
+
 
         exampleBtn.onclick = async () => {
             try {
@@ -1265,7 +1094,7 @@
                 paramsData = JSON.parse(JSON.stringify(preset));
             } else {
                 if (preset.reasoning_effort) {
-                    document.getElementById('reasoningEffortSelect').value = preset.reasoning_effort;
+                    document.getElementById('costTierSelect').value = preset.cost_tier || preset.reasoning_effort || 'medium';
                 }
                 paramsData = JSON.parse(JSON.stringify(preset.params || []));
             }

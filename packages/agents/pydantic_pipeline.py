@@ -117,8 +117,13 @@ class PydanticPipeline(AgentPipeline):
         check_aborted: Callable[[], None] | None = None,
         workspace_dir: Path | None = None,
         analysis_params: str = "",
+        workspace_options: dict | None = None,
     ):
-        super().__init__(workspace_dir=workspace_dir, analysis_params=analysis_params)
+        super().__init__(
+            workspace_dir=workspace_dir,
+            analysis_params=analysis_params,
+            workspace_options=workspace_options,
+        )
         self._llm_preset = llm_preset or {}
         self._check_aborted = check_aborted
         self.model = model or os.getenv("AGENT_MODEL", "deepseek-v4-pro")

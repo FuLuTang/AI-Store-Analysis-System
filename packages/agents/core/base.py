@@ -16,13 +16,19 @@ TallyCallback = Callable[[str, dict], None]
 class AgentPipeline(ABC):
     name: str = "base"
 
-    def __init__(self, workspace_dir: Optional[Path] = None, analysis_params: str = ""):
+    def __init__(
+        self,
+        workspace_dir: Optional[Path] = None,
+        analysis_params: str = "",
+        workspace_options: Optional[dict] = None,
+    ):
         self._on_status: Optional[StatusCallback] = None
         self._on_log: Optional[LogCallback] = None
         self._on_progress: Optional[ProgressCallback] = None
         self._on_tally: Optional[TallyCallback] = None
         self._workspace_dir: Optional[Path] = workspace_dir
         self._analysis_params = analysis_params
+        self._workspace_options = dict(workspace_options or {})
 
     def set_event_callbacks(self,
                             on_status: Optional[StatusCallback] = None,
@@ -49,6 +55,13 @@ class AgentPipeline(ABC):
     def _emit_tally(self, node_id: str, tally: dict):
         if self._on_tally:
             self._on_tally(node_id, tally)
+
+    def _build_workspace(self, *, label: str):
+        from .workspace import Workspace
+
+        if self._workspace_dir:
+            return Workspace(base_dir=self._workspace_dir, **self._workspace_options)
+        return Workspace(label=label, **self._workspace_options)
 
     @abstractmethod
     async def run(self, bundle: DatasetBundle) -> AgentResult:

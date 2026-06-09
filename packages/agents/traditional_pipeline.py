@@ -36,8 +36,19 @@ class PipelineAbortedError(Exception):
 class TraditionalPipeline(AgentPipeline):
     name = "traditional"
 
-    def __init__(self, llm_preset: Optional[dict] = None, check_aborted: Optional[Callable[[], None]] = None, workspace_dir: Optional[Path] = None, analysis_params: str = ""):
-        super().__init__(workspace_dir=workspace_dir, analysis_params=analysis_params)
+    def __init__(
+        self,
+        llm_preset: Optional[dict] = None,
+        check_aborted: Optional[Callable[[], None]] = None,
+        workspace_dir: Optional[Path] = None,
+        analysis_params: str = "",
+        workspace_options: Optional[dict] = None,
+    ):
+        super().__init__(
+            workspace_dir=workspace_dir,
+            analysis_params=analysis_params,
+            workspace_options=workspace_options,
+        )
         self._llm_preset = llm_preset or {}
         self._check_aborted = check_aborted  # can be None
 
@@ -48,7 +59,7 @@ class TraditionalPipeline(AgentPipeline):
     async def run(self, bundle: DatasetBundle) -> AgentResult:
         t0 = time.time()
         active_settings = self._llm_preset
-        ws = Workspace(base_dir=self._workspace_dir) if self._workspace_dir else Workspace(label="traditional")
+        ws = self._build_workspace(label="traditional")
 
         try:
             # 1) Input Adapter — 直接从 DatasetBundle 构建 core 模块所需 dict

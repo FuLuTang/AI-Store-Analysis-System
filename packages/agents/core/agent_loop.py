@@ -108,50 +108,73 @@ class AgentLoop:
                 )
                 sys_content = build_price_sys()
                 user_content = build_price_user(self.product_name, self.candidate_count)
-            else:
-                sys_content = build_system_content(self.analysis_params)
-                user_content = build_user_content(self.ws, self.analysis_params)
-
-            self.messages = [
-                {"role": "system", "content": sys_content},
-                {"role": "user", "content": user_content},
-            ]
-            self._write_message_log(self.messages[0], mode="w")
-            self._write_message_log(self.messages[1], mode="a")
-
-            if self.bootstrap_messages:
-                self.messages.extend(self.bootstrap_messages)
-                for msg in self.bootstrap_messages:
-                    self._write_message_log(msg, mode="a")
-            else:
-                # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
-                init_files_json = self.tool_map["list_files"](subdir="")
-                init_msgs = [
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "reasoning_content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call_init_list_files",
-                                "type": "function",
-                                "function": {
-                                    "name": "list_files",
-                                    "arguments": '{"subdir": ""}'
+                self.messages = [
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_content},
+                ]
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
+                else:
+                    # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
+                    init_files_json = self.tool_map["list_files"](subdir="")
+                    self.messages.extend([
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_init_list_files",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_files",
+                                        "arguments": '{"subdir": ""}'
+                                    }
                                 }
-                            }
-                        ]
-                    },
+                            ]
+                        },
                     {
                         "role": "tool",
                         "tool_call_id": "call_init_list_files",
                         "name": "list_files",
                         "content": init_files_json
                     },
+                ])
+            else:
+                sys_content = build_system_content(self.analysis_params)
+                user_content = build_user_content(self.ws, self.analysis_params)
+                self.messages = [
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_content},
                 ]
-                self.messages.extend(init_msgs)
-                for msg in init_msgs:
-                    self._write_message_log(msg, mode="a")
+                if self.bootstrap_messages:
+                    self.messages.extend(self.bootstrap_messages)
+                else:
+                    # 兼容旧链路：至少让 Agent 先看到 workspace 的文件列表。
+                    init_files_json = self.tool_map["list_files"](subdir="")
+                    self.messages.extend([
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_init_list_files",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_files",
+                                        "arguments": '{"subdir": ""}'
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call_init_list_files",
+                            "name": "list_files",
+                            "content": init_files_json
+                        },
+                    ])
 
             self._emit_status("custom_agent", "active")
             self._emit_log("custom_agent", {"level": "info", "message": f"🚀 启动 Agent 循环, model={self.model}, tools={len(self.tools)} 个"})
@@ -251,6 +274,7 @@ class AgentLoop:
                             tool_msg = {
                                 "role": "tool",
                                 "tool_call_id": tc["id"],
+                                "name": tc["name"],
                                 "content": result,
                             }
                             self.messages.append(tool_msg)
@@ -658,6 +682,7 @@ def _tool_target(name: str, args_json: str) -> str:
         "list_files": lambda a: f"列出 {a.get('subdir', '根目录')}/ 目录",
         "run_python": lambda a: f"执行 {a.get('script_path', '?')}",
         "search_files": lambda a: f"检索关键词 {a.get('pattern', '?')}",
+        "search": lambda a: f"检索关键词 {a.get('pattern', '?')}",
         "query_sqlite": lambda a: f"查询 SQLite {a.get('path', '?')}",
         "duckdb_register_parquet": lambda a: f"注册表 {a.get('table_name', '?')}",
         "list_tables": lambda a: "列出所有表",

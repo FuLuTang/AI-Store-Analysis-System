@@ -19,8 +19,20 @@ logger = logging.getLogger("agent.custom")
 class CustomPipeline(AgentPipeline):
     name = "custom"
 
-    def __init__(self, model=None, llm_preset=None, check_aborted=None, workspace_dir=None, analysis_params=""):
-        super().__init__(workspace_dir=workspace_dir, analysis_params=analysis_params)
+    def __init__(
+        self,
+        model=None,
+        llm_preset=None,
+        check_aborted=None,
+        workspace_dir=None,
+        analysis_params="",
+        workspace_options=None,
+    ):
+        super().__init__(
+            workspace_dir=workspace_dir,
+            analysis_params=analysis_params,
+            workspace_options=workspace_options,
+        )
         self._llm_preset = llm_preset or {}
         self._check_aborted = check_aborted
 
@@ -28,7 +40,7 @@ class CustomPipeline(AgentPipeline):
         import asyncio
         t0 = time.time()
 
-        ws = Workspace(base_dir=self._workspace_dir) if self._workspace_dir else Workspace(label="custom")
+        ws = self._build_workspace(label="custom")
 
         try:
             # ── 初始化 workspace ──

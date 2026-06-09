@@ -41,7 +41,7 @@ def duckdb_register_parquet_impl(
         safe_table = _quote_ident(table_name)
         p = Path(parquet_path)
         if not p.is_absolute():
-            p = ws.dir / parquet_path
+            p = ws.resolve_read(parquet_path)
         abs_path = str(p.resolve())
         con.execute(f"CREATE OR REPLACE VIEW {safe_table} AS SELECT * FROM read_parquet('{abs_path}')")
         row_count = con.execute(f"SELECT COUNT(*) FROM {safe_table}").fetchone()[0]

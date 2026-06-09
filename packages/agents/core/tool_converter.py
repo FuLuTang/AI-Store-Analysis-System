@@ -15,6 +15,13 @@ TOOL_BLACKLIST_BY_TASK_TYPE: dict[str, set[str]] = {
         "read_context",
         "read_plan",
     },
+    # Chatbot 禁用任务上下文/计划流工具，文件读写类保持可用。
+    "chatbot": {
+        "read_context",
+        "read_plan",
+        "check_plan",
+        "finish_task",
+    },
 }
 
 
@@ -34,17 +41,19 @@ def _filter_tool_map_by_task_type(tool_map: dict, task_type: str) -> dict:
 
 def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -> list[dict]:
     """返回 OpenAI tools 参数列表，由已有的 _impl 函数自动拼合。"""
+    from .tools.impl.search_impl import search_files_impl
+
     tools = [
         # ── 文档解析 ──
         _make_tool(
             name="read_document_structure",
-            description="读取任意文档的结构信息（xlsx/csv/pdf/docx/txt/md/json/sqlite/zip），返回表结构摘要、列名、行数和样本行。",
+            description="读取任意文档的结构信息（xlsx/csv/pdf/docx/txt/md/json/sqlite/zip），返回表结构摘要、列名、行数和样本行。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'.",
             parameters={
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "workspace 内的相对路径，如 'input/report.xlsx'",
+                        "description": "workspace 内的相对路径；多域时需带域名前缀，如 'chatbot/input/report.xlsx' 或 'service_docs/policy/faq.md'",
                     }
                 },
                 "required": ["path"],
@@ -53,11 +62,11 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         # ── 文件读写 ──
         _make_tool(
             name="read_file",
-            description="读取 workspace 内的文本文件内容。",
+            description="读取 workspace 内的文本文件内容。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "workspace 内的相对路径"},
+                    "path": {"type": "string", "description": "workspace 内的相对路径；多域时需带域名前缀"},
                 },
                 "required": ["path"],
             },
@@ -101,15 +110,29 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         ),
         _make_tool(
             name="list_files",
-            description="列出 workspace 子目录下的文件。",
+            description="列出 workspace 子目录下的文件。多域工作区中 subdir 也需要带域名前缀，例如 'chatbot/' 或 'service_docs/'.",
             parameters={
                 "type": "object",
                 "properties": {
                     "subdir": {
                         "type": "string",
-                        "description": "子目录名，如 'input', 'tables', 'output'。空字符串表示根目录",
+                        "description": "子目录名；多域时需写成 'chatbot/' 或 'service_docs/' 这样的域前缀",
                     }
                 },
+            },
+        ),
+        _make_tool(
+            name="search",
+            description="在 workspace 内检索文本或正则模式。多域工作区中 path 需要带域名前缀，例如 'chatbot/...' 或 'service_docs/...'; 不传 path 时会搜索所有域。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "要搜索的关键词或正则"},
+                    "path": {"type": "string", "description": "可选：限定在某个带域名的路径下搜索"},
+                    "regex": {"type": "boolean", "description": "是否按正则搜索"},
+                    "max_matches": {"type": "integer", "description": "最多返回多少条匹配"},
+                },
+                "required": ["pattern"],
             },
         ),
         # ── Python 脚本执行 ──
@@ -222,6 +245,46 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
             },
         ),
     ]
+    if task_type == "chatbot":
+        tools.extend([
+            _make_tool(
+                name="list_system_functions",
+                description="列出系统所有的可用服务功能。功能以树形目录层级结构展示（不包含 .py 后缀）。",
+                parameters={"type": "object", "properties": {}},
+            ),
+            _make_tool(
+                name="view_system_function_doc",
+                description="查看指定系统服务功能说明文档。在执行功能前，必须先调用此工具查看说明，确认如何正确填写参数。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                        }
+                    },
+                    "required": ["path"],
+                },
+            ),
+            _make_tool(
+                name="execute_system_function",
+                description="执行指定的系统服务功能。必须传入准确的功能路径与符合说明要求的参数对象。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                        },
+                        "params": {
+                            "type": "object",
+                            "description": "具体入参键值对。请务必提前通过查看功能说明工具（view_system_function_doc）确认此参数对象中应当包含哪些属性及如何填写。"
+                        }
+                    },
+                    "required": ["path", "params"],
+                },
+            ),
+        ])
     return _filter_tools_by_task_type(tools, task_type)
 
 
@@ -247,7 +310,7 @@ def get_plan_progress_info(ws) -> tuple[int, int]:
         return -1, 0
 
 
-def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, emit_status=None, on_finish=None) -> dict:
+def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, emit_status=None, on_finish=None, llm_preset: dict = None) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
 
     emit_log(node_id, message)  —— 日志回调，message 可为 str 或 dict
@@ -295,6 +358,9 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
     def _list_files(subdir: str = "") -> str:
         files = list_files_impl(ws, subdir, emit_log=_emit_log)
         return json.dumps(files, ensure_ascii=False)
+
+    def _search(pattern: str, path: str = None, regex: bool = False, max_matches: int = 50) -> str:
+        return search_files_impl(ws, pattern, path=path, regex=regex, max_matches=max_matches)
 
     def _run_python(script_path: str, content: str = None) -> str:
         return run_python_impl(ws, script_path, content=content, emit_log=_emit_log)
@@ -411,6 +477,7 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         "replace_text": _replace_text,
         "copy_file": _copy_file,
         "list_files": _list_files,
+        "search": _search,
         "run_python": _run_python,
         "duckdb_query": _duckdb_query,
         "duckdb_register_parquet": _duckdb_register_parquet,
@@ -420,6 +487,29 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         "check_plan": _check_plan,
         "finish_task": _finish_task,
     }
+
+    if task_type == "chatbot":
+        from .tools.impl.system_function_impl import (
+            list_system_functions_impl,
+            view_system_function_doc_impl,
+            execute_system_function_impl,
+        )
+
+        def _list_system_functions() -> str:
+            return list_system_functions_impl()
+
+        def _view_system_function_doc(path: str) -> str:
+            return view_system_function_doc_impl(path)
+
+        def _execute_system_function(path: str, params: dict) -> str:
+            return execute_system_function_impl(ws, path, params, llm_preset)
+
+        tool_map.update({
+            "list_system_functions": _list_system_functions,
+            "view_system_function_doc": _view_system_function_doc,
+            "execute_system_function": _execute_system_function,
+        })
+
     return _filter_tool_map_by_task_type(tool_map, task_type)
 
 

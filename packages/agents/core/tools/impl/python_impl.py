@@ -15,7 +15,7 @@ def run_python_impl(
     timeout: int = 300,
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> str:
-    script = ws.resolve(script_path)
+    script = ws.resolve_script(script_path)
     if content is not None:
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text(content, encoding="utf-8")
@@ -35,8 +35,11 @@ def run_python_impl(
     except Exception:
         pass
 
-    if ws.scripts_dir not in script.parents and script.parent != ws.scripts_dir:
-        raise ValueError(f"只能执行 scripts/ 下的 Python 脚本，收到: {script_path}")
+    script_root = ws.script_root.resolve()
+    try:
+        script.resolve().relative_to(script_root)
+    except ValueError:
+        raise ValueError(f"只能执行 {ws.script_root} 下的 Python 脚本，收到: {script_path}")
     if script.suffix != ".py":
         raise ValueError(f"只能执行 .py 文件，收到: {script_path}")
 

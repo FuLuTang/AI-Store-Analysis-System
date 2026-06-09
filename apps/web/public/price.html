@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
+    <script src="chat.js" defer></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@6/dist/echarts.min.js"></script>
@@ -353,8 +354,8 @@
     <script>
         (function initTheme() {
             const theme = localStorage.getItem('theme') || 'dark';
-            if (theme === 'light') {
-                document.documentElement.classList.add('light-theme');
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
             }
         })();
     </script>
@@ -369,10 +370,10 @@
             <a href="monitor.html">后台监控流</a>
             <a href="admin.html">管理员配置</a>
             <div class="nav-right">
-                <select id="reasoningEffortSelect" class="nav-select">
-                    <option value="medium">medium（默认）</option>
-                    <option value="low">low（快速）</option>
-                    <option value="high">high（深度）</option>
+                <select id="costTierSelect" class="nav-select">
+                    <option value="medium">平衡优先</option>
+                    <option value="low">省钱优先</option>
+                    <option value="high">效果优先</option>
                 </select>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
                     <i class="fas fa-moon" id="themeIcon"></i>
@@ -572,7 +573,7 @@
         const fileList = document.getElementById('fileList');
         const productNameInput = document.getElementById('productNameInput');
         const candidateCountSelect = document.getElementById('candidateCountSelect');
-        const reasoningEffortSelect = document.getElementById('reasoningEffortSelect');
+        const costTierSelect = document.getElementById('costTierSelect');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const clearLogBtn = document.getElementById('clearLogBtn');
@@ -1367,7 +1368,7 @@
             selectedFiles.forEach((file) => formData.append('files', file));
             formData.append('productName', productName);
             formData.append('candidateCount', candidateCountSelect.value || '2');
-            formData.append('reasoningEffort', reasoningEffortSelect.value || 'medium');
+            formData.append('costTier', costTierSelect.value || 'medium');
 
             startBtn.disabled = true;
             stopBtn.hidden = false;
@@ -1465,7 +1466,7 @@
                         startBtn.disabled = true;
                         productNameInput.disabled = true;
                         candidateCountSelect.disabled = true;
-                        reasoningEffortSelect.disabled = true;
+                        costTierSelect.disabled = true;
                         dropZone.style.pointerEvents = 'none';
                         dropZone.style.opacity = '0.7';
                     } else {
@@ -1522,7 +1523,7 @@
 
         productNameInput.oninput = syncButtons;
         candidateCountSelect.onchange = syncButtons;
-        reasoningEffortSelect.onchange = syncButtons;
+        costTierSelect.onchange = syncButtons;
 
         startBtn.onclick = startRecommendation;
         stopBtn.onclick = async () => {

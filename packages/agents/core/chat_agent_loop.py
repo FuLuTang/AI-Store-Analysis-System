@@ -26,6 +26,9 @@ if not logger.handlers:
     _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logger.addHandler(_handler)
 
+AUTH_TOOL_NAME = "get_user_service_token"
+AUTH_CARD_NAME = "ask_token_auth"
+
 
 class ChatAgentLoop:
     """薄封装：OpenAI SDK 客户端 + messages 管理 + tool 执行。"""
@@ -151,6 +154,35 @@ class ChatAgentLoop:
                     return self._with_usage(self._parse_final_output(sr.content))
 
                 if sr.tool_calls:
+                    auth_call = next((tc for tc in sr.tool_calls if tc.get("name") == AUTH_TOOL_NAME), None)
+                    if auth_call:
+                        try:
+                            auth_args = json.loads(auth_call.get("arguments") or "{}")
+                        except json.JSONDecodeError:
+                            auth_args = {}
+                        reason = str(auth_args.get("reason") or auth_args.get("detail") or "").strip()
+                        auth_card = {
+                            "role": "system",
+                            "name": AUTH_CARD_NAME,
+                            "title": "请求代理操作许可",
+                            "detail": reason or "AI 客服请求获取代理操作许可。",
+                            "options": ["是", "否"],
+                            "datetime": datetime.now().astimezone().isoformat(timespec="seconds"),
+                        }
+                        round_messages.append(auth_card)
+                        self.messages = round_messages
+                        self._persist_messages([auth_card])
+                        self._emit_log("chatbot_agent", {"level": "info", "message": "等待用户确认代理操作许可"})
+                        self._emit_status("chatbot_agent", "waiting_auth")
+                        return self._with_usage({
+                            "full_report": "",
+                            "cards": [],
+                            "metrics": [],
+                            "mapping": [],
+                            "warnings": [],
+                            "_waiting_auth": True,
+                        })
+
                     for tc in sr.tool_calls:
                         target = _tool_target(tc["name"], tc["arguments"])
                         self._emit_log("chatbot_agent", {"level": "info", "message": f"🔧 {target}"})

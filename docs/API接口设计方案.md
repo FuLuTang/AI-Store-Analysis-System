@@ -1,324 +1,494 @@
-# AI 门店分析系统 API 接口方案 (v3.0 - 账号密码与 Token 鉴权)
+# AI 门店分析系统 API 接口方案 (v3.0 - 带新登录鉴权与完整业务覆盖)
 
-本方案在单用户分析逻辑基础上，引入账号名、密码登录与临时 token 鉴权机制。客户端登录后保存完整 token，后续用户侧接口通过 `X-Auth-Token` Header 或 `auth-token` 查询参数携带 token。
+本方案在多租户隔离架构的基础上，引入了基于 **Token 软硬失效** 与 **客服代理授权（Customer Service Token）** 的多级账号与鉴权机制。
 
-## 1. 核心流程图 (带鉴权)
+---
+
+## 1. 核心流程图 (Token 鉴权与客服授权)
 
 ```mermaid
 sequenceDiagram
-    participant Client as 外部系统/用户
+    participant Client as 客户端/用户
     participant API as FastAPI 后端
-    participant Auth as 鉴权/限流模块
-    participant Worker as 背景分析线程
+    participant Auth as 鉴权拦截模块
+    participant LLM as LLM Agent 引擎
+    participant Worker as 后台诊断/价格分析线程
 
-    Client->>API: POST /api/auth/login
-    API->>Auth: 校验账号名与 bcrypt 密码哈希
-    API-->>Client: 返回完整 token
-    Client->>API: POST /api/analyze (multipart + X-Auth-Token)
-    API->>Auth: 校验 token 日志与软/硬过期
-    alt token 错误或过期
-        API-->>Client: 401 Unauthorized
-    else 系统忙碌 — 该用户任务进行中
-        API-->>Client: 400 Bad Request
-    else 校验通过且空闲
-        API->>API: 加载用户专属配置与旧日志
-        API->>Worker: 启动异步计算
-        API-->>Client: 200 OK — Started
+    %% 登录与 Token 发放
+    Client->>API: POST /api/auth/login (username, password)
+    API-->>Client: 200 OK (下发 Token `usr_xxx.tkn_yyy`)
+
+    %% 普通 API 访问
+    Client->>API: POST /api/analyze (Header: X-Auth-Token)
+    API->>Auth: 校验 Token (软过期2h，硬过期12h)
+    alt Token 无效或过期
+        API-->>Client: 401 Unauthorized (跳转登录页)
+    else 校验通过
+        API->>Worker: 启动后台异步任务
+        API-->>Client: 200 OK (Started)
     end
 
-    Worker->>Worker: 分析中...
-    Worker->>API: 写入 storage/accounts/{account_id}/runs/diagnosis/{run_id}/workspace/output
+    %% 客服代理授权
+    LLM->>API: 需要执行系统功能，调用 get_user_service_token
+    API->>Client: 写入 ask_token_auth 卡片并中断 LLM 响应
+    Client->>API: 授权确认: POST /api/chatbot (choice="是", detail="用户Token")
+    API->>API: 生成客服 Token `serv_xxx.tkn_zzz` (软5m/硬20m)
+    API->>LLM: 补写 Tool 响应，客服 Token 注入上下文
+    LLM->>API: 执行功能: execute_system_function(携带客服 Token)
+    API->>Auth: 校验客服 Token 与客服可访问性 (403 校验)
+    API->>Worker: 代理执行系统功能
 ```
+
+---
 
 ## 2. 鉴权规范
 
-### 2.1 用户鉴权
+### 2.1 用户鉴权 (User Authentication)
+核心业务接口要求在 HTTP Header 中携带登录 Token：
+- **Header Key**: `X-Auth-Token` 或 `Authorization: Bearer <token>`
+- **Token 命名规范**: `usr_{用户ID前3位}_{Hash前6位}_{随机字符}`
+- **过期逻辑**: 软过期时间为 **2 小时**（每次发送 API 活动后自动刷新）；硬过期时间为 **12 小时**（无论是否在线都强制失效）。
 
-用户接口通过 HTTP Header 或 SSE 查询参数携带完整 token：
+### 2.2 客服代理鉴权 (Customer Service Authentication)
+Agent 代表用户执行敏感系统功能时使用的受限 Token：
+- **Token 命名规范**: `serv_{用户ID前3位}_{Hash前6位}_{另随机字符}`
+- **过期逻辑**: 软过期时间为 **5 分钟**；硬过期时间为 **20 分钟**。
+- **权限限制**: 客服 Token 仅允许执行获取/上传/分析，**严禁执行任何“物理删除”操作**。
 
-- **Header Name**: `X-Auth-Token`
-- **Query Name**: `auth-token`，用于 `EventSource` 或下载链接等不方便设置 Header 的场景
-- **Value**: 登录或注册接口返回的完整 token
-
-> 所有核心用户接口均要求提供有效 token，不传 token 或 token 过期将返回 401 Unauthorized。接口返回的 `account` 仅为 `abc***` 形式的展示字段，不参与鉴权或账号定位。
-
-### 2.2 管理员鉴权
-
-管理员接口通过 HTTP Header 携带：
-
-- **Header Name**: `X-Admin-Token`
-- **Value**: 与服务端环境变量 `ADMIN_TOKEN` 一致的口令
-- **说明**: 管理员鉴权独立于用户 token / 客服 token 链路。
+### 2.3 管理员鉴权 (Admin Authentication)
+系统后台管理接口通过以下 Header 鉴权：
+- **Header Key**: `X-Admin-Token`
+- **Value**: 与服务端配置的 `ADMIN_TOKEN` 环境变量一致。
 
 ---
 
 ## 3. API 接口参考手册
 
-### 3.1 账号管理类
+### 3.1 账号与鉴权类
 
 #### [POST] /api/auth/register
-
-- **说明**: 创建账号，写入 bcrypt 密码哈希，并返回登录 token。受限流保护（3分钟内5次）。
-- **Body (JSON)**: `{"username": "store001", "password": "Password123"}`
-- **响应 (200)**: `{"token": "完整用户token", "status": "ok", "account": "sto***"}`
+- **说明**: 申请注册新账户。受防刷保护（3分钟内最多5次）。
+- **Body (JSON)**:
+  ```json
+  {
+    "username": "tanghaochen",
+    "password": "my_secure_password"
+  }
+  ```
+- **响应 (200)**: `{"status": "ok", "account": "tan***"}`
 - **错误 (429)**: 注册过于频繁
-- **错误 (500)**: 账号初始化失败
 
 #### [POST] /api/auth/login
-
-- **说明**: 使用账号名和密码登录。
-- **Body (JSON)**: `{"username": "store001", "password": "Password123"}`
-- **响应 (200)**: `{"token": "完整用户token", "status": "ok", "account": "sto***"}`
+- **说明**: 账号密码登录验证，成功后下发用户 Token。
+- **Body (JSON)**:
+  ```json
+  {
+    "username": "tanghaochen",
+    "password": "my_secure_password"
+  }
+  ```
+- **响应 (200)**: 
+  ```json
+  {
+    "status": "ok",
+    "token": "usr_tan_a1b2c3_randomstring123456",
+    "account": "tan***"
+  }
+  ```
 - **错误 (401)**: 账号或密码错误
 
-#### [POST] /api/auth/verify
-
-- **说明**: 校验当前 token 是否有效。
-- **Header**: `X-Auth-Token` (必填)
-- **响应 (200)**: `{"status": "ok", "account": "sto***"}`
-- **错误 (401)**: Invalid or expired token
-
 #### [POST] /api/auth/service-token
-
-- **说明**: 使用有效用户 token 创建客服 token。
-- **Body (JSON)**: `{"token": "完整用户token"}`
-- **响应 (200)**: `{"token": "完整客服token", "status": "ok", "account": "sto***"}`
+- **说明**: 传入有效的用户 Token，生成具有短时效的客服代理 Token。
+- **Body (JSON)**:
+  ```json
+  {
+    "token": "usr_tan_a1b2c3_randomstring123456"
+  }
+  ```
+- **响应 (200)**: 
+  ```json
+  {
+    "status": "ok",
+    "token": "serv_tan_a1b2c3_anothertoken456789",
+    "account": "tan***"
+  }
+  ```
 - **错误 (401)**: 用户 token 无效或已过期
 
 #### [POST] /api/auth/logout
-
-- **说明**: 撤销当前 token。
-- **Header**: `X-Auth-Token` (必填)
+- **说明**: 注销接口。物理废除当前的 Token（在 `account_tokens.jsonl` 中标记 `action: revoke`）。
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**: `{"status": "ok"}`
+- **错误 (401)**: Invalid or expired token
 
-### 3.2 核心分析类
+#### [POST] /api/auth/verify
+- **说明**: 校验当前 Token 是否有效。
+- **Header**: `X-Auth-Token`（必填）
+- **响应 (200)**: `{"status": "ok", "account": "tan***"}`
+- **错误 (401)**: Invalid or expired token
+
+#### [GET] /api/config
+- **说明**: 获取当前用户的系统基础 LLM 预设配置状态（如是否有 API Key 等，不返回敏感明文）。
+- **Header**: `X-Auth-Token`（必填）
+- **响应 (200)**:
+  ```json
+  {
+    "reasoningEffort": "medium",
+    "availableReasoningEfforts": ["low", "medium", "high"],
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-chat",
+    "hasKey": true,
+    "call": { "baseUrl": "...", "model": "...", "hasKey": true },
+    "fastcall": { "baseUrl": "...", "model": "...", "hasKey": true }
+  }
+  ```
+
+---
+
+### 3.2 门店诊断分析工作流 (Diagnosis Workflow)
 
 #### [POST] /api/analyze
-
-- **说明**: Multipart 上传入口，提交文件并启动分析。
+- **说明**: 提交门店销售数据等文件，异步启动智能诊断分析任务。
 - **Header**: `X-Auth-Token`（必填）
-- **Body (Multipart)**: `files` 字段，一个或多个文件。每文件最大 **100MB**，支持 `.json` / `.xlsx` / `.csv` 格式。可选字段 `reasoningEffort` (`low` / `medium` / `high`，默认 `medium`)。
-- **响应 (200)**: `{"status": "started", "pipeline": "multifile"}`
-- **错误 (400)**: 任务正在运行中 / 文件过大(>100MB) / JSON 解析失败 / 文件读取失败
+- **Body (Multipart)**:
+  - `files`: 上传一个或多个数据文件（支持 `.xlsx` / `.csv` / `.json`，单文件限 100MB）
+  - `reasoningEffort` / `costTier`: 可选。AI 推理力度 (`low` / `medium` / `high`，默认 `medium`)
+- **响应 (200)**: `{"status": "started", "pipeline": "custom", "runId": "20260609T170000_abc123"}`
+- **错误 (400)**: 任务正在运行中 / 缺少文件
 
 #### [GET] /api/status
-
-- **说明**: 获取该账户最近一次任务的状态与结果。
+- **说明**: 查询指定 `run_id` 的诊断分析状态和结果。
 - **Header**: `X-Auth-Token`（必填）
+- **Query**: `run_id`（可选，不传时默认使用最新一次任务）
 - **响应 (200)**:
-
-```json
-{
-  "status": "idle"|"running"|"completed"|"error"|"aborted",
-  "errorMessage": "",
-  "result": "JSON 格式简化报告 (completed 时有值)",
-  "fullResult": "Markdown 格式完整报告 (completed 时有值)"
-}
-```
+  ```json
+  {
+    "status": "idle" | "queued" | "running" | "completed" | "error" | "aborted",
+    "errorMessage": "",
+    "result": "JSON 格式的指标/待关注项简化报告 (completed 时返回)",
+    "fullResult": "Markdown 格式的完整分析诊断报告 (completed 时返回)",
+    "runId": "20260609T170000_abc123"
+  }
+  ```
 
 #### [GET] /api/logs
-
-- **说明**: 获取该账户最近一次任务的日志快照（全量日志数组）。
+- **说明**: 获取特定诊断分析任务的全量执行日志。
 - **Header**: `X-Auth-Token`（必填）
-- **响应 (200)**: `[{log_entry}, ...]` — 日志事件数组，每条含 `type`、`time`、`nodeId` 等字段。
+- **Query**: `run_id`（可选）
+- **响应 (200)**:
+  ```json
+  {
+    "logs": [
+      { "type": "log", "time": "17:00:05", "nodeId": "system", "level": "info", "message": "读取销售数据完成..." }
+    ]
+  }
+  ```
 
 #### [GET] /api/stream
-
-- **说明**: SSE 日志流，供前端实时刷新监控面板。
-- **Query**: `?auth-token=...`（必填，通过 URL 查询参数传递，适配 EventSource 场景）
-- **响应**: `text/event-stream`，首条事件 `{"type":"reset","time":"HH:MM:SS"}`，后续为日志事件 JSON
+- **说明**: SSE 日志推送流，支持前端监控面板的实时渲染。
+- **Query**: `?auth-token=usr_xxx&run_id=yyy`（必填）
+- **响应**: `text/event-stream`
 
 #### [POST] /api/stop
-
-- **说明**: 强行停止该账户下的分析任务。
+- **说明**: 强行停止正在运行的诊断分析任务。
 - **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**: `{"status": "ok"}`
 
-### 3.3 客服会话类
+---
+
+### 3.3 商品价格推荐工作流 (Price Recommendation Workflow)
+
+#### [POST] /api/price-recommendations/precheck
+- **说明**: 在运行分析前，前置检查上传的竞品/销售数据格式是否合规。
+- **Header**: `X-Auth-Token`（必填）
+- **Body (Multipart)**:
+  - `files`: 待校验的文件列表
+  - `productName`: 商品名称（如“感康”）
+- **响应 (200)**: 校验结果
+
+#### [POST] /api/price-recommendations
+- **说明**: 上传数据文件，异步启动商品智能价格推荐任务。
+- **Header**: `X-Auth-Token`（必填）
+- **Body (Multipart)**:
+  - `files`: 销售及竞品价格文件列表
+  - `productName`: 目标商品名称
+  - `candidateCount`: 推荐价格的候选数量（默认 3）
+  - `reasoningEffort` / `costTier`: AI 推理强度配置
+- **响应 (200)**: 
+  ```json
+  {
+    "status": "started",
+    "taskType": "price_recommendation",
+    "workflow": "price_recommendation",
+    "runId": "20260609T170500_xyz456"
+  }
+  ```
+
+#### [GET] /api/price-recommendations/status
+- **说明**: 获取特定价格推荐任务的执行状态与推荐结果。
+- **Header**: `X-Auth-Token`（必填）
+- **Query**: `run_id`（可选）
+- **响应 (200)**:
+  ```json
+  {
+    "status": "completed",
+    "errorMessage": "",
+    "result": "价格推荐列表与弹性估算 JSON",
+    "fullResult": "价格推荐分析 Markdown 报告",
+    "runId": "20260609T170500_xyz456"
+  }
+  ```
+
+#### [GET] /api/price-recommendations/logs
+- **说明**: 获取指定价格推荐任务的完整日志。
+- **Header**: `X-Auth-Token`（必填）
+- **Query**: `run_id`（可选）
+- **响应 (200)**: `{"logs": [...]}`
+
+#### [GET] /api/price-recommendations/stream
+- **说明**: SSE 价格推荐日志监控流。
+- **Query**: `?auth-token=usr_xxx&run_id=yyy`（必填）
+- **响应**: `text/event-stream`
+
+#### [POST] /api/price-recommendations/stop
+- **说明**: 强行停止执行中的价格推荐任务。
+- **Header**: `X-Auth-Token`（必填）
+- **响应 (200)**: `{"status": "ok"}`
+
+---
+
+### 3.4 诊断分析参数配置类 (Analysis Parameters)
+
+#### [GET] /api/analysis-params
+- **说明**: 获取当前用户设定的分析参数及规则限制配置。
+- **Header**: `X-Auth-Token`（必填）
+- **响应 (200)**: `{"analysis_params": "用户自定义的诊断约束文本"}`
+
+#### [PUT] /api/analysis-params
+- **说明**: 更新/设定诊断分析参数限制。
+- **Header**: `X-Auth-Token`（必填）
+- **Body (JSON)**: `{"analysis_params": "限制客单价分析低于100元的交易..."}`
+- **响应 (200)**: `{"status": "ok"}`
+
+#### [GET] /api/analysis-params/presets
+- **说明**: 获取系统预设的分析参数模板。
+- **响应 (200)**:
+  ```json
+  {
+    "presets": {
+      "标准诊断模板": { "analysis_params": "..." }
+    }
+  }
+  ```
+
+---
+
+### 3.5 历史运行报告管理类 (Report History)
+
+#### [GET] /api/reports
+- **说明**: 获取该账户所有的历史运行分析报告列表。
+- **Header**: `X-Auth-Token`（必填）
+- **响应 (200)**:
+  ```json
+  {
+    "status": "ok",
+    "runs": [
+      {
+        "runId": "20260609T170000_abc123",
+        "taskType": "diagnosis",
+        "createdAt": "2026-06-09 17:00:00",
+        "status": "completed",
+        "fileNames": ["sales_data.xlsx"],
+        "isPublic": false,
+        "shareUrl": "http://localhost:3000/public.html?run_id=20260609T170000_abc123&sign=...",
+        "downloadUrl": "http://localhost:3000/api/reports/public/download?run_id=...&sign=..."
+      }
+    ]
+  }
+  ```
+
+#### [GET] /api/reports/download
+- **说明**: 将分析任务产出物（`/workspace/output/` 下所有文件）整体打包为 ZIP 供用户下载。
+- **Header**: `X-Auth-Token` (或 query 中传入 `auth-token`)
+- **Query**: `run_id`（必填）
+- **响应**: `application/zip` 二进制流
+
+#### [POST] /api/reports/{run_id}/public
+- **说明**: 设置报告的“公开状态”（允许免登录的外部分享链接查看）。
+- **Header**: `X-Auth-Token`（必填）
+- **Path**: `run_id`
+- **Body (JSON)**: `{"public": true}`
+- **响应 (200)**: `{"status": "ok", "isPublic": true, "shareUrl": "...", "downloadUrl": "..."}`
+
+#### [DELETE] /api/reports/{run_id}
+- **说明**: 物理删除该运行记录，并删除其对应的磁盘文件夹。**注意：客服 Token (serv_*) 无权调用此接口 (返回403)。**
+- **Header**: `X-Auth-Token`（必填）
+- **Path**: `run_id`
+- **响应 (200)**: `{"status": "ok"}`
+
+---
+
+### 3.6 公共免密分享接口 (Public Share Access)
+
+#### [GET] /api/reports/public/status
+- **说明**: 外部访客免密获取被设置为 `isPublic=true` 的报告状态。需要通过安全签名校验。
+- **Query**: `?run_id=xxx&sign=yyy`（签名 `sign` 基于 `run_id` 和服务器密钥计算，保障防爆破）
+- **响应 (200)**:
+  ```json
+  {
+    "status": "completed",
+    "errorMessage": "",
+    "result": "...",
+    "fullResult": "...",
+    "runId": "..."
+  }
+  ```
+- **错误 (403)**: 签名不匹配或报告未设置为公开
+
+#### [GET] /api/reports/public/download
+- **说明**: 外部访客免密下载被分享报告的 ZIP 文件。同样需携带有效签名。
+- **Query**: `?run_id=xxx&sign=yyy`
+- **响应**: `application/zip`
+
+#### [GET] /api/reports/{run_id}/assets/{filename}
+- **说明**: 获取任务报告中引用的本地资源附件（例如图片、折线图等）。
+- **Header**: `X-Auth-Token`（必填）
+- **响应 (200)**: 对应资源的二进制内容
+
+#### [GET] /api/reports/public/{run_id}/assets/{filename}
+- **说明**: 外部访客免密获取公开报告中包含的资源附件（需通过签名检验）。
+- **Query**: `?sign=xxx`
+- **响应 (200)**: 对应资源的二进制内容
+
+---
+
+### 3.7 客服会话聊天接口 (Chatbot & Assistant)
 
 #### [GET] /api/chatbot/history
-
-- **说明**: 读取当前账号的客服会话历史消息。
+- **说明**: 读取当前账号的客服会话历史消息记录。
 - **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**:
-
-```json
-{
-  "messages": [
-    {
-      "role": "notice",
-      "content": "客服会话已接入",
-      "datetime": "2026-06-05T10:29:58+08:00"
-    },
-    {
-      "role": "user",
-      "content": "...",
-      "datetime": "2026-06-05T10:30:00+08:00"
-    },
-    {
-      "role": "assistant",
-      "content": "...",
-      "datetime": "2026-06-05T10:30:05+08:00"
-    }
-  ]
-}
-```
-
-- **说明补充**: 历史数据存储在 `storage/accounts/{account}/chatbot/chat.jsonl`，每行一条消息记录。`user` 和 `assistant` 消息会额外带 `datetime` 字段；用户消息如果引用附件，会带 `attachments` 元数据。
-- **Notice 规则**:
-  - `chat.jsonl` 中 `{"role":"system","name":"notice","content":"...","time":"..."}` 会在接口响应中转换为 `{"role":"notice","content":"...","datetime":"..."}`。
-  - 普通 `role=system` 消息不会通过历史接口返回给前端。
+  ```json
+  {
+    "messages": [
+      {
+        "role": "notice",
+        "content": "客服会话已接入",
+        "datetime": "2026-06-09T17:00:00+08:00"
+      },
+      {
+        "role": "user",
+        "content": "帮我做一个门店经营诊断分析。",
+        "datetime": "2026-06-09T17:01:00+08:00"
+      },
+      {
+        "role": "card",
+        "name": "ask_token_auth",
+        "title": "请求代理操作许可",
+        "detail": "需要提交经营分析任务。",
+        "options": ["是", "否"],
+        "choice": "是",
+        "datetime": "2026-06-09T17:01:05+08:00"
+      }
+    ],
+    "last_update": "2026-06-09T17:01:05+08:00"
+  }
+  ```
+- **Notice 与 Card 映射规则**:
+  - 系统 `notice` 消息会自动转换为前台展示的提示小字。
+  - 角色为 `system` 且包含 `title` 字段的系统消息会被转换为 `card` 类型，用于展示交互式卡片（如授权操作卡）。若已完成选择，则带 `choice` 字段指明结果。
+  - 传给 LLM 时，授权卡片不会按前端 `role=card` 发送，而会转换为合法的 `role=system` 文本消息，内容包含 `name`、`title`、`detail`、`options` 和 `choice`，使模型能理解用户授权状态。
 
 #### [POST] /api/chatbot/attachments
-
-- **说明**: 上传客服会话附件。图片、PDF、Excel、CSV、压缩包等都按附件处理。
+- **说明**: 上传聊天过程中附加的附件。
 - **Header**: `X-Auth-Token`（必填）
 - **Body**: `multipart/form-data`
-  - `attachments`: 附件文件，可传多个
-- **限制**:
-  - 单个附件最大 100MB。
-  - 单次最多上传 20 个附件。
-- **响应 (200)**:
-
-```json
-{
-  "attachments": [
-    {
-      "attachmentId": "f4a1...",
-      "originalName": "门店照片.png",
-      "storedName": "f4a1....png",
-      "mimeType": "image/png",
-      "size": 123456,
-      "sha256": "...",
-      "createdAt": "2026-06-05T10:30:00+08:00",
-      "relativePath": "chatbot/files/f4a1....png"
-    }
-  ]
-}
-```
-
-- **同名规则**:
-  - `originalName` 只用于展示、日志和下载名，不参与服务器唯一性判断。
-  - 服务器真实文件名使用 `attachmentId + 原扩展名`，因此同名附件不会覆盖。
-  - 同名不同内容允许上传，会得到不同 `attachmentId`。
-  - 同名同内容暂时也按两次上传处理，后续可按 `sha256` 做去重优化。
-- **存储位置**:
-  - 附件元数据：`storage/accounts/{account}/chatbot/attachments.jsonl`
-  - 附件文件：`storage/accounts/{account}/chatbot/files/{attachmentId}.{ext}`
+  - `attachments`: 附件文件（单文件限100MB，单次最多20个）
+- **响应 (200)**: `{"attachments": [{"attachmentId": "...", "originalName": "...", "relativePath": "chatbot/files/..."}]}`
 
 #### [POST] /api/chatbot
-
-- **说明**: 发送一条聊天消息，和账号下的客服会话交互，并以流式文本返回结果。
+- **说明**: 向会话发送一条新消息，启动后台 Agent 回复计算。此接口立刻落盘并返回，不使用 SSE。
 - **Header**: `X-Auth-Token`（必填）
 - **Body (JSON)**:
+  - 普通聊天：`{"content": "我想做价格推荐", "attachmentIds": []}`
+  - 回复授权确认：`{"name": "ask_token_auth", "choice": "是", "detail": "完整用户Token"}`
+- **响应 (200)**: `{"status": "ok"}`
+- **补充**: 如果当前存在未确认的 `ask_token_auth` 授权卡片，服务端会拒绝新的普通聊天消息，要求用户先选择“是”或“否”。
 
-```json
-{
-  "content": "用户输入内容",
-  "attachmentIds": ["f4a1..."]
-}
-```
+#### [GET] /api/chatbot/status
+- **说明**: 轮询查询 Agent 当前的输入状态和历史最后更新时间戳。
+- **Header**: `X-Auth-Token`（必填）
+- **限制**: 同一个 token 每 2 秒限查询一次（超频返回 `429`）。
+- **响应 (200)**:
+  ```json
+  {
+    "last_update": "2026-06-09T17:01:05+08:00",
+    "state": "输入中..." // 仅在 Agent 后台正在计算未落盘时返回，其他情况无此字段
+  }
+  ```
 
-- **接收字段**:
-  - `content`: 主字段；如果本次只上传附件，可以不传或传空字符串
-  - `attachmentIds`: 本次会话引用的附件 ID 列表，来自 `/api/chatbot/attachments`
-  - `message`: 旧字段，保留但不再作为主要口径
-  - `text`: 旧字段，保留但不再作为主要口径
+---
 
-- **说明补充**: 这是对外的简化消息接口，客户端只提交本次输入和附件引用。
-- **响应**: `text/plain; charset=utf-8` 的流式文本，不是 JSON。
-- **行为说明**:
-  - 服务端会读取当前账号的客服历史消息，并将 `assistant.md` 作为动态系统提示词放到本次模型上下文最前面。
-  - `assistant.md` 只在发送给模型前动态拼接，不写入 `chat.jsonl`。
-  - 服务端会将客服历史消息、本次输入和本次附件清单一起作为会话上下文；历史中的普通 `system` 消息和 `system/name=notice` 消息不发送给模型。
-  - 如果只有附件没有文字输入，服务端会按“请查看本次上传的附件。”处理本次输入。
-  - 本次附件会以元数据和相对路径形式进入会话上下文；客服会话处理逻辑必要时可读取 `chatbot/files/` 下的附件内容。
-  - 读类工具统一使用域名前缀路径，当前只支持 `chatbot/...` 与 `service_docs/...` 两个域；`service_docs` 用于公司公共资料，`chatbot` 用于私有会话工作区。
-  - `list_files`、`read_file`、`read_document_structure`、`search` 这类读工具返回的 `path` 也会保留域名前缀，方便模型继续引用同一路径。
-
-- **相关配置**: 客服会话的连接参数来自全局预设 `chatbot` 段，由管理员接口维护，并通过 `/api/admin/llm-presets` 读取和更新。
-
-### 3.4 管理员接口 (需 Header: X-Admin-Token)
+### 3.8 系统管理类接口 (需 Header: X-Admin-Token)
 
 #### [GET] /api/admin/llm-presets
-
-- **说明**: 读取 low/medium/high 三档全局 LLM 预设（包含独立的 `call` 与 `fastcall` 配置，并且在根级平铺挂载 `call` 的参数以向下兼容旧有调用）。
-- **补充**: 同一份预设中还包含 `chatbot` 独立连接配置，供 `/api/chatbot` 使用。
-- **响应 (200)**: `{"status": "ok", "presets": {"low": {"call": {"baseUrl": "...", "apiKey": "...", "model": "...", "reasoningEffort": "..."}, "fastcall": {...}, "baseUrl": "...", "apiKey": "...", "model": "..."}, "medium": {...}, "high": {...}}}`
+- **说明**: 查看当前的低/中/高三档 LLM 全局连接预设（及 Chatbot 独立模型参数）。
+- **响应 (200)**: 包含 presets 配置的 JSON。
 
 #### [POST] /api/admin/llm-presets
-
-- **说明**: 更新全局 LLM 预设。
-- **Body (JSON)**:
-  - 推荐方式 A: `{"presets": {"low": {"call": {...}, "fastcall": {...}}, "medium": {...}, "high": {...}}}`
-  - 兼容方式 B: `{"low": {"call": {...}, "fastcall": {...}}, "medium": {...}, "high": {...}}`
-  - 旧版平铺兼容方式: 若单层直接传入 `baseUrl`, `apiKey`, `model` 等字段，后端会自动转换并同时应用于 `call` 与 `fastcall`。
-  - 子对象字段（`call` 与 `fastcall`）：`baseUrl` (string), `apiKey` (string, 可选), `apiKeyEnc` (string, 可选), `model` (string), `reasoningEffort` (string)
-- **补充**: `chatbot` 配置字段为 `baseUrl`、`apiKey`、`model`，由独立聊天接口使用，不参与 `low/medium/high` 三档分析预设。
-- **响应 (200)**: `{"status": "ok", "presets": {"low": {...}, "medium": {...}, "high": {...}}}`
+- **说明**: 更新系统全局分析预设和聊天模型预设。
+- **Body (JSON)**: 预设配置参数包。
+- **响应 (200)**: 更新后的预设列表。
 
 #### [GET] /api/admin/service-docs
-
-- **说明**: 列出 `storage/service_docs/` 下的文件与目录。
-- **Query**: `path`，默认 `service_docs/`
-- **响应 (200)**:
-
-```json
-{
-  "status": "ok",
-  "path": "service_docs/",
-  "entries": [
-    {
-      "path": "service_docs/policy/faq.md",
-      "name": "faq.md",
-      "isDir": false,
-      "kind": "markdown",
-      "size": 1234,
-      "sizeHuman": "1234B",
-      "ext": ".md"
-    }
-  ]
-}
-```
+- **说明**: 获取公共公共说明文档目录结构列表。
+- **Query**: `path`（默认 `service_docs/`）
+- **响应 (200)**: `{"entries": [...]}`
 
 #### [GET] /api/admin/service-docs/file
-
-- **说明**: 读取 `service_docs` 中的文本文件内容。
-- **Query**: `path`，必须带域名前缀，例如 `service_docs/policy/faq.md`
-- **响应 (200)**: `{"status":"ok","path":"service_docs/...","content":"..."}`
+- **说明**: 查看特定公共文档的纯文本内容。
+- **Query**: `path`
+- **响应 (200)**: `{"content": "..."}`
 
 #### [POST] /api/admin/service-docs/file
-
-- **说明**: 写入或覆盖 `service_docs` 中的文本文件。
-- **Body (JSON)**:
-  - `path`: 带域名前缀的路径，例如 `service_docs/policy/faq.md`
-  - `content`: 文本内容
-- **响应 (200)**: `{"status":"ok","path":"service_docs/...","bytesWritten":123}`
+- **说明**: 写入或覆盖特定的公共文档。
+- **Body (JSON)**: `{"path": "...", "content": "..."}`
+- **响应 (200)**: `{"status": "ok"}`
 
 #### [POST] /api/admin/service-docs/upload
-
-- **说明**: 上传一个二进制或文本文件到 `service_docs`。
-- **Body**: `multipart/form-data`
-  - `file`: 文件
-  - `path`: 可选，带域名前缀的目标路径；不传时默认使用文件名
-- **响应 (200)**: `{"status":"ok","path":"service_docs/...","bytesWritten":123,"mimeType":"..." }`
+- **说明**: 上传资源到公共文档区。
+- **Body (Multipart)**: `file`
+- **响应 (200)**: `{"status": "ok", "path": "..."}`
 
 #### [DELETE] /api/admin/service-docs/file
+- **说明**: 删除公共文档区的文件或目录。
+- **Query**: `path`
+- **响应 (200)**: `{"status": "ok"}`
 
-- **说明**: 删除 `service_docs` 中的文件或目录。
-- **Query**: `path`，必须带域名前缀
-- **响应 (200)**: `{"status":"ok","path":"service_docs/..."}`
+---
 
-### 3.5 其他接口
+### 3.9 其他通用接口
 
-- **[GET] /api/examples**: 获取示例数据，返回 `{"files": [{"name": "...", "base64": "..."}]}`。无需鉴权。
+#### [GET] /api/examples
+- **说明**: 无需鉴权，获取系统的示例数据文件包（供初次使用下载）。
+- **响应 (200)**: `{"files": [{"name": "sales.xlsx", "base64": "..."}]}`
 
 ---
 
 ## 4. 存储隔离规约
 
-系统会根据账号名生成账号目录，token 只用于请求鉴权：
+系统按注册账户的**唯一 ID（由账号名前 3 位明文及 SHA256 哈希值前 6 位拼接而成）**在磁盘进行物理数据隔离：
 
-- **路径**: `/storage/accounts/{账号名前三位}_{SHA256(账号名)前六位}/`
-- **内容**: 包含该账号的 `account.json`、`account_tokens.jsonl`、`profile.json`、`analysis_params.json`、`runs/` 等数据。
-- **任务目录**: `/storage/accounts/{account_id}/runs/{task_type}/{run_id}/`
+* **根目录路径**: `/storage/accounts/usr_{账号前三位}_{哈希前六位}/`
+  * **`account.json`**: 用户账户配置（密码哈希、创建日期）。
+  * **`account_tokens.jsonl`**: 会话 Token 状态追加日志（创建、活跃、登出记录）。
+  * **`profile.json`**: 用户的偏好设置（如诊断精度配置）。
+  * **`analysis_params.json`**: 用户自定义的分析约束。
+  * **`chatbot/chat.jsonl`**: 客服会话聊天全量历史。
+  * **`chatbot/attachments.jsonl`**: 上传的聊天附件索引数据库。
+  * **`chatbot/files/`**: 存储具体的聊天原始附件。
+  * **`chatbot/workspace/`**: Chatbot Agent 执行分析计算的隔离沙箱区。
+  * **`runs/{task_type}/{run_id}/`**: 历史运行任务存档目录。
+    * **`session.json`**: 任务单次运行的参数和状态。
+    * **`logs.jsonl`**: 任务分析输出的日志。
+    * **`workspace/output/`**: 诊断/调价产出的最终报告及配图等。

@@ -1,5 +1,5 @@
 """
-下载公开分享报告的 ZIP 产物。
+下载公开分享报告 ZIP
 
 功能说明：
 - 调用 `/api/reports/public/download`

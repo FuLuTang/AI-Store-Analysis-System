@@ -1,8 +1,5 @@
 """
-系统诊断功能 (ai_analyse/diagnosis/launch_diagnosis)
-
-功能描述：
-对门店经营数据文件进行 AI 智能分析与诊断，生成诊断报告。它会自动完成数据清洗、指标计算、异常诊断并产出最终的诊断摘要。
+门店经营诊断
 
 参数说明：
 - file_names (list[str]): 必须。需要诊断的文件名称列表。文件必须已经上传到 Chatbot 系统（通常路径为 "chatbot/files/[stored_name]"，可以直接传入相对路径）。

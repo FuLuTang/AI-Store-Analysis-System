@@ -21,7 +21,9 @@ TOOL_BLACKLIST_BY_TASK_TYPE: dict[str, set[str]] = {
         "read_plan",
         "check_plan",
         "finish_task",
-        "run_python",
+        "duckdb_query",
+        "duckdb_register_parquet",
+        "list_tables",
     },
 }
 

@@ -1089,6 +1089,27 @@ def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Head
         target.unlink()
     return {"status": "ok", "path": path}
 
+
+@app.post("/api/admin/chatbot/notice")
+async def broadcast_chatbot_notice(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="缺少 content")
+
+    from packages.agents.system_service_functions.ai_analyse.history._append_notice_to_all_chats import (
+        broadcast_notice_to_all_chats,
+    )
+
+    result = broadcast_notice_to_all_chats(ACCOUNTS_DIR, content)
+    return {
+        "status": "ok",
+        **result,
+    }
+
 @app.get("/api/status")
 def get_status(
     run_id: Optional[str] = Query(None),

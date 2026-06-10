@@ -91,6 +91,11 @@ EOF
     systemctl enable "$APP_NAME" >/dev/null 2>&1
     systemctl restart "$APP_NAME"
 
+    echo "==> 5. 正在广播系统功能更新通知..."
+    if ! python3 "$APP_DIR/scripts/broadcast_system_update_notice.py"; then
+        echo "⚠️ 系统通知广播失败，但部署已完成。"
+    fi
+
     # Nginx 配置 (仅当配置不存在时创建)
     if [ ! -f "/etc/nginx/sites-available/$APP_NAME" ]; then
         echo "==> 配置 Nginx 反向代理..."

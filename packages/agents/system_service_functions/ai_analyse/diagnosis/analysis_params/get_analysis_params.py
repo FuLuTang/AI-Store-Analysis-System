@@ -1,12 +1,12 @@
 """
-获取当前用户的系统基础 LLM 预设配置状态。
+读取当前用户保存的分析参数约束
 
 功能说明：
-- 读取 `/api/config`
-- 返回当前 reasoningEffort、可用档位、基础模型地址和是否已配置密钥
+- 读取 `/api/analysis-params`
+- 返回当前账号下 `analysis_params.json` 中保存的文本
 
 参数说明：
-- service_token (str): 必须。用户授权后可用于调用用户侧接口的客服 token。
+- service_token (str): 必须。客服 token。
 - api_base_url (str): 可选。后端地址，默认 "http://localhost:3000"。
 """
 
@@ -29,12 +29,11 @@ def run(ws, params: dict, llm_preset: dict) -> str:
 
     try:
         with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
-            response = client.get(f"{api_base_url(params)}/api/config", headers=headers)
+            response = client.get(f"{api_base_url(params)}/api/analysis-params", headers=headers)
     except Exception as e:
-        return f"错误：请求 /api/config 失败: {str(e)}"
+        return f"错误：请求 /api/analysis-params 失败: {str(e)}"
 
     if response.status_code >= 400:
-        return f"错误：/api/config 返回失败，HTTP {response.status_code}: {api_error_message(response)}"
+        return f"错误：/api/analysis-params 返回失败，HTTP {response.status_code}: {api_error_message(response)}"
 
-    payload = response_payload(response)
-    return pretty_json(payload)
+    return pretty_json(response_payload(response))

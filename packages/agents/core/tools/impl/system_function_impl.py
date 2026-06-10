@@ -17,6 +17,23 @@ def list_system_functions_impl() -> str:
 
     # 构建树形结构字典
     tree = {}
+    doc_first_lines: dict[tuple[str, ...], str] = {}
+
+    def _first_doc_line(file_path: Path) -> str:
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            tree_obj = ast.parse(content)
+            doc = ast.get_docstring(tree_obj) or ""
+        except Exception:
+            doc = ""
+        if not doc:
+            return ""
+        for line in doc.splitlines():
+            text = line.strip()
+            if text:
+                return text
+        return ""
+
     for p in sys_functions_dir.rglob("*.py"):
         if p.name == "__init__.py" or p.name.startswith("_"):
             continue
@@ -26,6 +43,10 @@ def list_system_functions_impl() -> str:
                 parts_list = list(rel_parts)
                 # 剔除后缀
                 parts_list[-1] = p.stem
+
+                desc = _first_doc_line(p)
+                if desc:
+                    doc_first_lines[tuple(parts_list)] = desc
                 
                 curr = tree
                 for part in parts_list:
@@ -37,15 +58,18 @@ def list_system_functions_impl() -> str:
 
     # 递归渲染为树形文本
     lines = []
-    def _format_tree(node, indent=""):
+    def _format_tree(node, indent="", path: tuple[str, ...] = ()):
         keys = sorted(node.keys())
         for idx, key in enumerate(keys):
             is_last = (idx == len(keys) - 1)
             prefix = "└── " if is_last else "├── "
-            lines.append(f"{indent}{prefix}{key}")
+            child_path = path + (key,)
+            desc = doc_first_lines.get(child_path, "")
+            suffix = f" : {desc}" if desc else ""
+            lines.append(f"{indent}{prefix}{key}{suffix}")
             
             child_indent = indent + ("    " if is_last else "│   ")
-            _format_tree(node[key], child_indent)
+            _format_tree(node[key], child_indent, child_path)
 
     _format_tree(tree)
     if not lines:

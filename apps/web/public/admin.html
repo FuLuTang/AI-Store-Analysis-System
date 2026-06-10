@@ -643,7 +643,7 @@
                 const isSelected = selected && normalizeServiceDocsPath(entry.path) === selected;
                 const typeText = entry.isDir ? '文件夹' : (entry.kind || '文件');
                 return `
-                    <button type="button" class="service-docs-item ${entry.isDir ? 'folder' : 'file'} ${isSelected ? 'selected' : ''}" data-service-docs-path="${escapeHtml(entry.path)}">
+                    <button type="button" class="service-docs-item ${entry.isDir ? 'folder' : 'file'} ${isSelected ? 'selected' : ''}" data-service-docs-path="${escapeHtml(entry.path)}" data-service-docs-is-dir="${entry.isDir ? '1' : '0'}">
                         <span class="service-docs-item-icon"><i class="fas ${serviceDocsIcon(entry)}"></i></span>
                         <span class="service-docs-item-main">
                             <span class="service-docs-item-name">${escapeHtml(entry.name || '未命名')}</span>
@@ -654,20 +654,35 @@
                 `;
             }).join('');
 
-            serviceDocsList.querySelectorAll('[data-service-docs-path]').forEach(btn => {
+            serviceDocsList.querySelectorAll('[data-service-docs-path]').forEach((btn, index) => {
+                const entry = children[index];
+                if (!entry) return;
                 btn.onclick = async () => {
-                    const path = btn.getAttribute('data-service-docs-path') || '';
-                    const entry = serviceDocsEntries.find(item => normalizeServiceDocsPath(item.path) === normalizeServiceDocsPath(path));
-                    if (!entry) return;
                     if (entry.isDir) {
-                        serviceDocsSelectedPath = '';
-                        serviceDocsSelectedEntry = null;
+                        serviceDocsSelectedPath = normalizeServiceDocsPath(entry.path);
+                        serviceDocsSelectedEntry = { ...entry };
                         serviceDocsSelectedText = '';
-                        await loadServiceDocs(entry.path);
+                        updateServiceDocsSelectionInDom(serviceDocsSelectedPath);
+                        renderServiceDocsDetail();
                         return;
                     }
-                    await selectServiceDocsEntry(path);
+                    await selectServiceDocsEntry(entry.path);
                 };
+                btn.ondblclick = async () => {
+                    if (!entry.isDir) return;
+                    serviceDocsSelectedPath = '';
+                    serviceDocsSelectedEntry = null;
+                    serviceDocsSelectedText = '';
+                    await loadServiceDocs(entry.path);
+                };
+            });
+        }
+
+        function updateServiceDocsSelectionInDom(selectedPath) {
+            const normalized = normalizeServiceDocsPath(selectedPath);
+            serviceDocsList.querySelectorAll('[data-service-docs-path]').forEach(btn => {
+                const path = normalizeServiceDocsPath(btn.getAttribute('data-service-docs-path') || '');
+                btn.classList.toggle('selected', !!normalized && path === normalized);
             });
         }
 

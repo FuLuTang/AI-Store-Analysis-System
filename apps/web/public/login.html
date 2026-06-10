@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 门店分析系统 | 门户</title>
+    <script src="auth-session.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -190,7 +191,11 @@
                 });
                 if (r.ok) {
                     const data = await r.json();
-                    sessionStorage.setItem('authToken', data.token);
+                    if (typeof window.persistAuthToken === 'function') {
+                        window.persistAuthToken(data.token);
+                    } else {
+                        sessionStorage.setItem('authToken', data.token);
+                    }
                     sessionStorage.setItem('accountName', username);
                     window.location.href = '/';
                 } else {
@@ -221,7 +226,11 @@
                 const btn = document.getElementById('reg-btn');
                 btn.innerText = '进入系统';
                 btn.onclick = () => {
-                    sessionStorage.setItem('authToken', d.token);
+                    if (typeof window.persistAuthToken === 'function') {
+                        window.persistAuthToken(d.token);
+                    } else {
+                        sessionStorage.setItem('authToken', d.token);
+                    }
                     sessionStorage.setItem('accountName', username);
                     window.location.href = '/';
                 };

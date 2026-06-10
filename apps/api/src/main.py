@@ -350,7 +350,10 @@ def update_llm_presets(raw_presets: dict):
 
 
 def require_admin_authorization(x_admin_token: Optional[str]):
-    return  # 内部工具，不做管理员鉴权
+    token = (x_admin_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少管理员令牌")
+    return token  # 测试版仅要求存在，不校验内容
 
 
 def _service_docs_rel_path(path: str) -> str:

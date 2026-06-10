@@ -65,7 +65,7 @@ SERVICE_TOKEN_TOOL_NAME = "get_user_service_token"
 CHATBOT_TYPING_STATE = "AI客服输入中......"
 CHATBOT_STATUS_MIN_INTERVAL_SECONDS = 2
 
-CHATBOT_RUNNING: dict[str, bool] = {}
+CHATBOT_STATUS_STATE: dict[str, Optional[str]] = {}
 CHATBOT_RUNNING_LOCK = Lock()
 CHATBOT_STATUS_POLLS: dict[str, float] = {}
 CHATBOT_STATUS_LOCK = Lock()
@@ -626,14 +626,18 @@ def _running_key(account_dir: Path) -> str:
     return str(account_dir)
 
 
-def _set_chatbot_running(account_dir: Path, running: bool):
+def _set_chatbot_state(account_dir: Path, state: Optional[str]):
     with CHATBOT_RUNNING_LOCK:
-        CHATBOT_RUNNING[_running_key(account_dir)] = running
+        CHATBOT_STATUS_STATE[_running_key(account_dir)] = None if state is None else str(state)
+
+
+def _get_chatbot_state(account_dir: Path) -> Optional[str]:
+    with CHATBOT_RUNNING_LOCK:
+        return CHATBOT_STATUS_STATE.get(_running_key(account_dir))
 
 
 def _is_chatbot_running(account_dir: Path) -> bool:
-    with CHATBOT_RUNNING_LOCK:
-        return bool(CHATBOT_RUNNING.get(_running_key(account_dir), False))
+    return _get_chatbot_state(account_dir) is not None
 
 
 def _check_status_poll_limit(token: str):
@@ -700,7 +704,7 @@ def register_chatbot_routes(
         return {"attachments": saved}
 
     async def _run_chatbot_agent_background(session, request_id: str, preset: dict, base_url: str, api_key: str, model: str, t0: float):
-        _set_chatbot_running(session.account_dir, True)
+        _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
         try:
             history = history_store.load_messages(session.account_dir)
             initial_messages = _build_messages_from_history(history)
@@ -738,6 +742,7 @@ def register_chatbot_routes(
                     nid,
                     st,
                 ),
+                set_status=lambda state: _set_chatbot_state(session.account_dir, state),
                 check_aborted=None,
             )
             result = await asyncio.to_thread(loop.run)
@@ -779,7 +784,7 @@ def register_chatbot_routes(
                 "datetime": _now_iso(),
             }])
         finally:
-            _set_chatbot_running(session.account_dir, False)
+            _set_chatbot_state(session.account_dir, None)
 
     @router.post("/api/chatbot")
     async def chat_stream(request: Request, x_auth_token: Optional[str] = Header(default=None)):
@@ -809,7 +814,7 @@ def register_chatbot_routes(
             else:
                 tool_content = json.dumps({"status": "denied", "message": "用户拒绝授权"}, ensure_ascii=False)
             history_store.complete_token_auth(session.account_dir, choice, tool_content)
-            _set_chatbot_running(session.account_dir, True)
+            _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
             asyncio.create_task(_run_chatbot_agent_background(session, request_id, preset, base_url, api_key, model, t0))
             return JSONResponse({"status": "ok"})
 
@@ -855,18 +860,26 @@ def register_chatbot_routes(
             _preview_text(content),
         )
 
-        _set_chatbot_running(session.account_dir, True)
+        _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
         asyncio.create_task(_run_chatbot_agent_background(session, request_id, preset, base_url, api_key, model, t0))
         return JSONResponse({"status": "ok"})
 
-    @router.get("/api/chatbot/status")
-    def get_chatbot_status(x_auth_token: Optional[str] = Header(default=None)):
+    def _build_chatbot_state_payload(x_auth_token: Optional[str] = Header(default=None)):
         token = (x_auth_token or "").strip()
         session = resolve_session(token)
         _check_status_poll_limit(token)
         payload = {"last_update": history_store.last_update(session.account_dir)}
-        if _is_chatbot_running(session.account_dir):
-            payload["state"] = CHATBOT_TYPING_STATE
+        state = _get_chatbot_state(session.account_dir)
+        if state is not None:
+            payload["state"] = state
         return payload
+
+    @router.get("/api/chatbot/status")
+    def get_chatbot_status(x_auth_token: Optional[str] = Header(default=None)):
+        return _build_chatbot_state_payload(x_auth_token)
+
+    @router.get("/api/chatbot/state")
+    def get_chatbot_state(x_auth_token: Optional[str] = Header(default=None)):
+        return _build_chatbot_state_payload(x_auth_token)
 
     app.include_router(router)

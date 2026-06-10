@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
+    <script src="auth-session.js"></script>
     <script src="chat.js" defer></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -205,13 +206,15 @@
     <script>
         // ========== 鉴权守卫 ==========
         function authHeaders() {
-            const key = sessionStorage.getItem('authToken') || '';
+            const key = (typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '')) || '';
             return { 'X-Auth-Token': key };
         }
 
         function clearAuthAndReturn() {
-            sessionStorage.removeItem('authToken');
             sessionStorage.removeItem('accountName');
+            if (typeof window.clearAuthToken === 'function') window.clearAuthToken();
             window.location.href = '/login.html';
         }
 
@@ -223,7 +226,9 @@
         };
 
         (async function authGuard() {
-            const key = sessionStorage.getItem('authToken');
+            const key = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : sessionStorage.getItem('authToken');
             if (!key) { window.location.href = '/login.html'; return; }
             try {
                 const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-Auth-Token': key } });
@@ -466,7 +471,9 @@
 
         // ========== 下载产物 ==========
         function downloadArchive(runId) {
-            const key = sessionStorage.getItem('authToken') || '';
+            const key = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '');
             const url = `/api/reports/download?auth-token=${encodeURIComponent(key)}&run_id=${encodeURIComponent(runId)}`;
             window.open(url, '_blank');
         }

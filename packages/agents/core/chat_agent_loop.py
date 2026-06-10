@@ -42,6 +42,7 @@ class ChatAgentLoop:
         load_messages=None,
         emit_log=None,
         emit_status=None,
+        set_status=None,
         check_aborted=None,
         persist_messages=None,
     ):
@@ -66,6 +67,7 @@ class ChatAgentLoop:
         self.tools = available_tool_call_for_agent(ws, task_type="chatbot")
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
+        self._set_status = set_status or (lambda state: None)
         self._round = 0
         self._persist_messages = persist_messages or (lambda msgs: None)
 
@@ -154,6 +156,7 @@ class ChatAgentLoop:
                     return self._with_usage(self._parse_final_output(sr.content))
 
                 if sr.tool_calls:
+                    self._set_status("正在处理信息......")
                     auth_call = next((tc for tc in sr.tool_calls if tc.get("name") == AUTH_TOOL_NAME), None)
                     if auth_call:
                         try:
@@ -171,6 +174,7 @@ class ChatAgentLoop:
                         }
                         round_messages.append(auth_card)
                         self.messages = round_messages
+                        self._set_status(None)
                         self._persist_messages([auth_card])
                         self._emit_log("chatbot_agent", {"level": "info", "message": "等待用户确认代理操作许可"})
                         self._emit_status("chatbot_agent", "waiting_auth")
@@ -184,6 +188,7 @@ class ChatAgentLoop:
                         })
 
                     for tc in sr.tool_calls:
+                        self._set_status("正在处理信息......")
                         target = _tool_target(tc["name"], tc["arguments"])
                         self._emit_log("chatbot_agent", {"level": "info", "message": f"🔧 {target}"})
 
@@ -197,6 +202,7 @@ class ChatAgentLoop:
                         }
                         round_messages.append(tool_message)
                         self.messages = round_messages
+                        self._set_status(None)
                         self._persist_messages([tool_message])
 
                 self.messages = round_messages

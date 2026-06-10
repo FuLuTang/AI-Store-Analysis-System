@@ -62,7 +62,7 @@ HISTORY_EXTRA_KEYS = {"attachments"}
 NOTICE_NAME = "notice"
 ASK_TOKEN_AUTH_NAME = "ask_token_auth"
 SERVICE_TOKEN_TOOL_NAME = "get_user_service_token"
-CHATBOT_TYPING_STATE = "输入中..."
+CHATBOT_TYPING_STATE = "AI客服输入中......"
 CHATBOT_STATUS_MIN_INTERVAL_SECONDS = 2
 
 CHATBOT_RUNNING: dict[str, bool] = {}

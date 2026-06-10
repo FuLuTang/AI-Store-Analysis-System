@@ -175,6 +175,7 @@
             chatPanel.classList.toggle('open', open);
             chatPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
             chatFab.setAttribute('aria-expanded', open ? 'true' : 'false');
+            document.body.classList.toggle('chatbot-open', open);
             if (open) {
                 loadChatHistory().catch((err) => {
                     console.error('Failed to load chatbot history', err);
@@ -261,7 +262,14 @@
             chatInput.disabled = false;
             chatAttachBtn.disabled = false;
             chatAttachmentInput.disabled = false;
-            chatStatusHint.textContent = '账号级多轮对话';
+            chatStatusHint.textContent = '';
+            chatStatusHint.hidden = true;
+        }
+
+        function setChatStatusHint(text) {
+            const value = String(text || '').trim();
+            chatStatusHint.textContent = value;
+            chatStatusHint.hidden = !value;
         }
 
         function renderChatAttachmentDrafts() {
@@ -355,7 +363,7 @@
                 if (response.status === 429) return;
                 if (!response.ok) return;
                 const data = await response.json();
-                chatStatusHint.textContent = data.state || '账号级多轮对话';
+                setChatStatusHint(data.state || '');
                 const nextUpdate = data.last_update || '';
                 if (nextUpdate && nextUpdate !== lastChatUpdate) {
                     await loadChatHistory();
@@ -445,7 +453,7 @@
                     throw new Error(errorText);
                 }
 
-                chatStatusHint.textContent = '输入中...';
+                setChatStatusHint('');
                 await refreshChatStatus();
             } catch (err) {
                 const assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };

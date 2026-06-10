@@ -16,14 +16,12 @@ from packages.agents.system_service_functions.ai_analyse.history._append_notice_
 )
 
 
-DEFAULT_NOTICE = "系统功能性更新\n有部分现有功能变动或开放新功能"
-
-
 def main() -> int:
     accounts_dir = Path("/storage/accounts")
-    content = DEFAULT_NOTICE
-    if len(sys.argv) > 1:
-        content = " ".join(sys.argv[1:]).strip() or DEFAULT_NOTICE
+    content = " ".join(sys.argv[1:]).strip()
+    if not content:
+        print("usage: broadcast_system_update_notice.py <notice content>", file=sys.stderr)
+        return 2
 
     result = broadcast_notice_to_all_chats(accounts_dir, content)
     print(

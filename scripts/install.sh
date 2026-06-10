@@ -92,7 +92,7 @@ EOF
     systemctl restart "$APP_NAME"
 
     echo "==> 5. 正在广播系统功能更新通知..."
-    if ! python3 "$APP_DIR/scripts/broadcast_system_update_notice.py"; then
+    if ! python3 "$APP_DIR/scripts/broadcast_system_update_notice.py" "系统功能性更新"$'\n'"有部分现有功能变动或开放新功能"; then
         echo "⚠️ 系统通知广播失败，但部署已完成。"
     fi
 

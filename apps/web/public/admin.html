@@ -47,6 +47,20 @@
                 <input type="password" id="adminToken" placeholder="请输入管理员令牌">
             </div>
 
+            <div style="margin: 1.5rem 0; padding-top: 1.25rem; border-top: 1px solid var(--border);">
+                <h3 style="margin-bottom: 0.8rem;">Chatbot 系统通知广播</h3>
+                <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
+                    会把同一条 notice 追加到所有账户的 `chatbot/chat.jsonl` 末尾；如果最后一条就是同样的 notice，会先删掉旧的再写新的，只更新时间戳。
+                </p>
+                <div class="form-group">
+                    <label>通知内容</label>
+                    <textarea id="noticeContent" rows="3" placeholder="输入要广播给所有聊天会话的系统通知内容"></textarea>
+                </div>
+                <div class="modal-actions" style="margin-top: 0.75rem;">
+                    <button class="btn" id="broadcastNoticeBtn"><i class="fas fa-bullhorn"></i> 广播通知</button>
+                </div>
+            </div>
+
             <h3 style="margin-bottom: 0.8rem;">LLM 预设管理</h3>
             <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
                 配置 low / medium / high 三档的 baseUrl、apiKey、model、reasoning_effort，并可在同页修改 ChatBot 的独立连接参数。
@@ -64,14 +78,21 @@
         const presetContainer = document.getElementById('presetContainer');
         const saveBtn = document.getElementById('saveBtn');
         const adminTokenInput = document.getElementById('adminToken');
+        const noticeContentInput = document.getElementById('noticeContent');
+        const broadcastNoticeBtn = document.getElementById('broadcastNoticeBtn');
         let currentPresets = {};
         adminTokenInput.value = localStorage.getItem('adminToken') || '';
+        noticeContentInput.value = localStorage.getItem('adminNoticeDraft') || '';
 
         function adminHeaders() {
             const token = adminTokenInput.value.trim();
             if (token) localStorage.setItem('adminToken', token);
             return token ? { 'X-Admin-Token': token } : {};
         }
+
+        noticeContentInput.addEventListener('input', () => {
+            localStorage.setItem('adminNoticeDraft', noticeContentInput.value);
+        });
 
         function renderPresets() {
             presetContainer.innerHTML = EFFORTS.map(effort => {
@@ -215,6 +236,27 @@
             } catch (e) {
                 console.error(e);
                 alert('保存失败');
+            }
+        };
+
+        broadcastNoticeBtn.onclick = async () => {
+            const content = noticeContentInput.value.trim();
+            if (!content) {
+                alert('请输入通知内容');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/admin/chatbot/notice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                    body: JSON.stringify({ content })
+                });
+                if (!resp.ok) throw new Error(`广播失败(${resp.status})`);
+                const data = await resp.json();
+                alert(`广播成功，更新 ${data.updated || 0} 个账号`);
+            } catch (e) {
+                console.error(e);
+                alert('广播失败');
             }
         };
 

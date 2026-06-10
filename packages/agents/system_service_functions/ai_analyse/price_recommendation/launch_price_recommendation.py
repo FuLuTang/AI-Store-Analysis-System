@@ -1,5 +1,5 @@
 """
-商品价格推荐功能 (ai_analyse/price_recommendation/launch_price_recommendation)
+商品价格推荐
 
 功能描述：
 针对特定的商品，分析其门店销售历史数据及竞品/市场价格，进行 AI 价格定位分析与销量拟合，产出价格调整建议。

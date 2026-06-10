@@ -1077,6 +1077,30 @@ async def upload_admin_service_doc_file(
     }
 
 
+@app.post("/api/admin/service-docs/folder")
+async def create_admin_service_doc_folder(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="缺少 path")
+
+    rel = _service_docs_rel_path(path)
+    if not rel:
+        raise HTTPException(status_code=400, detail="文件夹路径不能为空")
+
+    target = _service_docs_abs_path(path)
+    if target.exists() and target.is_file():
+        raise HTTPException(status_code=400, detail="目标路径已存在且是文件")
+    target.mkdir(parents=True, exist_ok=True)
+    return {
+        "status": "ok",
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()) + "/",
+    }
+
+
 @app.delete("/api/admin/service-docs/file")
 def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
     require_admin_authorization(x_admin_token)

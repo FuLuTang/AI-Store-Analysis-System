@@ -9,6 +9,348 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .service-docs-launch-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            margin: 1.25rem 0 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .service-docs-launch-note {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .service-docs-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 1200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            background: rgba(15, 23, 42, 0.54);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .service-docs-modal.open {
+            display: flex;
+        }
+
+        .service-docs-shell {
+            width: min(1240px, 100%);
+            height: min(86vh, 920px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border-radius: 24px;
+            border: 1px solid var(--border);
+            background: var(--card-bg);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .service-docs-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 1rem 1.15rem 0.9rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .service-docs-header h3 {
+            margin: 0;
+            font-size: 1.05rem;
+            color: var(--text);
+        }
+
+        .service-docs-breadcrumb {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-top: 0.35rem;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+
+        .service-docs-breadcrumb button {
+            border: 0;
+            background: transparent;
+            padding: 0;
+            color: inherit;
+            cursor: pointer;
+            font: inherit;
+        }
+
+        .service-docs-close {
+            width: 34px;
+            height: 34px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--input-bg);
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .service-docs-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.55rem;
+            padding: 0.9rem 1.15rem;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .service-docs-toolbar .btn,
+        .service-docs-toolbar .btn-secondary {
+            min-height: 34px;
+            padding: 0.45rem 0.8rem;
+            font-size: 0.82rem;
+        }
+
+        .service-docs-body {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(280px, 1.05fr) minmax(340px, 0.95fr);
+        }
+
+        .service-docs-pane {
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .service-docs-list-pane {
+            border-right: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .service-docs-list-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.9rem 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .service-docs-status {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .service-docs-list {
+            flex: 1;
+            overflow: auto;
+            padding: 0.7rem 0.8rem 0.85rem;
+        }
+
+        .service-docs-empty {
+            padding: 1rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .service-docs-item {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            width: 100%;
+            padding: 0.7rem 0.75rem;
+            border: 1px solid transparent;
+            border-radius: 14px;
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            text-align: left;
+            transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+        }
+
+        .service-docs-item:hover {
+            background: rgba(99, 102, 241, 0.08);
+            border-color: rgba(99, 102, 241, 0.12);
+        }
+
+        .service-docs-item.selected {
+            background: rgba(99, 102, 241, 0.14);
+            border-color: rgba(99, 102, 241, 0.26);
+        }
+
+        .service-docs-item + .service-docs-item {
+            margin-top: 0.35rem;
+        }
+
+        .service-docs-item-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            background: var(--primary-glow);
+            color: var(--primary);
+        }
+
+        .service-docs-item.folder .service-docs-item-icon {
+            background: rgba(245, 158, 11, 0.12);
+            color: #d97706;
+        }
+
+        .service-docs-item-main {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .service-docs-item-name {
+            font-size: 0.9rem;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .service-docs-item-meta {
+            margin-top: 0.12rem;
+            color: var(--text-muted);
+            font-size: 0.73rem;
+        }
+
+        .service-docs-item-children {
+            margin-left: 1rem;
+            padding-left: 0.75rem;
+            border-left: 1px dashed var(--border);
+        }
+
+        .service-docs-detail {
+            padding: 1rem 1.05rem 1.05rem;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: auto;
+        }
+
+        .service-docs-detail-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.9rem;
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 1rem;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .service-docs-detail-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .service-docs-detail-title {
+            margin: 0;
+            font-size: 1rem;
+            color: var(--text);
+            word-break: break-all;
+        }
+
+        .service-docs-detail-meta {
+            margin-top: 0.25rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        .service-docs-detail-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .service-docs-preview {
+            min-height: 220px;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            overflow: hidden;
+            background: var(--input-bg);
+        }
+
+        .service-docs-preview textarea {
+            width: 100%;
+            min-height: 320px;
+            resize: vertical;
+            border: 0;
+            padding: 0.9rem 1rem;
+            background: transparent;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            line-height: 1.6;
+            outline: none;
+        }
+
+        .service-docs-preview-empty {
+            padding: 1rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        .service-docs-detail-kv {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.65rem;
+        }
+
+        .service-docs-detail-kv > div {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.7rem 0.8rem;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .service-docs-detail-kv span {
+            display: block;
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            margin-bottom: 0.2rem;
+        }
+
+        .service-docs-detail-kv strong {
+            color: var(--text);
+            font-size: 0.88rem;
+            word-break: break-all;
+        }
+
+        @media (max-width: 900px) {
+            .service-docs-shell {
+                width: 100%;
+                height: 100%;
+                border-radius: 18px;
+            }
+
+            .service-docs-body {
+                grid-template-columns: 1fr;
+            }
+
+            .service-docs-list-pane {
+                border-right: 0;
+                border-bottom: 1px solid var(--border);
+                min-height: 230px;
+            }
+
+            .service-docs-detail-kv {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
     <script>
         (function initTheme() {
             const theme = localStorage.getItem('theme') || 'light';
@@ -47,6 +389,15 @@
                 <input type="password" id="adminToken" placeholder="请输入管理员令牌">
             </div>
 
+            <div class="service-docs-launch-row">
+                <div class="service-docs-launch-note">
+                    公共文档区 `service_docs/` 的文件浏览、上传、下载、新建文件夹和删除都在这里管理
+                </div>
+                <button class="btn-secondary" id="openServiceDocsBtn">
+                    <i class="fas fa-folder-open"></i> 打开文件管理
+                </button>
+            </div>
+
             <div style="margin: 1.5rem 0; padding-top: 1.25rem; border-top: 1px solid var(--border);">
                 <h3 style="margin-bottom: 0.8rem;">Chatbot 系统通知广播</h3>
                 <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
@@ -73,6 +424,41 @@
         </div>
     </div>
 
+    <div id="serviceDocsModal" class="service-docs-modal" aria-hidden="true">
+        <div class="service-docs-shell" role="dialog" aria-modal="true" aria-labelledby="serviceDocsTitle">
+            <div class="service-docs-header">
+                <div>
+                    <h3 id="serviceDocsTitle"><i class="fas fa-folder-tree"></i> 文件管理浏览</h3>
+                    <div class="service-docs-breadcrumb" id="serviceDocsBreadcrumb"></div>
+                </div>
+                <button class="service-docs-close" id="closeServiceDocsBtn" type="button" aria-label="关闭文件管理">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="service-docs-toolbar">
+                <button class="btn-secondary" id="serviceDocsUpBtn" type="button"><i class="fas fa-arrow-up"></i> 返回上级</button>
+                <button class="btn-secondary" id="serviceDocsRefreshBtn" type="button"><i class="fas fa-rotate"></i> 刷新</button>
+                <button class="btn-secondary" id="serviceDocsUploadBtn" type="button"><i class="fas fa-upload"></i> 上传文件</button>
+                <button class="btn-secondary" id="serviceDocsNewFolderBtn" type="button"><i class="fas fa-folder-plus"></i> 新建文件夹</button>
+                <button class="btn-secondary" id="serviceDocsNewTextBtn" type="button"><i class="fas fa-file-pen"></i> 新建文本</button>
+                <input type="file" id="serviceDocsUploadInput" hidden multiple>
+            </div>
+            <div class="service-docs-body">
+                <aside class="service-docs-pane service-docs-list-pane">
+                    <div class="service-docs-list-head">
+                        <div class="service-docs-status" id="serviceDocsStatus">未加载</div>
+                        <div class="service-docs-status" id="serviceDocsCount"></div>
+                    </div>
+                    <div id="serviceDocsList" class="service-docs-list"></div>
+                </aside>
+                <section class="service-docs-pane service-docs-detail">
+                    <div id="serviceDocsDetailEmpty" class="service-docs-empty">请选择一个文件或文件夹</div>
+                    <div id="serviceDocsDetail" style="display:none;"></div>
+                </section>
+            </div>
+        </div>
+    </div>
+
     <script>
         const EFFORTS = ['low', 'medium', 'high'];
         const presetContainer = document.getElementById('presetContainer');
@@ -80,7 +466,28 @@
         const adminTokenInput = document.getElementById('adminToken');
         const noticeContentInput = document.getElementById('noticeContent');
         const broadcastNoticeBtn = document.getElementById('broadcastNoticeBtn');
+        const openServiceDocsBtn = document.getElementById('openServiceDocsBtn');
+        const serviceDocsModal = document.getElementById('serviceDocsModal');
+        const closeServiceDocsBtn = document.getElementById('closeServiceDocsBtn');
+        const serviceDocsUpBtn = document.getElementById('serviceDocsUpBtn');
+        const serviceDocsRefreshBtn = document.getElementById('serviceDocsRefreshBtn');
+        const serviceDocsUploadBtn = document.getElementById('serviceDocsUploadBtn');
+        const serviceDocsUploadInput = document.getElementById('serviceDocsUploadInput');
+        const serviceDocsNewFolderBtn = document.getElementById('serviceDocsNewFolderBtn');
+        const serviceDocsNewTextBtn = document.getElementById('serviceDocsNewTextBtn');
+        const serviceDocsBreadcrumb = document.getElementById('serviceDocsBreadcrumb');
+        const serviceDocsStatus = document.getElementById('serviceDocsStatus');
+        const serviceDocsCount = document.getElementById('serviceDocsCount');
+        const serviceDocsList = document.getElementById('serviceDocsList');
+        const serviceDocsDetail = document.getElementById('serviceDocsDetail');
+        const serviceDocsDetailEmpty = document.getElementById('serviceDocsDetailEmpty');
         let currentPresets = {};
+        let serviceDocsCurrentPath = 'service_docs/';
+        let serviceDocsEntries = [];
+        let serviceDocsSelectedPath = '';
+        let serviceDocsSelectedEntry = null;
+        let serviceDocsSelectedText = '';
+        let serviceDocsLoading = false;
         adminTokenInput.value = localStorage.getItem('adminToken') || '';
         noticeContentInput.value = localStorage.getItem('adminNoticeDraft') || '';
 
@@ -93,6 +500,432 @@
         noticeContentInput.addEventListener('input', () => {
             localStorage.setItem('adminNoticeDraft', noticeContentInput.value);
         });
+
+        function normalizeServiceDocsFolderPath(path) {
+            const value = String(path || 'service_docs/').replace(/\\/g, '/').replace(/^\/+/, '');
+            if (!value || value === 'service_docs') return 'service_docs/';
+            return value.endsWith('/') ? value : `${value}/`;
+        }
+
+        function normalizeServiceDocsPath(path) {
+            return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+        }
+
+        function serviceDocsParentPath(path) {
+            const normalized = normalizeServiceDocsPath(path);
+            if (!normalized || normalized === 'service_docs' || normalized === 'service_docs/') return null;
+            const folder = normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+            const idx = folder.lastIndexOf('/');
+            if (idx <= 0) return 'service_docs/';
+            return `${folder.slice(0, idx + 1)}`;
+        }
+
+        function serviceDocsDisplayPath(path) {
+            const normalized = normalizeServiceDocsPath(path);
+            if (!normalized || normalized === 'service_docs' || normalized === 'service_docs/') return 'service_docs/';
+            return normalized;
+        }
+
+        function serviceDocsJoinPath(base, name, isDir = false) {
+            const cleanBase = normalizeServiceDocsFolderPath(base);
+            const cleanName = String(name || '').trim().replace(/^\/+|\/+$/g, '');
+            if (!cleanName) return cleanBase;
+            const joined = `${cleanBase}${cleanName}`;
+            return isDir ? normalizeServiceDocsFolderPath(joined) : joined;
+        }
+
+        function isServiceDocsTextLike(entry) {
+            if (!entry || entry.isDir) return false;
+            const kind = String(entry.kind || '').toLowerCase();
+            const ext = String(entry.ext || '').toLowerCase();
+            return ['markdown', 'text', 'json', 'csv'].includes(kind) || ['.md', '.txt', '.log', '.json', '.csv', '.yaml', '.yml', '.ini', '.py', '.js', '.ts', '.html', '.css'].includes(ext);
+        }
+
+        function serviceDocsIcon(entry) {
+            if (entry && entry.isDir) return 'fa-folder';
+            const kind = String(entry && entry.kind || '').toLowerCase();
+            if (kind === 'markdown') return 'fa-file-lines';
+            if (kind === 'json') return 'fa-brackets-curly';
+            if (kind === 'csv') return 'fa-table';
+            if (kind === 'excel') return 'fa-file-excel';
+            if (kind === 'pdf') return 'fa-file-pdf';
+            if (kind === 'word') return 'fa-file-word';
+            return 'fa-file';
+        }
+
+        function setServiceDocsModalOpen(open) {
+            serviceDocsModal.classList.toggle('open', open);
+            serviceDocsModal.setAttribute('aria-hidden', open ? 'false' : 'true');
+            document.body.style.overflow = open ? 'hidden' : '';
+            if (open) {
+                loadServiceDocs(serviceDocsCurrentPath).catch(err => {
+                    serviceDocsStatus.textContent = `加载失败：${err.message}`;
+                });
+            }
+        }
+
+        function renderServiceDocsBreadcrumb() {
+            const path = normalizeServiceDocsFolderPath(serviceDocsCurrentPath);
+            const parts = path.replace(/\/$/, '').split('/');
+            const crumbs = [];
+            let cursor = '';
+            parts.forEach((part, idx) => {
+                cursor = idx === 0 ? `${part}/` : `${cursor}${part}/`;
+                crumbs.push(`<button type="button" data-service-docs-breadcrumb="${escapeHtml(cursor)}">${escapeHtml(part)}</button>`);
+            });
+            serviceDocsBreadcrumb.innerHTML = crumbs.join('<span>/</span>');
+            serviceDocsBreadcrumb.querySelectorAll('[data-service-docs-breadcrumb]').forEach(btn => {
+                btn.onclick = () => {
+                    serviceDocsCurrentPath = normalizeServiceDocsFolderPath(btn.getAttribute('data-service-docs-breadcrumb') || 'service_docs/');
+                    loadServiceDocs(serviceDocsCurrentPath);
+                };
+            });
+        }
+
+        function buildServiceDocsChildren(entries, basePath) {
+            const base = normalizeServiceDocsFolderPath(basePath);
+            const folders = new Map();
+            const files = new Map();
+
+            (entries || []).forEach(entry => {
+                if (!entry || typeof entry !== 'object' || !entry.path) return;
+                const rawPath = normalizeServiceDocsPath(entry.path);
+                const normalizedPath = entry.isDir ? normalizeServiceDocsFolderPath(rawPath) : rawPath;
+                if (!normalizedPath.startsWith(base)) return;
+                const rel = normalizedPath.slice(base.length);
+                if (!rel) return;
+                const parts = rel.split('/').filter(Boolean);
+                if (parts.length === 0) return;
+                const first = parts[0];
+                if (parts.length === 1) {
+                    if (entry.isDir) {
+                        folders.set(first, {
+                            ...entry,
+                            path: normalizeServiceDocsFolderPath(base + first),
+                            name: first,
+                            isDir: true
+                        });
+                    } else {
+                        files.set(first, {
+                            ...entry,
+                            path: `${base}${first}`,
+                            name: first,
+                            isDir: false
+                        });
+                    }
+                    return;
+                }
+                if (!folders.has(first)) {
+                    folders.set(first, {
+                        path: normalizeServiceDocsFolderPath(base + first),
+                        name: first,
+                        isDir: true,
+                        kind: 'directory',
+                        size: 0,
+                        sizeHuman: '0B'
+                    });
+                }
+            });
+
+            const sortByName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
+            return [...folders.values()].sort(sortByName).concat([...files.values()].sort(sortByName));
+        }
+
+        function renderServiceDocsList() {
+            const children = buildServiceDocsChildren(serviceDocsEntries, serviceDocsCurrentPath);
+            serviceDocsCount.textContent = `${children.length} 项`;
+            if (children.length === 0) {
+                serviceDocsList.innerHTML = `<div class="service-docs-empty">当前目录没有内容</div>`;
+                return;
+            }
+            const selected = normalizeServiceDocsPath(serviceDocsSelectedPath);
+            serviceDocsList.innerHTML = children.map(entry => {
+                const isSelected = selected && normalizeServiceDocsPath(entry.path) === selected;
+                const typeText = entry.isDir ? '文件夹' : (entry.kind || '文件');
+                return `
+                    <button type="button" class="service-docs-item ${entry.isDir ? 'folder' : 'file'} ${isSelected ? 'selected' : ''}" data-service-docs-path="${escapeHtml(entry.path)}">
+                        <span class="service-docs-item-icon"><i class="fas ${serviceDocsIcon(entry)}"></i></span>
+                        <span class="service-docs-item-main">
+                            <span class="service-docs-item-name">${escapeHtml(entry.name || '未命名')}</span>
+                            <span class="service-docs-item-meta">${escapeHtml(typeText)} · ${escapeHtml(entry.sizeHuman || '0B')}</span>
+                        </span>
+                        <span class="service-docs-item-meta">${entry.isDir ? '<i class="fas fa-chevron-right"></i>' : ''}</span>
+                    </button>
+                `;
+            }).join('');
+
+            serviceDocsList.querySelectorAll('[data-service-docs-path]').forEach(btn => {
+                btn.onclick = () => selectServiceDocsEntry(btn.getAttribute('data-service-docs-path') || '');
+            });
+        }
+
+        function renderServiceDocsDetail() {
+            if (!serviceDocsSelectedEntry) {
+                serviceDocsDetail.style.display = 'none';
+                serviceDocsDetailEmpty.style.display = 'block';
+                return;
+            }
+
+            const entry = serviceDocsSelectedEntry;
+            const path = normalizeServiceDocsPath(entry.path);
+            const isDir = !!entry.isDir;
+            const canEdit = isServiceDocsTextLike(entry);
+            const detailTitle = isDir ? (entry.name || '文件夹') : (entry.name || '文件');
+            const detailType = isDir ? '文件夹' : (entry.kind || '文件');
+            const previewHtml = isDir ? `
+                <div class="service-docs-preview-empty">
+                    这是一个文件夹。你可以在这里进入、上传文件或新建子文件夹。
+                </div>
+            ` : canEdit ? `
+                <textarea id="serviceDocsEditor">${escapeHtml(serviceDocsSelectedText || '')}</textarea>
+            ` : `
+                <div class="service-docs-preview-empty">
+                    该文件暂不支持在线编辑预览，但仍可下载、删除或在文本类文件中直接查看。
+                </div>
+            `;
+
+            serviceDocsDetailEmpty.style.display = 'none';
+            serviceDocsDetail.style.display = 'block';
+            serviceDocsDetail.innerHTML = `
+                <div class="service-docs-detail-card">
+                    <div class="service-docs-detail-top">
+                        <div>
+                            <h4 class="service-docs-detail-title"><i class="fas ${serviceDocsIcon(entry)}"></i> ${escapeHtml(detailTitle)}</h4>
+                            <div class="service-docs-detail-meta">
+                                ${escapeHtml(detailType)} · ${escapeHtml(path)}${isDir ? '/' : ''}<br>
+                                ${escapeHtml(entry.sizeHuman || '0B')}
+                            </div>
+                        </div>
+                        <div class="service-docs-detail-actions">
+                            ${!isDir ? '<button class="btn-secondary" type="button" id="serviceDocsDownloadSelectedBtn"><i class="fas fa-download"></i> 下载</button>' : ''}
+                            <button class="btn-secondary" type="button" id="serviceDocsDeleteSelectedBtn"><i class="fas fa-trash"></i> 删除</button>
+                        </div>
+                    </div>
+                    ${canEdit ? `
+                        <div class="service-docs-detail-actions">
+                            <button class="btn" type="button" id="serviceDocsSaveSelectedBtn"><i class="fas fa-save"></i> 保存内容</button>
+                        </div>
+                    ` : ''}
+                    <div class="service-docs-preview">${previewHtml}</div>
+                </div>
+            `;
+
+            const downloadBtn = document.getElementById('serviceDocsDownloadSelectedBtn');
+            if (downloadBtn) {
+                downloadBtn.onclick = () => downloadServiceDocsFile(entry);
+            }
+            const deleteBtn = document.getElementById('serviceDocsDeleteSelectedBtn');
+            if (deleteBtn) {
+                deleteBtn.onclick = () => deleteServiceDocsEntry(entry);
+            }
+            const saveBtn = document.getElementById('serviceDocsSaveSelectedBtn');
+            const editor = document.getElementById('serviceDocsEditor');
+            if (saveBtn && editor) {
+                saveBtn.onclick = () => saveServiceDocsTextFile(entry, editor.value);
+            }
+        }
+
+        async function loadServiceDocs(path) {
+            const nextPath = normalizeServiceDocsFolderPath(path || serviceDocsCurrentPath);
+            serviceDocsCurrentPath = nextPath;
+            serviceDocsLoading = true;
+            serviceDocsStatus.textContent = '加载中...';
+            renderServiceDocsBreadcrumb();
+            serviceDocsList.innerHTML = `<div class="service-docs-empty">正在加载目录...</div>`;
+            try {
+                const resp = await fetch(`/api/admin/service-docs?path=${encodeURIComponent(nextPath)}`, {
+                    headers: adminHeaders()
+                });
+                if (!resp.ok) {
+                    throw new Error(await resp.text() || `加载失败(${resp.status})`);
+                }
+                const data = await resp.json();
+                serviceDocsEntries = Array.isArray(data.entries) ? data.entries : [];
+                serviceDocsStatus.textContent = serviceDocsCurrentPath;
+                if (serviceDocsSelectedPath && !serviceDocsEntries.some(item => normalizeServiceDocsPath(item.path) === normalizeServiceDocsPath(serviceDocsSelectedPath))) {
+                    serviceDocsSelectedPath = '';
+                    serviceDocsSelectedEntry = null;
+                    serviceDocsSelectedText = '';
+                }
+                renderServiceDocsList();
+                renderServiceDocsDetail();
+            } finally {
+                serviceDocsLoading = false;
+            }
+        }
+
+        async function selectServiceDocsEntry(path) {
+            const normalized = normalizeServiceDocsPath(path);
+            const match = serviceDocsEntries.find(item => normalizeServiceDocsPath(item.path) === normalized);
+            if (!match) return;
+            serviceDocsSelectedPath = normalized;
+            serviceDocsSelectedEntry = match;
+            serviceDocsSelectedText = '';
+            renderServiceDocsList();
+            if (match.isDir) {
+                renderServiceDocsDetail();
+                return;
+            }
+            renderServiceDocsDetail();
+            if (!isServiceDocsTextLike(match)) return;
+            try {
+                const resp = await fetch(`/api/admin/service-docs/file?path=${encodeURIComponent(match.path)}`, {
+                    headers: adminHeaders()
+                });
+                if (!resp.ok) {
+                    throw new Error(await resp.text() || `读取失败(${resp.status})`);
+                }
+                const data = await resp.json();
+                serviceDocsSelectedText = data.content || '';
+                renderServiceDocsDetail();
+            } catch (err) {
+                serviceDocsSelectedText = `无法读取文件内容：${err.message}`;
+                renderServiceDocsDetail();
+            }
+        }
+
+        async function uploadServiceDocsFiles(files) {
+            const list = Array.from(files || []);
+            if (list.length === 0) return;
+            for (const file of list) {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('path', serviceDocsJoinPath(serviceDocsCurrentPath, file.name, false));
+                const resp = await fetch('/api/admin/service-docs/upload', {
+                    method: 'POST',
+                    headers: adminHeaders(),
+                    body: formData
+                });
+                if (!resp.ok) {
+                    throw new Error(await resp.text() || `上传失败(${resp.status})`);
+                }
+            }
+            await loadServiceDocs(serviceDocsCurrentPath);
+        }
+
+        async function createServiceDocsFolder() {
+            const name = window.prompt('请输入新文件夹名称', '');
+            if (!name) return;
+            const targetPath = serviceDocsJoinPath(serviceDocsCurrentPath, name, true);
+            const resp = await fetch('/api/admin/service-docs/folder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                body: JSON.stringify({ path: targetPath })
+            });
+            if (!resp.ok) {
+                throw new Error(await resp.text() || `新建文件夹失败(${resp.status})`);
+            }
+            await loadServiceDocs(serviceDocsCurrentPath);
+        }
+
+        async function createServiceDocsTextFile() {
+            const name = window.prompt('请输入新文本文件名', 'new-file.md');
+            if (!name) return;
+            const targetPath = serviceDocsJoinPath(serviceDocsCurrentPath, name, false);
+            const resp = await fetch('/api/admin/service-docs/file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                body: JSON.stringify({ path: targetPath, content: '' })
+            });
+            if (!resp.ok) {
+                throw new Error(await resp.text() || `新建文件失败(${resp.status})`);
+            }
+            await loadServiceDocs(serviceDocsCurrentPath);
+            await selectServiceDocsEntry(targetPath);
+        }
+
+        async function saveServiceDocsTextFile(entry, content) {
+            const resp = await fetch('/api/admin/service-docs/file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                body: JSON.stringify({ path: entry.path, content })
+            });
+            if (!resp.ok) {
+                throw new Error(await resp.text() || `保存失败(${resp.status})`);
+            }
+            await loadServiceDocs(serviceDocsCurrentPath);
+            await selectServiceDocsEntry(entry.path);
+        }
+
+        async function downloadServiceDocsFile(entry) {
+            const resp = await fetch(`/api/admin/service-docs/download?path=${encodeURIComponent(entry.path)}`, {
+                headers: adminHeaders()
+            });
+            if (!resp.ok) {
+                throw new Error(await resp.text() || `下载失败(${resp.status})`);
+            }
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = entry.name || 'download';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        async function deleteServiceDocsEntry(entry) {
+            const label = entry.isDir ? '文件夹' : '文件';
+            if (!window.confirm(`确认删除这个${label}吗？`)) return;
+            const resp = await fetch(`/api/admin/service-docs/file?path=${encodeURIComponent(entry.path)}`, {
+                method: 'DELETE',
+                headers: adminHeaders()
+            });
+            if (!resp.ok) {
+                throw new Error(await resp.text() || `删除失败(${resp.status})`);
+            }
+            serviceDocsSelectedPath = '';
+            serviceDocsSelectedEntry = null;
+            serviceDocsSelectedText = '';
+            await loadServiceDocs(serviceDocsCurrentPath);
+            renderServiceDocsDetail();
+        }
+
+        openServiceDocsBtn.onclick = () => setServiceDocsModalOpen(true);
+        closeServiceDocsBtn.onclick = () => setServiceDocsModalOpen(false);
+        serviceDocsModal.addEventListener('click', (event) => {
+            if (event.target === serviceDocsModal) setServiceDocsModalOpen(false);
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && serviceDocsModal.classList.contains('open')) {
+                setServiceDocsModalOpen(false);
+            }
+        });
+        serviceDocsRefreshBtn.onclick = () => loadServiceDocs(serviceDocsCurrentPath);
+        serviceDocsUpBtn.onclick = () => {
+            const parent = serviceDocsParentPath(serviceDocsCurrentPath);
+            if (parent) {
+                serviceDocsCurrentPath = normalizeServiceDocsFolderPath(parent);
+                loadServiceDocs(serviceDocsCurrentPath);
+            }
+        };
+        serviceDocsUploadBtn.onclick = () => serviceDocsUploadInput.click();
+        serviceDocsUploadInput.addEventListener('change', async () => {
+            try {
+                await uploadServiceDocsFiles(serviceDocsUploadInput.files || []);
+                serviceDocsUploadInput.value = '';
+            } catch (err) {
+                console.error(err);
+                alert(err.message || '上传失败');
+            }
+        });
+        serviceDocsNewFolderBtn.onclick = async () => {
+            try {
+                await createServiceDocsFolder();
+            } catch (err) {
+                console.error(err);
+                alert(err.message || '新建文件夹失败');
+            }
+        };
+        serviceDocsNewTextBtn.onclick = async () => {
+            try {
+                await createServiceDocsTextFile();
+            } catch (err) {
+                console.error(err);
+                alert(err.message || '新建文件失败');
+            }
+        };
 
         function renderPresets() {
             presetContainer.innerHTML = EFFORTS.map(effort => {

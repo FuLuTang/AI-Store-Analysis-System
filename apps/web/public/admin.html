@@ -655,7 +655,19 @@
             }).join('');
 
             serviceDocsList.querySelectorAll('[data-service-docs-path]').forEach(btn => {
-                btn.onclick = () => selectServiceDocsEntry(btn.getAttribute('data-service-docs-path') || '');
+                btn.onclick = async () => {
+                    const path = btn.getAttribute('data-service-docs-path') || '';
+                    const entry = serviceDocsEntries.find(item => normalizeServiceDocsPath(item.path) === normalizeServiceDocsPath(path));
+                    if (!entry) return;
+                    if (entry.isDir) {
+                        serviceDocsSelectedPath = '';
+                        serviceDocsSelectedEntry = null;
+                        serviceDocsSelectedText = '';
+                        await loadServiceDocs(entry.path);
+                        return;
+                    }
+                    await selectServiceDocsEntry(path);
+                };
             });
         }
 

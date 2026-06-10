@@ -39,7 +39,7 @@
             <section id="chatPanel" class="chat-panel" aria-hidden="true">
                 <div class="chat-panel-header">
                     <div>
-                        <h3><i class="fas fa-comments"></i> 对话助手 <span class="chat-status-dot" title="在线"></span></h3>
+                        <h3><i class="fas fa-comments"></i> 对话助手 <span id="chatStatusDot" class="chat-status-dot" title="在线"></span><span id="chatStatusText" class="chat-status-text">在线</span></h3>
                         <div class="chat-run-badge">账号级聊天记录</div>
                     </div>
                     <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
@@ -54,7 +54,6 @@
                     <input type="file" id="chatAttachmentInput" hidden multiple>
                     <div id="chatAttachmentDrafts" class="chat-attachment-drafts"></div>
                     <div class="chat-composer-actions">
-                        <span id="chatStatusHint" class="chat-status-hint">账号级多轮对话</span>
                         <div class="chat-action-buttons">
                             <button id="chatAttachBtn" class="chat-icon-btn" type="button" title="添加附件" aria-label="添加附件">
                                 <i class="fas fa-paperclip"></i>
@@ -79,7 +78,8 @@
         const chatAttachmentDrafts = document.getElementById('chatAttachmentDrafts');
         const chatAttachBtn = document.getElementById('chatAttachBtn');
         const chatSendBtn = document.getElementById('chatSendBtn');
-        const chatStatusHint = document.getElementById('chatStatusHint');
+        const chatStatusDot = document.getElementById('chatStatusDot');
+        const chatStatusText = document.getElementById('chatStatusText');
 
         // Chatbot state
         let chatMessagesCache = [];
@@ -97,13 +97,15 @@
 
         // Auth helper
         function authHeaders() {
-            const key = sessionStorage.getItem('authToken') || '';
+            const key = (typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '')) || '';
             return { 'X-Auth-Token': key };
         }
 
         function clearAuthAndReturn() {
-            sessionStorage.removeItem('authToken');
             sessionStorage.removeItem('accountName');
+            if (typeof window.clearAuthToken === 'function') window.clearAuthToken();
             window.location.href = '/login.html';
         }
 
@@ -140,6 +142,73 @@
                     ${item.size !== undefined ? `<small>${formatFileSize(item.size)}</small>` : ''}
                 </div>
             `).join('')}</div>`;
+        }
+
+        function getChatCopyText(msg) {
+            const parts = [];
+            const content = String(msg && msg.content ? msg.content : '').trim();
+            if (content) parts.push(content);
+            if (Array.isArray(msg && msg.attachments) && msg.attachments.length > 0) {
+                const names = msg.attachments
+                    .map(item => String(item && item.originalName ? item.originalName : '').trim())
+                    .filter(Boolean);
+                if (names.length > 0) {
+                    parts.push(`附件：${names.join('、')}`);
+                }
+            }
+            return parts.join('\n');
+        }
+
+        async function copyChatText(text) {
+            const value = String(text || '');
+            if (!value.trim()) return false;
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(value);
+                return true;
+            }
+
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            textarea.style.pointerEvents = 'none';
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            textarea.setSelectionRange(0, textarea.value.length);
+            const copied = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return copied;
+        }
+
+        function flashCopyButton(btn, copied) {
+            if (!btn) return;
+            const icon = btn.querySelector('i');
+            if (copied) {
+                btn.classList.add('is-copied');
+                btn.setAttribute('aria-label', '已复制');
+                btn.title = '已复制';
+                if (icon) icon.className = 'fas fa-check';
+                window.clearTimeout(btn._chatCopyTimer);
+                btn._chatCopyTimer = window.setTimeout(() => {
+                    btn.classList.remove('is-copied');
+                    btn.setAttribute('aria-label', '复制消息');
+                    btn.title = '复制消息';
+                    if (icon) icon.className = 'fas fa-copy';
+                }, 1200);
+            } else {
+                btn.classList.add('copy-failed');
+                btn.setAttribute('aria-label', '复制失败');
+                btn.title = '复制失败';
+                window.clearTimeout(btn._chatCopyTimer);
+                btn._chatCopyTimer = window.setTimeout(() => {
+                    btn.classList.remove('copy-failed');
+                    btn.setAttribute('aria-label', '复制消息');
+                    btn.title = '复制消息';
+                    if (icon) icon.className = 'fas fa-copy';
+                }, 1200);
+            }
         }
 
         function normalizeChatRecord(record) {
@@ -215,14 +284,27 @@
                         ${msg.role === 'user' ? '你' : 'AI'}
                         ${formatChatTimestamp(msg) ? ` · ${formatChatTimestamp(msg)}` : ''}
                     </div>
-                    <div class="chat-message-bubble">
-                        <div class="markdown-body chat-markdown">${formatChatContent(msg.content)}</div>
-                        ${renderChatAttachments(msg.attachments)}
+                    <div class="chat-message-row ${msg.role === 'user' ? 'chat-message-row-user' : 'chat-message-row-assistant'}">
+                        ${msg.role === 'user' ? `
+                            <button type="button" class="chat-message-copy-btn" title="复制消息" aria-label="复制消息" data-chat-copy-text="${escapeChatHtml(getChatCopyText(msg))}">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        ` : ''}
+                        <div class="chat-message-bubble">
+                            <div class="markdown-body chat-markdown">${formatChatContent(msg.content)}</div>
+                            ${renderChatAttachments(msg.attachments)}
+                        </div>
+                        ${msg.role === 'assistant' ? `
+                            <button type="button" class="chat-message-copy-btn" title="复制消息" aria-label="复制消息" data-chat-copy-text="${escapeChatHtml(getChatCopyText(msg))}">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
                 `}
             `).join('');
             bindChatCardActions();
+            bindChatMessageActions();
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
@@ -257,19 +339,34 @@
             });
         }
 
+        function bindChatMessageActions() {
+            chatMessages.querySelectorAll('.chat-message-copy-btn').forEach(btn => {
+                btn.onclick = async () => {
+                    const text = btn.getAttribute('data-chat-copy-text') || '';
+                    try {
+                        const copied = await copyChatText(text);
+                        flashCopyButton(btn, copied);
+                    } catch (err) {
+                        flashCopyButton(btn, false);
+                    }
+                };
+            });
+        }
+
         function updateChatComposerState() {
             chatSendBtn.disabled = false;
             chatInput.disabled = false;
             chatAttachBtn.disabled = false;
             chatAttachmentInput.disabled = false;
-            chatStatusHint.textContent = '';
-            chatStatusHint.hidden = true;
         }
 
-        function setChatStatusHint(text) {
-            const value = String(text || '').trim();
-            chatStatusHint.textContent = value;
-            chatStatusHint.hidden = !value;
+        function setChatStatusDot(state) {
+            const hasState = String(state || '').trim().length > 0;
+            chatStatusDot.classList.toggle('chat-status-dot-waiting', hasState);
+            chatStatusDot.classList.toggle('chat-status-dot-online', !hasState);
+            chatStatusDot.title = hasState ? String(state).trim() : '在线';
+            chatStatusText.textContent = hasState ? String(state).trim() : '在线';
+            chatStatusText.classList.toggle('chat-status-text-waiting', hasState);
         }
 
         function renderChatAttachmentDrafts() {
@@ -363,7 +460,7 @@
                 if (response.status === 429) return;
                 if (!response.ok) return;
                 const data = await response.json();
-                setChatStatusHint(data.state || '');
+                setChatStatusDot(data.state || '');
                 const nextUpdate = data.last_update || '';
                 if (nextUpdate && nextUpdate !== lastChatUpdate) {
                     await loadChatHistory();
@@ -378,9 +475,10 @@
 
         async function submitChatCardChoice(name, choice) {
             if (!name || !choice) return;
-            const token = sessionStorage.getItem('authToken') || '';
+            const token = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '');
             try {
-                chatStatusHint.textContent = '提交授权选择...';
                 const response = await fetch('/api/chatbot', {
                     method: 'POST',
                     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
@@ -401,7 +499,7 @@
                 await loadChatHistory();
                 await refreshChatStatus();
             } catch (err) {
-                chatStatusHint.textContent = `授权失败：${err.message}`;
+                setChatStatusDot('在线');
             }
         }
 
@@ -453,7 +551,6 @@
                     throw new Error(errorText);
                 }
 
-                setChatStatusHint('');
                 await refreshChatStatus();
             } catch (err) {
                 const assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };

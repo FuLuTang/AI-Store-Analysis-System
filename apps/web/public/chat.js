@@ -9,6 +9,8 @@
 
     let markedLoaded = typeof marked !== 'undefined';
     let onMarkedLoaded = null;
+    let mermaidLoaded = typeof mermaid !== 'undefined';
+    let onMermaidLoaded = null;
 
     // Dynamically load marked if not loaded by host page
     if (!markedLoaded) {
@@ -17,6 +19,26 @@
         script.onload = () => {
             markedLoaded = true;
             if (onMarkedLoaded) onMarkedLoaded();
+        };
+        document.head.appendChild(script);
+    }
+
+    // Dynamically load mermaid if not loaded by host page
+    if (!mermaidLoaded) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js';
+        script.onload = () => {
+            mermaidLoaded = true;
+            try {
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: (document.documentElement.classList.contains('dark-theme') || document.body.classList.contains('dark-theme')) ? 'dark' : 'default',
+                    securityLevel: 'loose'
+                });
+            } catch (e) {
+                console.error('Failed to initialize mermaid', e);
+            }
+            if (onMermaidLoaded) onMermaidLoaded();
         };
         document.head.appendChild(script);
     }
@@ -42,27 +64,28 @@
                         <h3><i class="fas fa-comments"></i> 对话助手 <span id="chatStatusDot" class="chat-status-dot" title="在线"></span><span id="chatStatusText" class="chat-status-text">在线</span></h3>
                         <div class="chat-run-badge">账号级聊天记录</div>
                     </div>
-                    <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
-                        <i class="fas fa-times"></i>
-                    </button>
+                    <div class="chat-header-actions">
+                        <button id="chatExportBtn" class="chat-export-btn" type="button" title="导出记录" aria-label="导出记录">
+                            <i class="fas fa-download"></i> <span>导出记录</span>
+                        </button>
+                        <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
                 </div>
                 <div id="chatMessages" class="chat-messages">
                     <div class="chat-empty-state">从这里直接开始聊天。</div>
                 </div>
                 <div class="chat-composer">
-                    <textarea id="chatInput" class="chat-input" placeholder="输入你想问的问题..." rows="3"></textarea>
+                    <button id="chatAttachBtn" class="chat-icon-btn chat-attach-btn" type="button" title="添加附件" aria-label="添加附件">
+                        <i class="fas fa-paperclip"></i>
+                    </button>
+                    <textarea id="chatInput" class="chat-input" placeholder="输入你想问的问题..." rows="1"></textarea>
+                    <button id="chatSendBtn" class="chat-icon-btn chat-send-btn" type="button" title="发送消息" aria-label="发送消息">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
                     <input type="file" id="chatAttachmentInput" hidden multiple>
                     <div id="chatAttachmentDrafts" class="chat-attachment-drafts"></div>
-                    <div class="chat-composer-actions">
-                        <div class="chat-action-buttons">
-                            <button id="chatAttachBtn" class="chat-icon-btn" type="button" title="添加附件" aria-label="添加附件">
-                                <i class="fas fa-paperclip"></i>
-                            </button>
-                            <button id="chatSendBtn" class="btn" type="button">
-                                <i class="fas fa-paper-plane"></i> 发送
-                            </button>
-                        </div>
-                    </div>
                 </div>
             </section>
         `;
@@ -72,6 +95,7 @@
         const chatFab = document.getElementById('chatFab');
         const chatPanel = document.getElementById('chatPanel');
         const chatCloseBtn = document.getElementById('chatCloseBtn');
+        const chatExportBtn = document.getElementById('chatExportBtn');
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const chatAttachmentInput = document.getElementById('chatAttachmentInput');
@@ -90,6 +114,12 @@
         let chatPollTimer = null;
 
         onMarkedLoaded = () => {
+            if (chatHistoryLoaded) {
+                renderChatMessages();
+            }
+        };
+
+        onMermaidLoaded = () => {
             if (chatHistoryLoaded) {
                 renderChatMessages();
             }
@@ -120,8 +150,32 @@
 
         function formatChatContent(text) {
             const safeText = escapeChatHtml(text);
+            const markdownText = safeText.replace(/&gt;/g, '>');
             if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
-                return marked.parse(safeText);
+                const renderer = new marked.Renderer();
+                const originalCode = renderer.code.bind(renderer);
+                renderer.code = (code, lang, escaped) => {
+                    let rawCode = code;
+                    let language = lang;
+                    if (typeof code === 'object' && code !== null) {
+                        rawCode = code.text;
+                        language = code.lang;
+                    }
+                    if (language === 'mermaid') {
+                        const unescapedCode = rawCode
+                            .replace(/&amp;/g, '&')
+                            .replace(/&lt;/g, '<')
+                            .replace(/&gt;/g, '>')
+                            .replace(/&quot;/g, '"')
+                            .replace(/&#39;/g, "'");
+                        return `<div class="mermaid">${unescapedCode}</div>`;
+                    }
+                    if (typeof code === 'object') {
+                        return originalCode(code);
+                    }
+                    return originalCode(code, lang, escaped);
+                };
+                return marked.parse(markdownText, { renderer });
             }
             return safeText.replace(/\n/g, '<br>');
         }
@@ -271,14 +325,20 @@
                 return;
             }
 
-            chatMessages.innerHTML = history.map(msg => `
-                ${msg.role === 'notice' ? `
-                    <div class="chat-notice">
-                        <span class="markdown-body chat-markdown">${formatChatContent(msg.content)}</span>
-                    </div>
-                ` : msg.role === 'card' ? `
-                    ${renderChatCard(msg)}
-                ` : `
+            chatMessages.innerHTML = history.map(msg => {
+                if (msg.role === 'notice') {
+                    return `
+                        <div class="chat-notice">
+                            <div class="chat-notice-text">${escapeChatHtml(String(msg.content || '')).replace(/\n/g, '<br>')}</div>
+                        </div>
+                    `;
+                }
+                if (msg.role === 'card') {
+                    return renderChatCard(msg);
+                }
+                const rendered = formatChatContent(msg.content);
+                const isWide = rendered.includes('<table') || rendered.includes('class="mermaid"') || String(msg.content || '').includes('```mermaid');
+                return `
                 <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
                     <div class="chat-message-role">
                         ${msg.role === 'user' ? '你' : 'AI'}
@@ -290,8 +350,8 @@
                                 <i class="fas fa-copy"></i>
                             </button>
                         ` : ''}
-                        <div class="chat-message-bubble">
-                            <div class="markdown-body chat-markdown">${formatChatContent(msg.content)}</div>
+                        <div class="chat-message-bubble ${isWide ? 'chat-message-bubble-wide' : ''}">
+                            <div class="markdown-body chat-markdown">${rendered}</div>
                             ${renderChatAttachments(msg.attachments)}
                         </div>
                         ${msg.role === 'assistant' ? `
@@ -301,10 +361,25 @@
                         ` : ''}
                     </div>
                 </div>
-                `}
-            `).join('');
+                `;
+            }).join('');
             bindChatCardActions();
             bindChatMessageActions();
+            if (typeof mermaid !== 'undefined' && mermaid && typeof mermaid.run === 'function') {
+                try {
+                    const isDark = document.documentElement.classList.contains('dark-theme') || document.body.classList.contains('dark-theme');
+                    mermaid.initialize({
+                        startOnLoad: false,
+                        theme: isDark ? 'dark' : 'default',
+                        securityLevel: 'loose'
+                    });
+                } catch (e) {
+                    console.error('Failed to re-initialize mermaid', e);
+                }
+                mermaid.run({
+                    querySelector: '#chatMessages .mermaid'
+                }).catch(err => console.error('Mermaid render error', err));
+            }
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
@@ -509,6 +584,7 @@
             if (!content && filesToUpload.length === 0) return;
 
             chatInput.value = '';
+            chatInput.style.height = '';
             await loadChatHistory().catch(() => {});
 
             let userMessage = null;
@@ -561,15 +637,106 @@
             }
         }
 
+        async function exportChatHistory() {
+            try {
+                const response = await fetch('/api/chatbot/history', { headers: authHeaders() });
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        clearAuthAndReturn();
+                        return;
+                    }
+                    throw new Error(await response.text() || '历史记录加载失败');
+                }
+                const data = await response.json();
+                const messages = Array.isArray(data.messages) ? data.messages : [];
+                
+                function formatTime(isoStr) {
+                    if (!isoStr) return '';
+                    const date = new Date(isoStr);
+                    if (isNaN(date.getTime())) return isoStr;
+                    return date.toLocaleString('zh-CN', { hour12: false });
+                }
+
+                let mdText = `# 客服会话记录\n\n`;
+                mdText += `* **导出时间**: ${formatTime(new Date().toISOString())}\n`;
+                if (data.last_update) {
+                    mdText += `* **最后更新**: ${formatTime(data.last_update)}\n`;
+                }
+                mdText += `\n---\n\n`;
+
+                messages.forEach(msg => {
+                    const role = msg.role;
+                    const content = msg.content || '';
+                    const timeStr = msg.datetime ? ` *(${formatTime(msg.datetime)})*` : '';
+
+                    if (role === 'user') {
+                        mdText += `### 👤 我${timeStr}\n\n> ${content.replace(/\n/g, '\n> ')}\n\n`;
+                        if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+                            mdText += `**附件列表**:\n`;
+                            msg.attachments.forEach(att => {
+                                mdText += `- 📎 [${att.originalName}](${att.relativePath || '#'}) (${(att.size / 1024).toFixed(1)} KB)\n`;
+                            });
+                            mdText += `\n`;
+                        }
+                    } else if (role === 'assistant') {
+                        if (!content.trim()) return;
+                        mdText += `### 🤖 AI 客服${timeStr}\n\n> ${content.replace(/\n/g, '\n> ')}\n\n`;
+                        if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+                            mdText += `**附件列表**:\n`;
+                            msg.attachments.forEach(att => {
+                                mdText += `- 📎 [${att.originalName}](${att.relativePath || '#'}) (${(att.size / 1024).toFixed(1)} KB)\n`;
+                            });
+                            mdText += `\n`;
+                        }
+                    } else if (role === 'notice') {
+                        mdText += `> 📢 **系统通知**${timeStr}\n> ${content.replace(/\n/g, '\n> ')}\n\n`;
+                    } else if (role === 'card') {
+                        mdText += `> 💳 **交互操作卡片: ${msg.title || '请求确认'}**${timeStr}\n`;
+                        mdText += `> - **操作名称**: ${msg.name || ''}\n`;
+                        if (msg.detail) {
+                            mdText += `> - **详情**: ${msg.detail}\n`;
+                        }
+                        if (Array.isArray(msg.options) && msg.options.length > 0) {
+                            mdText += `> - **可选项**: ${msg.options.join(' / ')}\n`;
+                        }
+                        if (msg.choice) {
+                            mdText += `> - **已选结果**: **${msg.choice}**\n`;
+                        }
+                        mdText += `\n`;
+                    }
+                    mdText += `\n---\n\n`;
+                });
+
+                const blob = new Blob([mdText], { type: 'text/markdown;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `chat_history_${new Date().toISOString().slice(0, 10)}.md`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                alert(`导出失败: ${err.message}`);
+            }
+        }
+
         // Binding Events
         chatFab.onclick = () => setChatOpen(!chatPanel.classList.contains('open'));
         chatCloseBtn.onclick = () => setChatOpen(false);
+        if (chatExportBtn) {
+            chatExportBtn.onclick = () => exportChatHistory();
+        }
         chatSendBtn.onclick = () => sendChatMessage();
         chatInput.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 sendChatMessage();
             }
+        });
+        chatInput.addEventListener('input', () => {
+            chatInput.style.height = 'auto';
+            chatInput.style.height = chatInput.scrollHeight + 'px';
         });
 
         chatAttachBtn.addEventListener('click', () => chatAttachmentInput.click());

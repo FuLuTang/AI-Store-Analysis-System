@@ -241,16 +241,26 @@ def _public_history_messages(messages: list[dict]) -> list[dict]:
                 card["datetime"] = card_time
             visible.append(card)
             continue
-        if role == "system":
+        if role in {"user", "assistant"}:
+            content_val = str(message.get("content") or "")
+            if role == "assistant" and not content_val.strip():
+                continue
+            public_msg = {
+                "role": role,
+                "content": content_val,
+            }
+            msg_time = _history_time(message)
+            if msg_time:
+                public_msg["datetime"] = msg_time
+            attachments = message.get("attachments")
+            if isinstance(attachments, list):
+                public_msg["attachments"] = [
+                    _public_attachment_record(item) if isinstance(item, dict) else item
+                    for item in attachments
+                ]
+            visible.append(public_msg)
             continue
-        public_message = dict(message)
-        attachments = public_message.get("attachments")
-        if isinstance(attachments, list):
-            public_message["attachments"] = [
-                _public_attachment_record(item) if isinstance(item, dict) else item
-                for item in attachments
-            ]
-        visible.append(public_message)
+        # Strictly ignore all other roles (system, tool, etc.) as per API docs
     return visible
 
 

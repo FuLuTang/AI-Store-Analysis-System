@@ -7,9 +7,9 @@ from ...workspace import Workspace
 from ...file_domains import join_domain_path, split_domain_path
 
 
-DEFAULT_READ_LINES = 2000
+DEFAULT_READ_LINES = 800
 MAX_READ_LINES = 2000
-MAX_READ_BYTES = 500 * 1024  # 500KB
+MAX_READ_BYTES = 64 * 1024  # 64KB
 FORBIDDEN_READ_BASENAMES = {"plan.json"}
 
 
@@ -367,6 +367,8 @@ def list_files_impl(
                         kind = "markdown"
                     elif ext == ".json":
                         kind = "json"
+                    elif ext == ".jsonl":
+                        kind = "jsonl"
                     elif ext in {".sqlite", ".db"}:
                         kind = "sqlite"
                     elif ext in {".zip", ".tar", ".gz", ".rar"}:
@@ -376,7 +378,7 @@ def list_files_impl(
                     else:
                         kind = "other"
 
-                    if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
+                    if kind in {"excel", "csv", "pdf", "word", "json", "jsonl", "markdown", "sqlite", "archive"}:
                         rec_tool = "read_document_structure"
                     elif kind == "text":
                         rec_tool = "read_file" if size < 100 * 1024 else "search"
@@ -422,6 +424,8 @@ def list_files_impl(
                     kind = "markdown"
                 elif ext == ".json":
                     kind = "json"
+                elif ext == ".jsonl":
+                    kind = "jsonl"
                 elif ext in {".sqlite", ".db"}:
                     kind = "sqlite"
                 elif ext in {".zip", ".tar", ".gz", ".rar"}:
@@ -431,7 +435,7 @@ def list_files_impl(
                 else:
                     kind = "other"
 
-                if kind in {"excel", "csv", "pdf", "word", "json", "markdown", "sqlite", "archive"}:
+                if kind in {"excel", "csv", "pdf", "word", "json", "jsonl", "markdown", "sqlite", "archive"}:
                     rec_tool = "read_document_structure"
                 elif kind == "text":
                     if size < 100 * 1024:

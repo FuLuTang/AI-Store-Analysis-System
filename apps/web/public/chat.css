@@ -402,6 +402,7 @@
 .chat-message-bubble-wide,
 .chat-message-bubble:has(table),
 .chat-message-bubble:has(.mermaid) {
+    width: 100% !important;
     max-width: 96% !important;
 }
 

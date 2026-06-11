@@ -64,6 +64,8 @@ ASK_TOKEN_AUTH_NAME = "ask_token_auth"
 SERVICE_TOKEN_TOOL_NAME = "get_user_service_token"
 CHATBOT_TYPING_STATE = "AI客服输入中......"
 CHATBOT_STATUS_MIN_INTERVAL_SECONDS = 2
+CHATBOT_HISTORY_COMPRESS_EVERY = 150
+CHATBOT_HISTORY_KEEP_AT_LEAST = 20
 
 CHATBOT_STATUS_STATE: dict[str, Optional[str]] = {}
 CHATBOT_RUNNING_LOCK = Lock()
@@ -317,6 +319,43 @@ def _validate_message_record(record: object) -> dict | None:
         return _clone_message_fields(record, include_datetime=True)
     except HTTPException:
         return None
+
+
+def is_history_message_compressed(
+    total: int,
+    index: int,
+    compress_every: int = CHATBOT_HISTORY_COMPRESS_EVERY,
+    keep_at_least: int = CHATBOT_HISTORY_KEEP_AT_LEAST,
+) -> bool:
+    compressed_prefix_length = compress_every * max(0, (total - keep_at_least) // compress_every)
+    return index < compressed_prefix_length
+
+
+def _compress_history_for_model(history: list[dict]) -> list[dict]:
+    total = len(history)
+    compressed_history: list[dict] = []
+    for index, message in enumerate(history):
+        role = str(message.get("role", "")).strip().lower()
+        if not is_history_message_compressed(total, index):
+            compressed_history.append(message)
+            continue
+
+        if role in {"system", "user"}:
+            compressed_history.append(message)
+            continue
+
+        if role == "tool":
+            continue
+
+        if role == "assistant":
+            compressed = dict(message)
+            compressed.pop("reasoning_content", None)
+            compressed.pop("tool_calls", None)
+            compressed_history.append(compressed)
+            continue
+
+        compressed_history.append(message)
+    return compressed_history
 
 
 class ChatbotHistoryStore:
@@ -596,6 +635,7 @@ def _build_initial_messages(history: list[dict], content: str, attachments: list
 
 
 def _build_messages_from_history(history: list[dict]) -> list[dict]:
+    history = _compress_history_for_model(history)
     messages: list[dict] = [{"role": "system", "content": build_chatbot_system_content()}]
     pending_card_messages: list[dict] = []
     for item in history:
@@ -713,8 +753,22 @@ def register_chatbot_routes(
         )
         return {"attachments": saved}
 
+    async def _resume_chatbot_agent_after(
+        session,
+        request_id: str,
+        preset: dict,
+        base_url: str,
+        api_key: str,
+        model: str,
+        delay_seconds: int,
+        t0: float,
+    ):
+        await asyncio.sleep(max(0, delay_seconds))
+        await _run_chatbot_agent_background(session, f"{request_id}:resume", preset, base_url, api_key, model, t0)
+
     async def _run_chatbot_agent_background(session, request_id: str, preset: dict, base_url: str, api_key: str, model: str, t0: float):
         _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
+        keep_state_for_resume = False
         try:
             history = history_store.load_messages(session.account_dir)
             initial_messages = _build_messages_from_history(history)
@@ -733,12 +787,16 @@ def register_chatbot_routes(
                 "apiKey": api_key,
             }
             client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+
+            def load_messages_for_loop():
+                return _build_messages_from_history(history_store.load_messages(session.account_dir))
+
             loop = ChatAgentLoop(
                 client=client,
                 ws=ws,
                 llm_preset=llm_preset,
                 initial_messages=initial_messages,
-                load_messages=lambda: _build_messages_from_history(history_store.load_messages(session.account_dir)),
+                load_messages=load_messages_for_loop,
                 persist_messages=lambda msgs: history_store.append_messages(session.account_dir, msgs),
                 emit_log=lambda nid, msg: logger.info(
                     "[chatbot-agent] request_id=%s node=%s message=%s",
@@ -756,6 +814,28 @@ def register_chatbot_routes(
                 check_aborted=None,
             )
             result = await asyncio.to_thread(loop.run)
+            resume_after_seconds = int(result.get("_resume_after_seconds") or 0)
+            if resume_after_seconds > 0:
+                keep_state_for_resume = True
+                _set_chatbot_state(session.account_dir, f"等待 {resume_after_seconds} 秒后继续处理......")
+                logger.info(
+                    "[chatbot] stage=agent_scheduled_resume request_id=%s delay_seconds=%d",
+                    request_id,
+                    resume_after_seconds,
+                )
+                asyncio.create_task(
+                    _resume_chatbot_agent_after(
+                        session,
+                        request_id,
+                        preset,
+                        base_url,
+                        api_key,
+                        model,
+                        resume_after_seconds,
+                        t0,
+                    )
+                )
+                return
             final_text = _extract_final_text(result)
             elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
             logger.info(
@@ -794,7 +874,8 @@ def register_chatbot_routes(
                 "datetime": _now_iso(),
             }])
         finally:
-            _set_chatbot_state(session.account_dir, None)
+            if not keep_state_for_resume:
+                _set_chatbot_state(session.account_dir, None)
 
     @router.post("/api/chatbot")
     async def chat_stream(request: Request, x_auth_token: Optional[str] = Header(default=None)):
@@ -803,9 +884,6 @@ def register_chatbot_routes(
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
-
-        if _is_chatbot_running(session.account_dir):
-            raise HTTPException(status_code=409, detail="AI 正在输入中，请稍后再发送")
 
         request_id = f"chatbot:{int(time.time() * 1000)}"
         preset = get_chatbot_preset()
@@ -854,6 +932,14 @@ def register_chatbot_routes(
 
         initial_messages, prefix_to_persist = _build_initial_messages(history, content, attachments)
         history_store.append_messages(session.account_dir, prefix_to_persist)
+
+        if _is_chatbot_running(session.account_dir):
+            logger.info(
+                "[chatbot] stage=user_message_appended_during_run request_id=%s content_preview=%s",
+                request_id,
+                _preview_text(content),
+            )
+            return JSONResponse({"status": "ok", "queued": True})
 
         logger.info(
             "[chatbot] stage=web_to_server_received request_id=%s remote=%s model=%s messages=%d",

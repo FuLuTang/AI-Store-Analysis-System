@@ -530,6 +530,29 @@
             </div>
 
             <div style="margin: 1.5rem 0; padding-top: 1.25rem; border-top: 1px solid var(--border);">
+                <h3 style="margin-bottom: 0.8rem;">用户身份管理</h3>
+                <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
+                    这里维护账号的自然语言身份描述。保存身份后，后端会自动清空该账号已有的 `service_docs` 权限规则。
+                </p>
+                <div class="form-group">
+                    <label>选择账号</label>
+                    <select id="adminAccountSelect"></select>
+                </div>
+                <div class="form-group">
+                    <label>身份描述</label>
+                    <textarea id="adminIdentityDescription" rows="4" placeholder="例如：胖东来 / 研发部 / 后端工程师，同时负责系统配置与文档维护"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>当前规则</label>
+                    <div id="adminRulesContainer" style="border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem; background: rgba(255,255,255,0.03); min-height: 84px; white-space: pre-wrap; line-height: 1.6; color: var(--text-primary);"></div>
+                </div>
+                <div class="modal-actions" style="margin-top: 0.75rem; align-items: center;">
+                    <div id="adminAccountProfileStatus" style="color: var(--text-muted); font-size: 0.85rem;"></div>
+                    <button class="btn" id="saveAccountProfileBtn"><i class="fas fa-save"></i> 保存身份</button>
+                </div>
+            </div>
+
+            <div style="margin: 1.5rem 0; padding-top: 1.25rem; border-top: 1px solid var(--border);">
                 <h3 style="margin-bottom: 0.8rem;">Chatbot 系统通知广播</h3>
                 <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
                     会把同一条 notice 追加到所有账户的 `chatbot/chat.jsonl` 末尾；如果最后一条就是同样的 notice，会先删掉旧的再写新的，只更新时间戳。
@@ -639,6 +662,11 @@
         const presetContainer = document.getElementById('presetContainer');
         const saveBtn = document.getElementById('saveBtn');
         const adminTokenInput = document.getElementById('adminToken');
+        const adminAccountSelect = document.getElementById('adminAccountSelect');
+        const adminIdentityDescription = document.getElementById('adminIdentityDescription');
+        const adminRulesContainer = document.getElementById('adminRulesContainer');
+        const adminAccountProfileStatus = document.getElementById('adminAccountProfileStatus');
+        const saveAccountProfileBtn = document.getElementById('saveAccountProfileBtn');
         const noticeContentInput = document.getElementById('noticeContent');
         const broadcastNoticeBtn = document.getElementById('broadcastNoticeBtn');
         const openServiceDocsBtn = document.getElementById('openServiceDocsBtn');
@@ -674,6 +702,8 @@
         const folderStartUploadBtn = document.getElementById('folderStartUploadBtn');
 
         let currentPresets = {};
+        let adminAccounts = [];
+        let adminCurrentAccountId = '';
         let serviceDocsCurrentPath = 'service_docs/';
         let serviceDocsEntries = [];
         let serviceDocsSelectedPath = '';
@@ -1623,6 +1653,146 @@
             }
         };
 
+        function setAccountProfileStatus(text) {
+            if (adminAccountProfileStatus) {
+                adminAccountProfileStatus.textContent = text || '';
+            }
+        }
+
+        function renderAdminRules(rules) {
+            if (!adminRulesContainer) return;
+            const list = Array.isArray(rules) ? rules : [];
+            if (!list.length) {
+                adminRulesContainer.innerHTML = '<span style="color: var(--text-muted);">暂无规则</span>';
+                return;
+            }
+            adminRulesContainer.innerHTML = list.map(rule => {
+                const decision = String(rule.decision || '').toLowerCase();
+                const badge = decision === 'deny' ? '拒绝' : '允许';
+                const reason = rule.reason ? ` · ${escapeHtml(rule.reason)}` : '';
+                const confidence = typeof rule.confidence === 'number' ? ` · 置信度 ${rule.confidence}` : '';
+                const source = rule.source ? ` · 来源 ${escapeHtml(rule.source)}` : '';
+                return `<div style="padding: 0.45rem 0; border-bottom: 1px dashed var(--border);">
+                    <div><strong>[${badge}]</strong> ${escapeHtml(rule.pattern || '')}</div>
+                    <div style="color: var(--text-muted); font-size: 0.82rem;">${escapeHtml(rule.toolHint || '')}${source}${confidence}${reason}</div>
+                </div>`;
+            }).join('');
+        }
+
+        function renderAdminAccountOptions() {
+            if (!adminAccountSelect) return;
+            if (!adminAccounts.length) {
+                adminAccountSelect.innerHTML = '<option value="">暂无账号</option>';
+                adminAccountSelect.value = '';
+                adminCurrentAccountId = '';
+                return;
+            }
+            adminAccountSelect.innerHTML = adminAccounts.map(item => {
+                const label = `${item.accountLabel || item.username || item.accountId} (${item.accountId})`;
+                return `<option value="${escapeHtml(item.accountId)}">${escapeHtml(label)}</option>`;
+            }).join('');
+            const nextValue = adminAccounts.some(item => item.accountId === adminCurrentAccountId)
+                ? adminCurrentAccountId
+                : adminAccounts[0].accountId;
+            adminAccountSelect.value = nextValue;
+            adminCurrentAccountId = nextValue;
+        }
+
+        async function loadAdminAccountProfile(accountId) {
+            if (!accountId) {
+                if (adminIdentityDescription) adminIdentityDescription.value = '';
+                setAccountProfileStatus('请选择一个账号');
+                return;
+            }
+            setAccountProfileStatus('正在加载身份...');
+            const resp = await fetch(`/api/admin/accounts/profile?account_id=${encodeURIComponent(accountId)}`, {
+                headers: adminHeaders(),
+            });
+            if (!resp.ok) throw new Error(`加载账号资料失败(${resp.status})`);
+            const data = await resp.json();
+            const profile = data.profile || {};
+            if (adminIdentityDescription) {
+                adminIdentityDescription.value = profile.identityDescription || '';
+            }
+            adminCurrentAccountId = data.accountId || accountId;
+            renderAdminRules(data.rules || []);
+            setAccountProfileStatus(`当前账号：${data.username || data.accountId || accountId}，规则数 ${data.ruleCount ?? 0}`);
+        }
+
+        async function loadAdminAccounts() {
+            const resp = await fetch('/api/admin/accounts', { headers: adminHeaders() });
+            if (!resp.ok) throw new Error(`加载账号列表失败(${resp.status})`);
+            const data = await resp.json();
+            adminAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+            renderAdminAccountOptions();
+            if (adminCurrentAccountId) {
+                try {
+                    await loadAdminAccountProfile(adminCurrentAccountId);
+                } catch (err) {
+                    console.error(err);
+                    setAccountProfileStatus(err.message || '加载身份失败');
+                }
+            } else if (adminAccountSelect && adminAccountSelect.value) {
+                try {
+                    await loadAdminAccountProfile(adminAccountSelect.value);
+                } catch (err) {
+                    console.error(err);
+                    setAccountProfileStatus(err.message || '加载身份失败');
+                }
+            } else if (adminAccounts.length) {
+                try {
+                    await loadAdminAccountProfile(adminAccounts[0].accountId);
+                } catch (err) {
+                    console.error(err);
+                    setAccountProfileStatus(err.message || '加载身份失败');
+                }
+            } else {
+                setAccountProfileStatus('暂无可管理账号');
+            }
+        }
+
+        if (adminAccountSelect) {
+            adminAccountSelect.onchange = async () => {
+                try {
+                    adminCurrentAccountId = adminAccountSelect.value;
+                    await loadAdminAccountProfile(adminCurrentAccountId);
+                } catch (err) {
+                    console.error(err);
+                    alert(err.message || '加载账号资料失败');
+                }
+            };
+        }
+
+        if (saveAccountProfileBtn) {
+            saveAccountProfileBtn.onclick = async () => {
+                const accountId = adminAccountSelect ? adminAccountSelect.value : '';
+                const identityDescription = adminIdentityDescription ? adminIdentityDescription.value.trim() : '';
+                if (!accountId) {
+                    alert('请先选择账号');
+                    return;
+                }
+                try {
+                    saveAccountProfileBtn.disabled = true;
+                    setAccountProfileStatus('正在保存...');
+                    const resp = await fetch('/api/admin/accounts/profile', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                        body: JSON.stringify({ accountId, identityDescription }),
+                    });
+                    if (!resp.ok) throw new Error(`保存失败(${resp.status})`);
+                    const data = await resp.json();
+                    setAccountProfileStatus(`已保存。${data.rulesCleared ? '身份变更，规则已清空。' : '规则未变更。'}`);
+                    await loadAdminAccounts();
+                } catch (err) {
+                    console.error(err);
+                    alert(err.message || '保存身份失败');
+                    setAccountProfileStatus('保存失败');
+                } finally {
+                    saveAccountProfileBtn.disabled = false;
+                }
+            };
+        }
+
         function renderPresets() {
             presetContainer.innerHTML = EFFORTS.map(effort => {
                 const preset = currentPresets[effort] || {};
@@ -1789,6 +1959,7 @@
             }
         };
 
+        loadAdminAccounts().catch(err => { console.error(err); alert('初始化身份管理失败'); });
         loadPresets().catch(err => { console.error(err); alert('加载预设失败'); });
     </script>
 </body>

@@ -53,6 +53,22 @@ from packages.price_recommendation.service import (
     run_price_workflow,
 )
 from apps.api.src.chatbot_service import register_chatbot_routes
+from apps.api.src.service_docs_access import (
+    RULES_FILE_NAME as SERVICE_DOCS_RULES_FILE_NAME,
+    AUDIT_FILE_NAME as SERVICE_DOCS_AUDIT_FILE_NAME,
+    clear_rules as clear_service_docs_rules,
+    classify_access_for_path as classify_service_docs_access,
+    load_account_profile as load_service_docs_account_profile,
+    load_identity_description as load_service_docs_identity_description,
+    load_rules as load_service_docs_rules,
+    project_search_payload_for_account,
+    request_access_via_ai,
+    save_account_profile as save_service_docs_account_profile,
+    summarize_rules as summarize_service_docs_rules,
+    tool_access_projection,
+    annotate_list_payload_for_account,
+    update_identity_description as update_service_docs_identity_description,
+)
 from packages.agents.core.file_domains import SERVICE_DOCS_DOMAIN, join_domain_path, split_domain_path
 
 load_dotenv()
@@ -573,11 +589,20 @@ class SessionManager:
 
     def _default_config(self) -> dict:
         return {
-            "reasoningEffort": DEFAULT_REASONING_EFFORT
+            "reasoningEffort": DEFAULT_REASONING_EFFORT,
+            "identityDescription": "",
         }
 
     def _load_profile(self, account_dir: Path) -> dict:
-        return self._default_config()
+        cfg = self._default_config()
+        try:
+            raw = load_service_docs_account_profile(account_dir)
+        except Exception:
+            raw = {}
+        if isinstance(raw, dict):
+            cfg["reasoningEffort"] = normalize_reasoning_effort(raw.get("reasoningEffort") or raw.get("reasoning_effort"))
+            cfg["identityDescription"] = str(raw.get("identityDescription") or "").strip()
+        return cfg
 
     def _account_dir(self, account_name: str) -> tuple[str, str, Path]:
         account_ref = account_ref_for_username(self.base_dir, account_name)
@@ -664,12 +689,10 @@ class SessionManager:
 
     def save_profile(self, session: SessionState):
         session.account_dir.mkdir(parents=True, exist_ok=True)
-        session.profile_path.write_text(
-            json.dumps({
-                "reasoningEffort": normalize_reasoning_effort(session.config.get("reasoningEffort"))
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
+        save_service_docs_account_profile(session.account_dir, {
+            "reasoningEffort": normalize_reasoning_effort(session.config.get("reasoningEffort")),
+            "identityDescription": str(session.config.get("identityDescription") or "").strip(),
+        })
 
     def drop_session(self, account_hash: str, task_type: Optional[str] = None):
         with self._lock:
@@ -682,6 +705,56 @@ class SessionManager:
 
 session_manager = SessionManager(ACCOUNTS_DIR)
 register_limiter = RegisterRateLimiter(window_seconds=180, max_requests=5)
+
+
+def _account_dir_by_id(account_id: str) -> Path:
+    value = str(account_id or "").strip()
+    if not value or "_" not in value:
+        raise HTTPException(status_code=400, detail="缺少 account_id")
+    target = ACCOUNTS_DIR / value
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="未找到账号")
+    return target
+
+
+def _load_account_json(account_dir: Path) -> dict:
+    path = account_dir / "account.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    return {}
+
+
+def _mask_account_id(account_id: str) -> str:
+    value = str(account_id or "").strip()
+    if not value:
+        return ""
+    prefix = value[:3]
+    return f"{prefix}***"
+
+
+def _list_accounts_for_admin() -> list[dict]:
+    if not ACCOUNTS_DIR.exists():
+        return []
+    items: list[dict] = []
+    for account_dir in sorted([p for p in ACCOUNTS_DIR.iterdir() if p.is_dir()], key=lambda p: p.name):
+        account_json = _load_account_json(account_dir)
+        username = str(account_json.get("username") or "").strip()
+        account_id = str(account_json.get("accountId") or account_dir.name).strip()
+        identity_description = load_service_docs_identity_description(account_dir)
+        items.append({
+            "accountId": account_id,
+            "accountLabel": mask_username(username) if username else _mask_account_id(account_id),
+            "username": username,
+            "identityDescription": identity_description,
+            "hasIdentity": bool(identity_description),
+        })
+    return items
 
 
 def _now_time():
@@ -996,6 +1069,67 @@ async def save_admin_llm_presets(request: Request, x_admin_token: Optional[str] 
     }
 
 
+@app.get("/api/admin/accounts")
+def list_admin_accounts(x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    return {
+        "status": "ok",
+        "accounts": _list_accounts_for_admin(),
+    }
+
+
+@app.get("/api/admin/accounts/profile")
+def get_admin_account_profile(account_id: str = Query(...), x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    account_dir = _account_dir_by_id(account_id)
+    account_json = _load_account_json(account_dir)
+    profile = load_service_docs_account_profile(account_dir)
+    rules_summary = summarize_service_docs_rules(account_dir)
+    return {
+        "status": "ok",
+        "accountId": account_dir.name,
+        "username": str(account_json.get("username") or "").strip(),
+        "profile": {
+            "reasoningEffort": normalize_reasoning_effort(profile.get("reasoningEffort") or profile.get("reasoning_effort")),
+            "identityDescription": str(profile.get("identityDescription") or "").strip(),
+        },
+        "ruleCount": rules_summary["count"],
+        "rules": rules_summary["rules"],
+    }
+
+
+@app.post("/api/admin/accounts/profile")
+async def save_admin_account_profile(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    account_id = str(payload.get("accountId") or "").strip()
+    if not account_id:
+        raise HTTPException(status_code=400, detail="缺少 accountId")
+    account_dir = _account_dir_by_id(account_id)
+    current_profile = load_service_docs_account_profile(account_dir)
+    next_profile = dict(current_profile)
+    next_profile["reasoningEffort"] = normalize_reasoning_effort(payload.get("reasoningEffort") or current_profile.get("reasoningEffort"))
+    next_profile["identityDescription"] = str(payload.get("identityDescription") or "").strip()
+    identity_changed = str(current_profile.get("identityDescription") or "").strip() != next_profile["identityDescription"]
+    saved_profile = save_service_docs_account_profile(account_dir, next_profile)
+    if identity_changed:
+        clear_service_docs_rules(account_dir)
+        username_hash = str(_load_account_json(account_dir).get("usernameHash") or "").strip()
+        if username_hash:
+            session_manager.drop_session(username_hash)
+    return {
+        "status": "ok",
+        "accountId": account_dir.name,
+        "profile": {
+            "reasoningEffort": normalize_reasoning_effort(saved_profile.get("reasoningEffort") or saved_profile.get("reasoning_effort")),
+            "identityDescription": str(saved_profile.get("identityDescription") or "").strip(),
+        },
+        "rulesCleared": identity_changed,
+    }
+
+
 @app.get("/api/admin/service-docs")
 def list_admin_service_docs(path: str = "service_docs/", x_admin_token: Optional[str] = Header(default=None)):
     require_admin_authorization(x_admin_token)
@@ -1238,6 +1372,11 @@ def get_chatbot_resource(
         root_dir = session.account_dir / "chatbot" / "workspace"
     else:
         root_dir = SERVICE_DOCS_DIR
+
+    if domain == "service_docs":
+        projected = tool_access_projection(session.account_dir, "get_resource_link", join_domain_path(domain, path))
+        if projected.get("effectiveStatus") != "allow":
+            raise HTTPException(status_code=404, detail="File not found")
         
     root_dir.mkdir(parents=True, exist_ok=True)
     
@@ -1627,6 +1766,7 @@ async def start_price_recommendation(
     decoded_files = await _read_uploaded_files(files, PRICE_SUPPORTED_EXTENSIONS)
 
     session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort or "high")
+    session_manager.save_profile(session)
     candidate_count = _normalize_candidate_count(candidateCount)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
@@ -1761,6 +1901,7 @@ async def analyze(
 ):
     session = resolve_session(x_auth_token, operation="execute")
     session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort)
+    session_manager.save_profile(session)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
             raise HTTPException(status_code=400, detail="任务正在运行中")

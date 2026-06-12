@@ -493,6 +493,23 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
 - **Body (JSON)**: 预设配置参数包。
 - **响应 (200)**: 更新后的预设列表。
 
+#### [GET] /api/admin/accounts
+
+- **说明**: 获取管理员可管理的账号列表。
+- **响应 (200)**: `{"accounts": [{"accountId": "...", "accountLabel": "...", "identityDescription": "..."}]}`
+
+#### [GET] /api/admin/accounts/profile
+
+- **说明**: 读取指定账号的身份描述与基础资料。
+- **Query**: `account_id`
+- **响应 (200)**: `{"profile": {"reasoningEffort": "...", "identityDescription": "..."}}`
+
+#### [POST] /api/admin/accounts/profile
+
+- **说明**: 更新指定账号的身份描述。若身份描述发生变化，后端会自动清空该账号的 `service_docs` 规则表。
+- **Body (JSON)**: `{"accountId": "...", "identityDescription": "..."}`
+- **响应 (200)**: `{"status": "ok", "rulesCleared": true|false}`
+
 #### [GET] /api/admin/service-docs
 
 - **说明**: 获取公共公共说明文档目录结构列表。
@@ -523,6 +540,13 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
 - **Query**: `path`
 - **响应 (200)**: `{"status": "ok"}`
 
+#### `service_docs` 权限说明
+
+- `service_docs` 访问由账号级正则规则表控制，统一作用于 `list_files`、`search`、`read_file`、`read_document_structure`、`get_resource_link`。
+- `list_files` 和 `search` 允许暴露有限的文件名和目录结构，但正文、结构摘要和资源链接仍需命中允许规则。
+- `get_resource_link` 除权限规则外，还会继续检查独立的 `.no_download.yaml` 禁止下载列表。
+- 权限 AI 通过单次结构化调用维护规则表，不作为 Agent 运行。
+
 ---
 
 ### 3.9 其他通用接口
@@ -541,7 +565,9 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
 - **根目录路径**: `/storage/accounts/usr_{账号前三位}_{哈希前六位}/`
   - **`account.json`**: 用户账户配置（密码哈希、创建日期）。
   - **`account_tokens.jsonl`**: 会话 Token 状态追加日志（创建、活跃、登出记录）。
-  - **`profile.json`**: 用户的偏好设置（如诊断精度配置）。
+  - **`profile.json`**: 用户偏好与身份描述。
+  - **`service_docs_access_rules.json`**: 当前账号的 `service_docs` 正则权限规则表。
+  - **`service_docs_access_audit.jsonl`**: `service_docs` 权限申请与 AI 判定审计日志。
   - **`analysis_params.json`**: 用户自定义的分析约束。
   - **`chatbot/chat.jsonl`**: 客服会话聊天全量历史；`assistant` 消息会附带本轮 `token_count`（如有）。
   - **`chatbot/attachments.jsonl`**: 上传的聊天附件索引数据库。

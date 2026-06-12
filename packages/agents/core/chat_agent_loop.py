@@ -47,6 +47,7 @@ class ChatAgentLoop:
         set_status=None,
         check_aborted=None,
         persist_messages=None,
+        service_docs_account_dir=None,
     ):
         self.ws = ws
         self._check_aborted = check_aborted
@@ -81,6 +82,7 @@ class ChatAgentLoop:
             emit_status=self._emit_status,
             on_finish=None,
             llm_preset=llm_preset,
+            service_docs_account_dir=service_docs_account_dir,
         )
 
     def _summarize_message_for_log(self, message: dict) -> dict:

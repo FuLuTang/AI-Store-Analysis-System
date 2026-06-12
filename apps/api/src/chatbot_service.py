@@ -904,6 +904,7 @@ def register_chatbot_routes(
                 ws=ws,
                 llm_preset=llm_preset,
                 initial_messages=initial_messages,
+                service_docs_account_dir=session.account_dir,
                 load_messages=load_messages_for_loop,
                 persist_messages=lambda msgs: history_store.append_messages(session.account_dir, msgs),
                 emit_log=lambda nid, msg: logger.info(

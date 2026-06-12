@@ -153,6 +153,17 @@
 
 管理员后台仍使用独立的 `X-Admin-Token`，不属于用户 token 链路。
 
+管理员侧还提供账号身份管理接口：
+
+| 项目 | 内容 |
+| :--- | :--- |
+| **方法** | `GET /api/admin/accounts` |
+| **说明** | 列出可管理账号及其身份描述摘要 |
+| **方法** | `GET /api/admin/accounts/profile?account_id=...` |
+| **说明** | 读取单个账号的身份描述 |
+| **方法** | `POST /api/admin/accounts/profile` |
+| **说明** | 更新身份描述；若身份变化，自动清空该账号的 `service_docs` 规则表 |
+
 ---
 
 ## 6. 账号级 Chatbot 与定时唤醒
@@ -168,6 +179,8 @@
 | **成功返回** | `{"status": "ok"}` |
 
 聊天历史存放在账号目录下的 `chatbot/chat.jsonl`。前端通过 `/api/chatbot/status` 轮询 `state` 和 `last_update`，再通过 `/api/chatbot/history` 拉取可展示历史。
+
+Chatbot 内部还会使用 `request_service_docs_access` 工具来申请 `service_docs` 的访问权限；这不是 HTTP 接口，而是模型可调用的内部工具。
 
 ### Chatbot `wait` 工具
 

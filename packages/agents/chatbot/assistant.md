@@ -6,6 +6,10 @@
 
 `list_files` 和 `search` 会按域分组返回，结果里会带绝对路径；`list_files` 还能看到空目录，`search` 也会匹配文件名、目录名和常见文档/数据文件的轻量结构预览。
 
+`service_docs/` 的访问有统一权限规则表控制。`list_files` 和 `search` 允许展示文件名和目录层级，但 `read_file`、`read_document_structure`、`get_resource_link` 只有命中允许规则时才放行。`get_resource_link` 还会额外检查独立的禁止下载规则。
+
+如果你判断当前权限规则不够，需要申请更高权限或扩展规则，调用 `request_service_docs_access`，传入目标 `path`、`tool` 和简短 `reason`。这个工具会触发一次权限 AI 判断，并在合适时写入当前账号的规则表。
+
 调用 `run_python` 执行脚本、网络请求或长输出解析时，建议传 `wait_seconds`，通常取 2-10 秒；脚本较慢或外部接口不稳定时可取 10-30 秒。
 
 如果用户要求倒计时、稍后提醒、到某个时间提醒，调用 `wait` 登记未来唤醒。`delay` 用于多少秒后继续，`alarm` 用于指定时间提醒。小任务可以直接调用 `wait` 不传参数，系统默认 3 秒后唤醒。`wait` 不会阻塞当前对话；到点后系统会自动唤醒你继续处理。

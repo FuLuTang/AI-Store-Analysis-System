@@ -345,6 +345,28 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                 },
             ),
             _make_tool(
+                name="request_service_docs_access",
+                description="请求 service_docs 的访问权限。该工具会触发单次权限 AI 判断，并在合适时写入当前账号的规则表。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "目标路径，必须带 service_docs 域前缀，如 service_docs/foo/bar.md",
+                        },
+                        "tool": {
+                            "type": "string",
+                            "description": "准备申请的工具名，如 list_files、search、read_file、read_document_structure、get_resource_link",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "为什么需要访问这个路径",
+                        },
+                    },
+                    "required": ["path", "tool", "reason"],
+                },
+            ),
+            _make_tool(
                 name="execute_system_function",
                 description="执行指定系统服务功能。执行前必须先调用 get_user_service_token 获得客服 token，并把该 token 放入 params.service_token。",
                 parameters={
@@ -388,7 +410,15 @@ def get_plan_progress_info(ws) -> tuple[int, int]:
         return -1, 0
 
 
-def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, emit_status=None, on_finish=None, llm_preset: dict = None) -> dict:
+def build_tool_map(
+    ws: Workspace,
+    task_type: str = "diagnosis",
+    emit_log=None,
+    emit_status=None,
+    on_finish=None,
+    llm_preset: dict = None,
+    service_docs_account_dir=None,
+) -> dict:
     """构建 {tool_name: callable} 映射，供 agent loop 执行工具调用。
 
     emit_log(node_id, message)  —— 日志回调，message 可为 str 或 dict
@@ -418,11 +448,33 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
     from .tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
     from .tools.impl.plan_check_impl import read_plan_impl, check_plan_impl, run_step_check
     from .tools.impl.search_impl import search_files_impl
+    from apps.api.src.service_docs_access import (
+        annotate_list_payload_for_account,
+        project_search_payload_for_account,
+        request_access_via_ai,
+        tool_access_projection,
+    )
+    def _is_service_docs_path(value: str) -> bool:
+        return str(value or "").replace("\\", "/").startswith("service_docs/")
 
     def _read_document_structure(path: str) -> str:
+        if service_docs_account_dir is not None and _is_service_docs_path(path):
+            try:
+                projected = tool_access_projection(service_docs_account_dir, "read_document_structure", path)
+                if projected.get("effectiveStatus") != "allow":
+                    return json.dumps({"error": projected.get("message") or "无权限", "path": path}, ensure_ascii=False)
+            except Exception:
+                pass
         return read_document_structure_impl(ws, path, emit_log=_emit_log)
 
     def _read_file(path: str, offset: int = 0, limit: int = 800, head: int = None, tail: int = None) -> str:
+        if service_docs_account_dir is not None and _is_service_docs_path(path):
+            try:
+                projected = tool_access_projection(service_docs_account_dir, "read_file", path)
+                if projected.get("effectiveStatus") != "allow":
+                    return json.dumps({"error": projected.get("message") or "无权限", "path": path}, ensure_ascii=False)
+            except Exception:
+                pass
         return read_file_impl(ws, path, offset=offset, limit=limit, head=head, tail=tail, emit_log=_emit_log)
 
     def _write_file(path: str, content: str, mode: str = "overwrite") -> str:
@@ -436,10 +488,23 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
 
     def _list_files(subdir: str = "") -> str:
         files = list_files_impl(ws, subdir, emit_log=_emit_log)
+        if service_docs_account_dir is not None:
+            try:
+                files = annotate_list_payload_for_account(files, service_docs_account_dir)
+            except Exception:
+                pass
         return json.dumps(files, ensure_ascii=False)
 
     def _search(pattern: str, domain: str = "all", path: str = None, regex: bool = False, max_matches: int = 50) -> str:
-        return search_files_impl(ws, pattern, domain=domain, path=path, regex=regex, max_matches=max_matches)
+        output = search_files_impl(ws, pattern, domain=domain, path=path, regex=regex, max_matches=max_matches)
+        if service_docs_account_dir is not None:
+            try:
+                payload = json.loads(output)
+                payload = project_search_payload_for_account(payload, service_docs_account_dir)
+                output = json.dumps(payload, ensure_ascii=False)
+            except Exception:
+                pass
+        return output
 
     def _run_python(script_path: str, content: str = None, wait_seconds: int = 0) -> str:
         return run_python_impl(ws, script_path, content=content, emit_log=_emit_log)
@@ -577,7 +642,31 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         from .tools.impl.resource_link_impl import get_resource_link_impl
 
         def _get_resource_link(path: str) -> str:
+            if service_docs_account_dir is not None and _is_service_docs_path(path):
+                try:
+                    projected = tool_access_projection(service_docs_account_dir, "get_resource_link", path)
+                    if projected.get("effectiveStatus") != "allow":
+                        return json.dumps(
+                            {"status": "no_permission", "message": projected.get("message") or "无权限下载此文件"},
+                            ensure_ascii=False,
+                        )
+                except Exception:
+                    pass
             return get_resource_link_impl(ws, path, emit_log=_emit_log)
+
+        def _request_service_docs_access(path: str, tool: str, reason: str) -> str:
+            if service_docs_account_dir is None:
+                return json.dumps({"status": "failed", "message": "当前工作区未启用 service_docs 权限管理"}, ensure_ascii=False)
+            return json.dumps(
+                request_access_via_ai(
+                    service_docs_account_dir,
+                    path=path,
+                    tool=tool,
+                    reason=reason,
+                    llm_preset=llm_preset or {},
+                ),
+                ensure_ascii=False,
+            )
 
         def _list_system_functions() -> str:
             return list_system_functions_impl()
@@ -610,6 +699,7 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
             "list_system_functions": _list_system_functions,
             "view_system_function_doc": _view_system_function_doc,
             "get_user_service_token": _get_user_service_token,
+            "request_service_docs_access": _request_service_docs_access,
             "execute_system_function": _execute_system_function,
         })
 

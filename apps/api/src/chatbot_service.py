@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 from openai import OpenAI
@@ -25,6 +26,7 @@ from packages.auth import (
     generate_service_token,
     token_hash,
 )
+from packages.agents.core.tools.impl.wait_impl import load_scheduled_waits_with_mtime, rewrite_scheduled_waits
 
 logger = logging.getLogger("app.chatbot_service")
 if not logger.handlers:
@@ -71,6 +73,7 @@ CHATBOT_STATUS_STATE: dict[str, Optional[str]] = {}
 CHATBOT_RUNNING_LOCK = Lock()
 CHATBOT_STATUS_POLLS: dict[str, float] = {}
 CHATBOT_STATUS_LOCK = Lock()
+CHATBOT_SCHEDULER_TASK: Optional[asyncio.Task] = None
 
 
 class ChatbotStreamError(Exception):
@@ -688,6 +691,13 @@ def _build_messages_from_history(history: list[dict]) -> list[dict]:
     return messages
 
 
+def _parse_scheduler_time(value: str) -> float:
+    try:
+        return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
 def _extract_final_text(result: dict) -> str:
     full_report = str(result.get("full_report") or "").strip()
     if full_report:
@@ -750,7 +760,9 @@ def register_chatbot_routes(
     *,
     resolve_session: Callable,
     get_chatbot_preset: Callable,
+    accounts_dir: Path,
 ):
+    global CHATBOT_SCHEDULER_TASK
     router = APIRouter()
 
     @router.get("/api/chatbot/history")
@@ -790,12 +802,27 @@ def register_chatbot_routes(
         await asyncio.sleep(max(0, delay_seconds))
         await _run_chatbot_agent_background(session, f"{request_id}:resume", preset, base_url, api_key, model, t0)
 
-    async def _run_chatbot_agent_background(session, request_id: str, preset: dict, base_url: str, api_key: str, model: str, t0: float):
+    async def _run_chatbot_agent_background(
+        session,
+        request_id: str,
+        preset: dict,
+        base_url: str,
+        api_key: str,
+        model: str,
+        t0: float,
+        transient_system_prompt: str = "",
+    ):
         _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
         keep_state_for_resume = False
         try:
             history = history_store.load_messages(session.account_dir)
             initial_messages = _build_messages_from_history(history)
+            transient_system_prompt = str(transient_system_prompt or "").strip()
+            if transient_system_prompt:
+                initial_messages.append({
+                    "role": "system",
+                    "content": f"【定时唤醒】{transient_system_prompt}",
+                })
             ws = _build_chatbot_workspace(session.account_dir)
             logger.info(
                 "[chatbot] stage=server_to_llm_prepare request_id=%s model=%s upstream_messages=%d base_url=%s workspace=%s",
@@ -900,6 +927,137 @@ def register_chatbot_routes(
         finally:
             if not keep_state_for_resume:
                 _set_chatbot_state(session.account_dir, None)
+
+    def _scheduled_task_account_dir(task: dict) -> Optional[Path]:
+        raw_dir = str(task.get("account_dir") or "").strip()
+        if raw_dir:
+            account_dir = Path(raw_dir)
+        else:
+            account_id = str(task.get("account_id") or "").strip()
+            if not account_id:
+                return None
+            account_dir = Path(accounts_dir) / account_id
+        try:
+            account_dir.resolve().relative_to(Path(accounts_dir).resolve())
+        except Exception:
+            return None
+        return account_dir
+
+    async def _trigger_scheduled_wait(task: dict) -> None:
+        account_dir = _scheduled_task_account_dir(task)
+        if account_dir is None:
+            return
+
+        mode = str(task.get("mode") or "delay").strip().lower()
+        prompt = str(task.get("resume_prompt") or "请根据前文和最新上下文继续处理。").strip()
+        request_id = f"chatbot-scheduled:{task.get('id') or int(time.time() * 1000)}"
+        preset = get_chatbot_preset()
+        base_url = preset.get("baseUrl", "")
+        api_key = preset.get("apiKey", "")
+        model = preset.get("model", "")
+        if not base_url or not api_key or not model:
+            logger.error("[chatbot-scheduler] skip task=%s reason=llm_config_incomplete", task.get("id"))
+            return
+
+        if mode == "alarm":
+            history_store.append_messages(account_dir, [{
+                "role": "system",
+                "name": NOTICE_NAME,
+                "content": prompt,
+                "datetime": _now_iso(),
+            }])
+            transient_prompt = ""
+        else:
+            transient_prompt = prompt
+
+        session = SimpleNamespace(
+            account_id=account_dir.name,
+            account_dir=account_dir,
+        )
+        _set_chatbot_state(account_dir, CHATBOT_TYPING_STATE)
+        asyncio.create_task(
+            _run_chatbot_agent_background(
+                session,
+                request_id,
+                preset,
+                base_url,
+                api_key,
+                model,
+                time.perf_counter(),
+                transient_system_prompt=transient_prompt,
+            )
+        )
+        logger.info(
+            "[chatbot-scheduler] triggered task=%s mode=%s account=%s",
+            task.get("id"),
+            mode,
+            account_dir.name,
+        )
+
+    async def _process_scheduled_waits_once() -> None:
+        tasks, scheduler_mtime_ns = load_scheduled_waits_with_mtime(accounts_dir)
+        if not tasks:
+            return
+
+        now_ts = time.time()
+        remaining: list[dict] = []
+        due: list[dict] = []
+        due_accounts: set[str] = set()
+        for task in tasks:
+            account_dir = _scheduled_task_account_dir(task)
+            run_at_ts = _parse_scheduler_time(str(task.get("run_at") or ""))
+            if account_dir is None or run_at_ts <= 0:
+                remaining.append(task)
+                continue
+            if run_at_ts > now_ts:
+                remaining.append(task)
+                continue
+            if _is_chatbot_running(account_dir):
+                remaining.append(task)
+                continue
+            account_key = str(account_dir)
+            if account_key in due_accounts:
+                remaining.append(task)
+                continue
+            due_accounts.add(account_key)
+            due.append(task)
+
+        if len(remaining) != len(tasks):
+            if not rewrite_scheduled_waits(accounts_dir, remaining, expected_mtime_ns=scheduler_mtime_ns):
+                logger.info("[chatbot-scheduler] scheduler file changed during tick; retry next tick")
+                return
+
+        for task in due:
+            await _trigger_scheduled_wait(task)
+
+    async def _chatbot_scheduler_loop() -> None:
+        logger.info("[chatbot-scheduler] started path=%s", Path(accounts_dir) / "chatbot_scheduler.jsonl")
+        while True:
+            try:
+                await _process_scheduled_waits_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("[chatbot-scheduler] tick failed: %s", exc)
+            await asyncio.sleep(1)
+
+    async def _start_chatbot_scheduler() -> None:
+        global CHATBOT_SCHEDULER_TASK
+        if CHATBOT_SCHEDULER_TASK is None or CHATBOT_SCHEDULER_TASK.done():
+            CHATBOT_SCHEDULER_TASK = asyncio.create_task(_chatbot_scheduler_loop())
+
+    async def _stop_chatbot_scheduler() -> None:
+        global CHATBOT_SCHEDULER_TASK
+        if CHATBOT_SCHEDULER_TASK and not CHATBOT_SCHEDULER_TASK.done():
+            CHATBOT_SCHEDULER_TASK.cancel()
+            try:
+                await CHATBOT_SCHEDULER_TASK
+            except asyncio.CancelledError:
+                pass
+        CHATBOT_SCHEDULER_TASK = None
+
+    app.add_event_handler("startup", _start_chatbot_scheduler)
+    app.add_event_handler("shutdown", _stop_chatbot_scheduler)
 
     @router.post("/api/chatbot")
     async def chat_stream(request: Request, x_auth_token: Optional[str] = Header(default=None)):

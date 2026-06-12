@@ -2193,6 +2193,7 @@ register_chatbot_routes(
     app,
     resolve_session=lambda auth_token: resolve_session(auth_token, task_type="chatbot"),
     get_chatbot_preset=get_chatbot_preset,
+    accounts_dir=ACCOUNTS_DIR,
 )
 
 

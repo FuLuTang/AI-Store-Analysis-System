@@ -261,6 +261,42 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
     if task_type == "chatbot":
         tools.extend([
             _make_tool(
+                name="wait",
+                description=(
+                    "登记一个未来时间点来自动唤醒当前客服 Agent，不会阻塞当前对话。"
+                    "用户要求倒计时、稍后提醒、到某个时间提醒时使用。"
+                    "如果你提交了异步任务、调用了外部 API，且需要稍后继续查询或总结，也可以使用。"
+                    "小任务可以不传任何参数，系统默认 3 秒后唤醒。"
+                    "mode='delay' 时传 delay_seconds；mode='alarm' 时传 ISO 格式 run_at。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["delay", "alarm"],
+                            "description": "可选。delay 表示多少秒后继续；alarm 表示到指定时间提醒；不传默认 delay。",
+                        },
+                        "delay_seconds": {
+                            "type": "integer",
+                            "description": "可选。delay 模式使用，至少 1 秒；不传或解析失败默认 3 秒。用户说分钟或小时提醒时，请换算成秒。",
+                        },
+                        "run_at": {
+                            "type": "string",
+                            "description": "可选。alarm 模式使用，ISO 时间字符串，例如 2026-06-12T18:30:00+08:00。精度按分钟处理；解析失败默认 3 秒 delay。",
+                        },
+                        "resume_prompt": {
+                            "type": "string",
+                            "description": "可选。到点后给 Agent 的恢复指令；应说明要提醒什么、查询什么或继续处理什么。不传时按前文继续处理。",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "可选。简短说明为什么设置这个等待，方便管理员查看 scheduler jsonl。",
+                        },
+                    },
+                },
+            ),
+            _make_tool(
                 name="list_system_functions",
                 description="列出系统所有的可用服务功能。功能以树形目录层级结构展示（不包含 .py 后缀）。",
                 parameters={"type": "object", "properties": {}},
@@ -521,6 +557,7 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
             list_system_functions_impl,
             view_system_function_doc_impl,
         )
+        from .tools.impl.wait_impl import schedule_wait_impl
 
         def _list_system_functions() -> str:
             return list_system_functions_impl()
@@ -537,7 +574,18 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         def _execute_system_function(path: str, params: dict | str) -> str:
             return execute_system_function_impl(ws, path, params, llm_preset or {})
 
+        def _wait(mode: str = "", delay_seconds: int = None, run_at: str = None, resume_prompt: str = "", reason: str = "") -> str:
+            return schedule_wait_impl(
+                ws,
+                mode=mode,
+                delay_seconds=delay_seconds,
+                run_at=run_at,
+                resume_prompt=resume_prompt,
+                reason=reason,
+            )
+
         tool_map.update({
+            "wait": _wait,
             "list_system_functions": _list_system_functions,
             "view_system_function_doc": _view_system_function_doc,
             "get_user_service_token": _get_user_service_token,

@@ -488,6 +488,10 @@
                 <button class="btn-secondary" id="serviceDocsNewFolderBtn" type="button"><i class="fas fa-folder-plus"></i> 新建文件夹</button>
                 <button class="btn-secondary" id="serviceDocsNewTextBtn" type="button"><i class="fas fa-file-pen"></i> 新建文本</button>
                 <input type="file" id="serviceDocsUploadInput" hidden multiple>
+                <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; cursor: pointer; margin-left: 0.5rem; user-select: none; color: var(--text-primary);">
+                    <input type="checkbox" id="uploadUndownloadable" style="cursor: pointer;" />
+                    <span>上传时禁止下载</span>
+                </label>
             </div>
             <div id="serviceDocsUploadProgress" class="service-docs-upload-progress" aria-hidden="true">
                 <div id="serviceDocsUploadProgressLabel" class="service-docs-upload-progress-label">准备上传</div>
@@ -731,11 +735,12 @@
             serviceDocsList.innerHTML = children.map(entry => {
                 const isSelected = selected && normalizeServiceDocsPath(entry.path) === selected;
                 const typeText = entry.isDir ? '文件夹' : (entry.kind || '文件');
+                const lockHtml = entry.undownloadable ? '<span class="lock-icon" title="禁止用户下载" style="margin-left: 0.25rem; color: #ef4444;">🔒</span>' : '';
                 return `
                     <button type="button" class="service-docs-item ${entry.isDir ? 'folder' : 'file'} ${isSelected ? 'selected' : ''}" data-service-docs-path="${escapeHtml(entry.path)}" data-service-docs-is-dir="${entry.isDir ? '1' : '0'}">
                         <span class="service-docs-item-icon"><i class="fas ${serviceDocsIcon(entry)}"></i></span>
                         <span class="service-docs-item-main">
-                            <span class="service-docs-item-name">${escapeHtml(entry.name || '未命名')}</span>
+                            <span class="service-docs-item-name">${escapeHtml(entry.name || '未命名')}${lockHtml}</span>
                             <span class="service-docs-item-meta">${escapeHtml(typeText)} · ${escapeHtml(entry.sizeHuman || '0B')}</span>
                         </span>
                         <span class="service-docs-item-meta">${entry.isDir ? '<i class="fas fa-chevron-right"></i>' : ''}</span>
@@ -810,6 +815,14 @@
                             <div class="service-docs-detail-meta">
                                 ${escapeHtml(detailType)} · ${escapeHtml(path)}${isDir ? '/' : ''}<br>
                                 ${escapeHtml(entry.sizeHuman || '0B')}
+                                ${!isDir ? `
+                                    <div style="margin-top: 0.5rem; display: flex; align-items: center;">
+                                        <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; cursor: pointer; user-select: none; color: var(--text-primary);">
+                                            <input type="checkbox" id="fileUndownloadable" ${entry.undownloadable ? 'checked' : ''} style="cursor: pointer;" />
+                                            <span>禁止用户下载 (AI客服仍可读取)</span>
+                                        </label>
+                                    </div>
+                                ` : ''}
                             </div>
                         </div>
                         <div class="service-docs-detail-actions">
@@ -836,8 +849,17 @@
             }
             const saveBtn = document.getElementById('serviceDocsSaveSelectedBtn');
             const editor = document.getElementById('serviceDocsEditor');
+            const undownloadableCheckbox = document.getElementById('fileUndownloadable');
+            if (undownloadableCheckbox) {
+                undownloadableCheckbox.onchange = (e) => {
+                    toggleFileUndownloadable(entry, e.target.checked);
+                };
+            }
             if (saveBtn && editor) {
-                saveBtn.onclick = () => saveServiceDocsTextFile(entry, editor.value);
+                saveBtn.onclick = () => {
+                    const isUndown = undownloadableCheckbox ? undownloadableCheckbox.checked : false;
+                    saveServiceDocsTextFile(entry, editor.value, isUndown);
+                };
             }
         }
 
@@ -914,6 +936,9 @@
                         const formData = new FormData();
                         formData.append('file', file);
                         formData.append('path', serviceDocsJoinPath(serviceDocsCurrentPath, file.name, false));
+                        const uploadUndownCheckbox = document.getElementById('uploadUndownloadable');
+                        const isUndown = uploadUndownCheckbox ? uploadUndownCheckbox.checked : false;
+                        formData.append('undownloadable', isUndown ? "true" : "false");
 
                         const xhr = new XMLHttpRequest();
                         xhr.open('POST', '/api/admin/service-docs/upload', true);
@@ -981,17 +1006,35 @@
             await selectServiceDocsEntry(targetPath);
         }
 
-        async function saveServiceDocsTextFile(entry, content) {
+        async function saveServiceDocsTextFile(entry, content, undownloadable) {
             const resp = await fetch('/api/admin/service-docs/file', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...adminHeaders() },
-                body: JSON.stringify({ path: entry.path, content })
+                body: JSON.stringify({ path: entry.path, content, undownloadable: !!undownloadable })
             });
             if (!resp.ok) {
                 throw new Error(await resp.text() || `保存失败(${resp.status})`);
             }
             await loadServiceDocs(serviceDocsCurrentPath);
             await selectServiceDocsEntry(entry.path);
+        }
+
+        async function toggleFileUndownloadable(entry, undownloadable) {
+            try {
+                const resp = await fetch('/api/admin/service-docs/file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                    body: JSON.stringify({ path: entry.path, undownloadable })
+                });
+                if (!resp.ok) {
+                    throw new Error(await resp.text() || `操作失败(${resp.status})`);
+                }
+                await loadServiceDocs(serviceDocsCurrentPath);
+                await selectServiceDocsEntry(entry.path);
+            } catch (err) {
+                console.error(err);
+                alert(err.message || '操作失败');
+            }
         }
 
         async function downloadServiceDocsFile(entry) {

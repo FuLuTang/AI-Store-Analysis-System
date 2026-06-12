@@ -396,6 +396,7 @@ def _service_docs_kind(path: Path) -> str:
 
 def _service_docs_item(path: Path, root: Path) -> dict:
     rel = path.relative_to(root).as_posix()
+    from apps.api.src.download_guard import get_restricted_status
     item = {
         "path": join_domain_path(SERVICE_DOCS_DOMAIN, rel),
         "name": path.name,
@@ -403,6 +404,7 @@ def _service_docs_item(path: Path, root: Path) -> dict:
         "kind": _service_docs_kind(path),
         "size": 0 if path.is_dir() else path.stat().st_size,
         "sizeHuman": "0B" if path.is_dir() else f"{path.stat().st_size}B",
+        "undownloadable": get_restricted_status(rel, root),
     }
     if not path.is_dir():
         item["ext"] = path.suffix.lower()
@@ -1043,17 +1045,30 @@ async def save_admin_service_doc_file(request: Request, x_admin_token: Optional[
         raise HTTPException(status_code=400, detail="请求体必须是对象")
     path = str(payload.get("path") or "").strip()
     content = payload.get("content")
+    undownloadable = bool(payload.get("undownloadable", False))
     if not path:
         raise HTTPException(status_code=400, detail="缺少 path")
-    if not isinstance(content, str):
-        raise HTTPException(status_code=400, detail="content 必须是字符串")
-    target = _service_docs_abs_path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    
+    bytes_written = 0
+    if content is not None:
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="content 必须是字符串")
+        target = _service_docs_abs_path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        bytes_written = len(content.encode("utf-8"))
+        
+    from apps.api.src.download_guard import add_restricted_pattern, remove_restricted_pattern
+    rel_path = _service_docs_rel_path(path).as_posix()
+    if undownloadable:
+        add_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+    else:
+        remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+        
     return {
         "status": "ok",
         "path": path,
-        "bytesWritten": len(content.encode("utf-8")),
+        "bytesWritten": bytes_written,
     }
 
 
@@ -1061,6 +1076,7 @@ async def save_admin_service_doc_file(request: Request, x_admin_token: Optional[
 async def upload_admin_service_doc_file(
     file: UploadFile = File(...),
     path: Optional[str] = Form(default=None),
+    undownloadable: Optional[str] = Form(default="false"),
     x_admin_token: Optional[str] = Header(default=None),
 ):
     require_admin_authorization(x_admin_token)
@@ -1072,6 +1088,18 @@ async def upload_admin_service_doc_file(
     raw = await file.read()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(raw)
+    
+    is_undown = False
+    if undownloadable and str(undownloadable).lower() in ("true", "1", "yes", "on"):
+        is_undown = True
+        
+    from apps.api.src.download_guard import add_restricted_pattern, remove_restricted_pattern
+    rel_path = target.relative_to(SERVICE_DOCS_DIR).as_posix()
+    if is_undown:
+        add_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+    else:
+        remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+        
     return {
         "status": "ok",
         "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()),
@@ -1114,6 +1142,11 @@ def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Head
         shutil.rmtree(target)
     else:
         target.unlink()
+        
+    from apps.api.src.download_guard import remove_restricted_pattern
+    rel_path = _service_docs_rel_path(path).as_posix()
+    remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+    
     return {"status": "ok", "path": path}
 
 
@@ -1136,6 +1169,47 @@ async def broadcast_chatbot_notice(request: Request, x_admin_token: Optional[str
         "status": "ok",
         **result,
     }
+
+@app.get("/api/chatbot/resource/{domain}/{path:path}")
+def get_chatbot_resource(
+    domain: str,
+    path: str,
+    token: str = Query(...),
+):
+    session = resolve_session(token, task_type="chatbot")
+    
+    if domain not in ("chatbot", "service_docs"):
+        raise HTTPException(status_code=400, detail="Invalid domain")
+        
+    if domain == "chatbot":
+        root_dir = session.account_dir / "chatbot" / "workspace"
+    else:
+        root_dir = SERVICE_DOCS_DIR
+        
+    root_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        resolved_root = root_dir.resolve()
+        target_path = (resolved_root / path).resolve()
+        target_path.relative_to(resolved_root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    if not target_path.exists() or not target_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    from apps.api.src.download_guard import is_downloadable
+    rel_path = target_path.relative_to(resolved_root).as_posix()
+    if not is_downloadable(rel_path, root_dir):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    import mimetypes
+    media_type, _ = mimetypes.guess_type(target_path.name)
+    if not media_type:
+        media_type = "application/octet-stream"
+        
+    return FileResponse(str(target_path), media_type=media_type, filename=target_path.name)
+
 
 @app.get("/api/status")
 def get_status(

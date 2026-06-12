@@ -261,6 +261,20 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
     if task_type == "chatbot":
         tools.extend([
             _make_tool(
+                name="get_resource_link",
+                description="获取图片或文件的资源引用/下载链接。当你要向用户展示图片、提供文件下载链接时，必须调用此工具。传入带域前缀的路径（如 'service_docs/faq/logo.png' 或 'chatbot/workspace/report.xlsx'）。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "带域前缀的相对路径，例如 'service_docs/faq/logo.png' 或 'chatbot/workspace/report.xlsx'"
+                        }
+                    },
+                    "required": ["path"],
+                },
+            ),
+            _make_tool(
                 name="wait",
                 description=(
                     "登记一个未来时间点来自动唤醒当前客服 Agent，不会阻塞当前对话。"
@@ -402,6 +416,7 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
     from .tools.impl.context_impl import read_context_impl
     from .tools.impl.setup_impl import list_tables_impl, read_plan_short_impl
     from .tools.impl.plan_check_impl import read_plan_impl, check_plan_impl, run_step_check
+    from .tools.impl.search_impl import search_files_impl
 
     def _read_document_structure(path: str) -> str:
         return read_document_structure_impl(ws, path, emit_log=_emit_log)
@@ -558,6 +573,10 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
             view_system_function_doc_impl,
         )
         from .tools.impl.wait_impl import schedule_wait_impl
+        from .tools.impl.resource_link_impl import get_resource_link_impl
+
+        def _get_resource_link(path: str) -> str:
+            return get_resource_link_impl(ws, path, emit_log=_emit_log)
 
         def _list_system_functions() -> str:
             return list_system_functions_impl()
@@ -585,6 +604,7 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
             )
 
         tool_map.update({
+            "get_resource_link": _get_resource_link,
             "wait": _wait,
             "list_system_functions": _list_system_functions,
             "view_system_function_doc": _view_system_function_doc,

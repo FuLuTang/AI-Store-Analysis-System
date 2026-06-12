@@ -9,3 +9,5 @@ from .doc_impl import read_document_structure_impl, extract_document_tables_impl
 from .search_impl import search_files_impl
 from .sqlite_impl import query_sqlite_impl
 from .system_function_impl import list_system_functions_impl, view_system_function_doc_impl, execute_system_function_impl
+from .resource_link_impl import get_resource_link_impl
+

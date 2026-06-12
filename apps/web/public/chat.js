@@ -154,6 +154,10 @@
             if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
                 const renderer = new marked.Renderer();
                 const originalCode = renderer.code.bind(renderer);
+                renderer.image = (href, title, text) => {
+                    const cleanHref = href ? href.replace(/&amp;/g, '&') : '';
+                    return `<img src="${cleanHref}" alt="${text || ''}" title="${title || ''}" loading="lazy" onerror="this.style.display='none'" />`;
+                };
                 renderer.code = (code, lang, escaped) => {
                     let rawCode = code;
                     let language = lang;
@@ -343,7 +347,12 @@
                 if (msg.role === 'card') {
                     return renderChatCard(msg);
                 }
-                const rendered = formatChatContent(msg.content);
+                let content = msg.content || '';
+                const token = (typeof window.getAuthToken === 'function'
+                    ? window.getAuthToken()
+                    : (sessionStorage.getItem('authToken') || '')) || '';
+                content = content.replace(/\{\{AUTH_TOKEN\}\}/g, token);
+                const rendered = formatChatContent(content);
                 const isWide = rendered.includes('<table') || rendered.includes('class="mermaid"') || String(msg.content || '').includes('```mermaid');
                 const timestamp = formatChatTimestamp(msg);
                 const tokenCount = formatChatTokenCount(msg);
@@ -405,10 +414,15 @@
                     ${escapeChatHtml(option)}
                 </button>
             `).join('');
+            let detail = msg.detail || '';
+            const token = (typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '')) || '';
+            detail = detail.replace(/\{\{AUTH_TOKEN\}\}/g, token);
             return `
                 <div class="chat-card">
                     <div class="chat-card-title">${escapeChatHtml(msg.title || '请求确认')}</div>
-                    <div class="chat-card-detail">${formatChatContent(msg.detail || '')}</div>
+                    <div class="chat-card-detail">${formatChatContent(detail)}</div>
                     ${buttons ? `<div class="chat-card-options">${buttons}</div>` : ''}
                     ${formatChatTimestamp(msg) ? `<div class="chat-card-time">${formatChatTimestamp(msg)}</div>` : ''}
                 </div>

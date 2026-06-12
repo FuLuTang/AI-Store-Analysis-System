@@ -15,8 +15,8 @@ from ...workspace import Workspace
 SCHEDULER_FILENAME = "chatbot_scheduler.jsonl"
 SCHEDULER_LOCK = Lock()
 WAIT_MODES = {"delay", "alarm"}
-DEFAULT_DELAY_SECONDS = 3
-DEFAULT_RESUME_PROMPT = "请根据前文和最新上下文继续处理。"
+DEFAULT_DELAY_SECONDS = 1
+DEFAULT_RESUME_PROMPT = "继续"
 
 
 def _now() -> datetime:

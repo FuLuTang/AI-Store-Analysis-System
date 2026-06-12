@@ -420,6 +420,7 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
       {
         "role": "assistant",
         "content": "那个“导出聊天，”请问有什么可以帮您的吗？",
+        "token_count": 67,
         "datetime": "2026-06-09T17:01:00+08:00"
       },
       {
@@ -440,7 +441,7 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
     "last_update": "2026-06-09T17:01:05+08:00"
   }
   ```
-  > 注意！只包含以上三种role，且不显示其他字段。
+  > 注意！只包含以上三种role；`assistant` 消息可额外携带 `token_count` 字段，其他历史字段按现有实现透传。
 - **Notice 与 Card 映射规则**:
   - 系统 `notice` 消息会自动转换为前台展示的提示小字。
   - 角色为 `system` 且包含 `title` 字段的系统消息会被转换为 `card` 类型，用于展示交互式卡片（如授权操作卡）。若已完成选择，则带 `choice` 字段指明结果。
@@ -542,7 +543,7 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
   - **`account_tokens.jsonl`**: 会话 Token 状态追加日志（创建、活跃、登出记录）。
   - **`profile.json`**: 用户的偏好设置（如诊断精度配置）。
   - **`analysis_params.json`**: 用户自定义的分析约束。
-  - **`chatbot/chat.jsonl`**: 客服会话聊天全量历史。
+  - **`chatbot/chat.jsonl`**: 客服会话聊天全量历史；`assistant` 消息会附带本轮 `token_count`（如有）。
   - **`chatbot/attachments.jsonl`**: 上传的聊天附件索引数据库。
   - **`chatbot/files/`**: 存储具体的聊天原始附件。
   - **`chatbot/workspace/`**: Chatbot Agent 执行分析计算的隔离沙箱区。

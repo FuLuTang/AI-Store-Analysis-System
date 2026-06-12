@@ -159,7 +159,7 @@
 
         function clearAuthAndReturn() {
             sessionStorage.removeItem('accountName');
-            if (typeof window.clearAuthToken === 'function') window.clearAuthToken();
+            sessionStorage.removeItem('authToken');
             window.location.href = '/login.html';
         }
 

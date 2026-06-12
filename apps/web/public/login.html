@@ -242,6 +242,30 @@
             document.getElementById('spinner').style.display = loading ? 'block' : 'none';
             document.querySelectorAll('button').forEach(b => b.disabled = loading);
         }
+
+        // Auto login with token from cookie on page load
+        (async function autoLogin() {
+            const token = typeof window.getAuthToken === 'function' ? window.getAuthToken() : sessionStorage.getItem('authToken');
+            if (!token) return;
+            setLoading(true);
+            try {
+                const r = await fetch('/api/auth/verify', {
+                    method: 'POST',
+                    headers: { 'X-Auth-Token': token }
+                });
+                if (r.ok) {
+                    const data = await r.json();
+                    if (data.status === 'ok' && data.account) {
+                        sessionStorage.setItem('accountName', data.account);
+                        window.location.href = '/';
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.error('Auto login check failed:', e);
+            }
+            setLoading(false);
+        })();
     </script>
 </body>
 </html>

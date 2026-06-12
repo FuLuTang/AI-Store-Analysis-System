@@ -61,6 +61,7 @@ MODEL_MESSAGE_KEYS = {
     "choice",
 }
 HISTORY_EXTRA_KEYS = {"attachments"}
+HISTORY_SCALAR_KEYS = {"token_count"}
 NOTICE_NAME = "notice"
 ASK_TOKEN_AUTH_NAME = "ask_token_auth"
 SERVICE_TOKEN_TOOL_NAME = "get_user_service_token"
@@ -257,6 +258,10 @@ def _public_history_messages(messages: list[dict]) -> list[dict]:
             msg_time = _history_time(message)
             if msg_time:
                 public_msg["datetime"] = msg_time
+            if role == "assistant":
+                token_count = message.get("token_count")
+                if token_count is not None:
+                    public_msg["token_count"] = token_count
             attachments = message.get("attachments")
             if isinstance(attachments, list):
                 public_msg["attachments"] = [
@@ -294,6 +299,10 @@ def _clone_message_fields(message: dict, *, include_datetime: bool) -> dict:
         for key in HISTORY_EXTRA_KEYS:
             value = message.get(key)
             if isinstance(value, list):
+                cloned[key] = value
+        for key in HISTORY_SCALAR_KEYS:
+            value = message.get(key)
+            if value is not None:
                 cloned[key] = value
 
     if role == "assistant" and cloned.get("content") is None:

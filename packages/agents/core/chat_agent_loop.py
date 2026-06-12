@@ -131,6 +131,14 @@ class ChatAgentLoop:
 
                 assistant_message = self._normalize_assistant_message(sr)
                 assistant_message["datetime"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                if sr.usage:
+                    token_total = getattr(sr.usage, "total_tokens", 0) or 0
+                    if not token_total:
+                        prompt_tokens = getattr(sr.usage, "prompt_tokens", 0) or 0
+                        completion_tokens = getattr(sr.usage, "completion_tokens", 0) or 0
+                        token_total = prompt_tokens + completion_tokens
+                    if token_total:
+                        assistant_message["token_count"] = int(token_total)
                 round_messages.append(assistant_message)
                 self.messages = round_messages
                 self._persist_messages([assistant_message])

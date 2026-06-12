@@ -287,6 +287,13 @@
             return dt.toLocaleString('zh-CN', { hour12: false });
         }
 
+        function formatChatTokenCount(record) {
+            if (!record || record.role !== 'assistant') return '';
+            const value = Number(record.token_count);
+            if (!Number.isFinite(value) || value <= 0) return '';
+            return `token: ${Math.floor(value)}`;
+        }
+
         function setChatMessages(messages) {
             chatMessagesCache = (messages || []).map(normalizeChatRecord).filter(Boolean);
             updateLastChatUpdate(chatMessagesCache);
@@ -338,11 +345,14 @@
                 }
                 const rendered = formatChatContent(msg.content);
                 const isWide = rendered.includes('<table') || rendered.includes('class="mermaid"') || String(msg.content || '').includes('```mermaid');
+                const timestamp = formatChatTimestamp(msg);
+                const tokenCount = formatChatTokenCount(msg);
+                const metaText = [timestamp, tokenCount].filter(Boolean).join(' ');
                 return `
                 <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
                     <div class="chat-message-role">
                         ${msg.role === 'user' ? '你' : 'AI'}
-                        ${formatChatTimestamp(msg) ? ` · ${formatChatTimestamp(msg)}` : ''}
+                        ${metaText ? ` · ${metaText}` : ''}
                     </div>
                     <div class="chat-message-row ${msg.role === 'user' ? 'chat-message-row-user' : 'chat-message-row-assistant'}">
                         ${msg.role === 'user' ? `

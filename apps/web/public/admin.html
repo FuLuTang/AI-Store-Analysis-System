@@ -113,6 +113,52 @@
             font-size: 0.82rem;
         }
 
+        .service-docs-upload-progress {
+            display: none;
+            gap: 0.45rem;
+            align-items: center;
+            padding: 0.7rem 1.15rem 0.8rem;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .service-docs-upload-progress.open {
+            display: flex;
+        }
+
+        .service-docs-upload-progress-label {
+            min-width: 110px;
+            flex: 0 0 auto;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            white-space: nowrap;
+        }
+
+        .service-docs-upload-progress-track {
+            flex: 1;
+            height: 8px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: rgba(148, 163, 184, 0.18);
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+        }
+
+        .service-docs-upload-progress-bar {
+            width: 0%;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--primary), var(--accent));
+            transition: width 0.12s ease;
+        }
+
+        .service-docs-upload-progress-value {
+            min-width: 42px;
+            text-align: right;
+            color: var(--text);
+            font-size: 0.78rem;
+            font-variant-numeric: tabular-nums;
+        }
+
         .service-docs-body {
             flex: 1;
             min-height: 0;
@@ -443,6 +489,13 @@
                 <button class="btn-secondary" id="serviceDocsNewTextBtn" type="button"><i class="fas fa-file-pen"></i> 新建文本</button>
                 <input type="file" id="serviceDocsUploadInput" hidden multiple>
             </div>
+            <div id="serviceDocsUploadProgress" class="service-docs-upload-progress" aria-hidden="true">
+                <div id="serviceDocsUploadProgressLabel" class="service-docs-upload-progress-label">准备上传</div>
+                <div class="service-docs-upload-progress-track">
+                    <div id="serviceDocsUploadProgressBar" class="service-docs-upload-progress-bar"></div>
+                </div>
+                <div id="serviceDocsUploadProgressValue" class="service-docs-upload-progress-value">0%</div>
+            </div>
             <div class="service-docs-body">
                 <aside class="service-docs-pane service-docs-list-pane">
                     <div class="service-docs-list-head">
@@ -475,6 +528,10 @@
         const serviceDocsUploadInput = document.getElementById('serviceDocsUploadInput');
         const serviceDocsNewFolderBtn = document.getElementById('serviceDocsNewFolderBtn');
         const serviceDocsNewTextBtn = document.getElementById('serviceDocsNewTextBtn');
+        const serviceDocsUploadProgress = document.getElementById('serviceDocsUploadProgress');
+        const serviceDocsUploadProgressLabel = document.getElementById('serviceDocsUploadProgressLabel');
+        const serviceDocsUploadProgressBar = document.getElementById('serviceDocsUploadProgressBar');
+        const serviceDocsUploadProgressValue = document.getElementById('serviceDocsUploadProgressValue');
         const serviceDocsBreadcrumb = document.getElementById('serviceDocsBreadcrumb');
         const serviceDocsStatus = document.getElementById('serviceDocsStatus');
         const serviceDocsCount = document.getElementById('serviceDocsCount');
@@ -488,6 +545,7 @@
         let serviceDocsSelectedEntry = null;
         let serviceDocsSelectedText = '';
         let serviceDocsLoading = false;
+        let serviceDocsUploadState = null;
         adminTokenInput.value = localStorage.getItem('adminToken') || '';
         noticeContentInput.value = localStorage.getItem('adminNoticeDraft') || '';
 
@@ -532,6 +590,37 @@
             if (!cleanName) return cleanBase;
             const joined = `${cleanBase}${cleanName}`;
             return isDir ? normalizeServiceDocsFolderPath(joined) : joined;
+        }
+
+        function setServiceDocsUploadProgress(visible, progress = 0, label = '准备上传') {
+            const pct = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+            if (serviceDocsUploadProgress) {
+                serviceDocsUploadProgress.classList.toggle('open', !!visible);
+                serviceDocsUploadProgress.setAttribute('aria-hidden', visible ? 'false' : 'true');
+            }
+            if (serviceDocsUploadProgressLabel) {
+                serviceDocsUploadProgressLabel.textContent = label;
+            }
+            if (serviceDocsUploadProgressBar) {
+                serviceDocsUploadProgressBar.style.width = `${pct}%`;
+            }
+            if (serviceDocsUploadProgressValue) {
+                serviceDocsUploadProgressValue.textContent = `${pct}%`;
+            }
+        }
+
+        function resetServiceDocsUploadProgress() {
+            serviceDocsUploadState = null;
+            setServiceDocsUploadProgress(false, 0, '准备上传');
+        }
+
+        function updateServiceDocsUploadProgress(currentFile, loadedBytes, totalBytes) {
+            if (!serviceDocsUploadState || totalBytes <= 0) {
+                setServiceDocsUploadProgress(true, 0, currentFile || '正在上传');
+                return;
+            }
+            const pct = Math.max(0, Math.min(100, (loadedBytes / totalBytes) * 100));
+            setServiceDocsUploadProgress(true, pct, currentFile || '正在上传');
         }
 
         function isServiceDocsTextLike(entry) {
@@ -814,20 +903,51 @@
         async function uploadServiceDocsFiles(files) {
             const list = Array.from(files || []);
             if (list.length === 0) return;
-            for (const file of list) {
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('path', serviceDocsJoinPath(serviceDocsCurrentPath, file.name, false));
-                const resp = await fetch('/api/admin/service-docs/upload', {
-                    method: 'POST',
-                    headers: adminHeaders(),
-                    body: formData
-                });
-                if (!resp.ok) {
-                    throw new Error(await resp.text() || `上传失败(${resp.status})`);
+            const totalBytes = list.reduce((sum, file) => sum + (file.size || 0), 0);
+            let uploadedBytes = 0;
+            serviceDocsUploadState = { totalBytes, uploadedBytes, currentFile: '' };
+            setServiceDocsUploadProgress(true, 0, '准备上传');
+
+            try {
+                for (const file of list) {
+                    const uploaded = await new Promise((resolve, reject) => {
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        formData.append('path', serviceDocsJoinPath(serviceDocsCurrentPath, file.name, false));
+
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/api/admin/service-docs/upload', true);
+                        Object.entries(adminHeaders()).forEach(([key, value]) => {
+                            xhr.setRequestHeader(key, value);
+                        });
+
+                        xhr.upload.onprogress = (event) => {
+                            const fileLoaded = event.lengthComputable ? event.loaded : 0;
+                            const nextLoaded = uploadedBytes + fileLoaded;
+                            updateServiceDocsUploadProgress(file.name, nextLoaded, totalBytes);
+                        };
+
+                        xhr.onload = () => {
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                uploadedBytes += file.size || 0;
+                                serviceDocsUploadState.uploadedBytes = uploadedBytes;
+                                updateServiceDocsUploadProgress(file.name, uploadedBytes, totalBytes);
+                                resolve(true);
+                                return;
+                            }
+                            reject(new Error(xhr.responseText || `上传失败(${xhr.status})`));
+                        };
+
+                        xhr.onerror = () => reject(new Error('上传失败：网络异常'));
+                        xhr.onabort = () => reject(new Error('上传已取消'));
+                        xhr.send(formData);
+                    });
+                    if (!uploaded) break;
                 }
+                await loadServiceDocs(serviceDocsCurrentPath);
+            } finally {
+                resetServiceDocsUploadProgress();
             }
-            await loadServiceDocs(serviceDocsCurrentPath);
         }
 
         async function createServiceDocsFolder() {
@@ -933,6 +1053,7 @@
                 await uploadServiceDocsFiles(serviceDocsUploadInput.files || []);
                 serviceDocsUploadInput.value = '';
             } catch (err) {
+                resetServiceDocsUploadProgress();
                 console.error(err);
                 alert(err.message || '上传失败');
             }

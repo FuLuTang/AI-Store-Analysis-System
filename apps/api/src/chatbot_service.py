@@ -331,12 +331,33 @@ def is_history_message_compressed(
     return index < compressed_prefix_length
 
 
+def _tool_call_ids_from_message(message: dict) -> set[str]:
+    tool_call_ids: set[str] = set()
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return tool_call_ids
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        tool_call_id = str(call.get("id") or "").strip()
+        if tool_call_id:
+            tool_call_ids.add(tool_call_id)
+    return tool_call_ids
+
+
 def _compress_history_for_model(history: list[dict]) -> list[dict]:
     total = len(history)
+    compressed_tool_call_ids: set[str] = set()
+    for index, message in enumerate(history):
+        if is_history_message_compressed(total, index) and str(message.get("role", "")).strip().lower() == "assistant":
+            compressed_tool_call_ids.update(_tool_call_ids_from_message(message))
+
     compressed_history: list[dict] = []
     for index, message in enumerate(history):
         role = str(message.get("role", "")).strip().lower()
         if not is_history_message_compressed(total, index):
+            if role == "tool" and str(message.get("tool_call_id") or "").strip() in compressed_tool_call_ids:
+                continue
             compressed_history.append(message)
             continue
 
@@ -345,6 +366,9 @@ def _compress_history_for_model(history: list[dict]) -> list[dict]:
             continue
 
         if role == "tool":
+            tool_call_id = str(message.get("tool_call_id") or "").strip()
+            if tool_call_id in compressed_tool_call_ids:
+                continue
             continue
 
         if role == "assistant":

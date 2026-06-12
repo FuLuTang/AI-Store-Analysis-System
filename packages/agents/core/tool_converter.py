@@ -113,7 +113,7 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         ),
         _make_tool(
             name="list_files",
-            description="列出 workspace 子目录下的文件。多域工作区中 subdir 也需要带域名前缀，例如 'chatbot/' 或 'service_docs/'.",
+            description="按文件域列出 workspace 子目录下的文件和目录，返回每个域的 root 绝对路径、条目绝对路径和统计信息；支持空目录。多域工作区中 subdir 需带域名前缀，例如 'chatbot/' 或 'service_docs/'.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -126,20 +126,20 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         ),
         _make_tool(
             name="search",
-            description="在 workspace 内检索文本或正则模式。domain 可取 'all'、'chat_history'，或指定某个域路径（例如 'chatbot/'、'service_docs/'）。若 domain='chat_history'，会在聊天历史中搜索，并保留 reasoning_content 以便匹配。",
+            description="在 workspace 内按文件域检索名称、文本内容和常见文档/数据文件的轻量结构预览。domain 默认 all，可取 'all'、'chat_history'，或指定某个域路径（例如 'chatbot/'、'service_docs/'）。若 domain='chat_history'，会在聊天历史中搜索，并保留 reasoning_content 以便匹配。",
             parameters={
                 "type": "object",
                 "properties": {
                     "domain": {
                         "type": "string",
-                        "description": "检索范围；可选 'all'、'chat_history'，或指定域路径如 'chatbot/'、'service_docs/'",
+                        "description": "检索范围；默认 'all'。可选 'all'、'chat_history'，或指定域路径如 'chatbot/'、'service_docs/'",
                     },
                     "pattern": {"type": "string", "description": "要搜索的关键词或正则"},
                     "path": {"type": "string", "description": "可选：限定在某个带域名的路径下搜索"},
                     "regex": {"type": "boolean", "description": "是否按正则搜索"},
                     "max_matches": {"type": "integer", "description": "最多返回多少条匹配"},
                 },
-                "required": ["domain", "pattern"],
+                "required": ["pattern"],
             },
         ),
         # ── Python 脚本执行 ──

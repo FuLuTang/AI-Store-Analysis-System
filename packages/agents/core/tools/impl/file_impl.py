@@ -4,7 +4,7 @@ import shutil
 from typing import Callable, Optional
 from pathlib import Path
 from ...workspace import Workspace
-from ...file_domains import join_domain_path, split_domain_path
+from ...file_domains import DEFAULT_FILE_DOMAINS, join_domain_path, split_domain_path
 
 
 DEFAULT_READ_LINES = 800
@@ -20,6 +20,125 @@ def _format_size(size: int) -> str:
         if value < 1024 or unit == units[-1]:
             return f"{value:.1f}{unit}" if unit != "B" else f"{size}B"
         value /= 1024
+
+
+def _classify_file(path: Path) -> tuple[str, str]:
+    ext = path.suffix.lower()
+    if ext in {".xlsx", ".xls"}:
+        kind = "excel"
+    elif ext == ".csv":
+        kind = "csv"
+    elif ext == ".pdf":
+        kind = "pdf"
+    elif ext in {".docx", ".doc"}:
+        kind = "word"
+    elif ext in {".txt", ".log"}:
+        kind = "text"
+    elif ext == ".md":
+        kind = "markdown"
+    elif ext == ".json":
+        kind = "json"
+    elif ext == ".jsonl":
+        kind = "jsonl"
+    elif ext in {".sqlite", ".db"}:
+        kind = "sqlite"
+    elif ext in {".zip", ".tar", ".gz", ".rar"}:
+        kind = "archive"
+    elif ext == ".py":
+        kind = "python"
+    else:
+        kind = "other"
+
+    if kind in {"excel", "csv", "pdf", "word", "json", "jsonl", "markdown", "sqlite", "archive"}:
+        rec_tool = "read_document_structure"
+    elif kind == "text":
+        rec_tool = "read_file" if path.stat().st_size < 100 * 1024 else "search"
+    elif kind == "python":
+        rec_tool = "read_file"
+    else:
+        rec_tool = "run_python"
+    return kind, rec_tool
+
+
+def _is_hidden_relative(path: Path, root: Path) -> bool:
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    return any(part.startswith(".") for part in rel_parts)
+
+
+def _domain_entry_path(domain: str, domain_root: Path, path: Path) -> str:
+    rel = str(path.relative_to(domain_root)).replace("\\", "/")
+    return join_domain_path(domain, rel)
+
+
+def _list_domain_entries(domain: str, domain_root: Path, target: Path) -> dict:
+    entries = []
+    totals = {
+        "files": 0,
+        "directories": 0,
+        "empty_directories": 0,
+        "bytes": 0,
+    }
+
+    candidates = [target]
+    if target.is_dir():
+        candidates.extend(sorted(target.rglob("*")))
+
+    for p in candidates:
+        if p == target and target.is_dir():
+            continue
+        if _is_hidden_relative(p, domain_root):
+            continue
+
+        path_label = _domain_entry_path(domain, domain_root, p)
+        if p.is_dir():
+            visible_children = [
+                child for child in p.iterdir()
+                if not child.name.startswith(".")
+            ]
+            is_empty = len(visible_children) == 0
+            totals["directories"] += 1
+            if is_empty:
+                totals["empty_directories"] += 1
+            entries.append({
+                "path": path_label,
+                "absolute_path": str(p.resolve()),
+                "name": p.name,
+                "type": "directory",
+                "children_count": len(visible_children),
+                "is_empty": is_empty,
+            })
+            continue
+
+        if not p.is_file():
+            continue
+
+        size = p.stat().st_size
+        kind, rec_tool = _classify_file(p)
+        totals["files"] += 1
+        totals["bytes"] += size
+        entries.append({
+            "path": path_label,
+            "absolute_path": str(p.resolve()),
+            "name": p.name,
+            "type": "file",
+            "size": size,
+            "size_human": _format_size(size),
+            "ext": p.suffix.lower(),
+            "kind": kind,
+            "recommended_tool": rec_tool,
+        })
+
+    totals["bytes_human"] = _format_size(totals["bytes"])
+    return {
+        "domain": domain,
+        "root_path": _domain_entry_path(domain, domain_root, target),
+        "root_absolute_path": str(target.resolve()),
+        "entries": entries,
+        "totals": totals,
+    }
 
 
 def _is_binary_sample(sample: bytes) -> bool:
@@ -332,132 +451,29 @@ def list_files_impl(
     ws: Workspace,
     subdir: str = "",
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
-) -> list[dict]:
-    files = []
+) -> dict:
     try:
-        if ws.has_multi_read_roots:
-            if subdir:
-                target = ws.resolve_read(subdir)
-                domain, _ = split_domain_path(subdir, allowed_domains=ws.read_roots.keys())
-                domains = [(domain, target)]
+        read_roots = ws.read_roots
+        if subdir:
+            if ws.has_multi_read_roots:
+                domain, _ = split_domain_path(subdir, allowed_domains=read_roots.keys())
             else:
-                domains = [(domain, root.resolve()) for domain, root in ws.read_roots.items()]
-            for domain, root in domains:
-                candidates = [root] if root.is_file() else sorted(root.rglob("*"))
-                for p in candidates:
-                    if not p.is_file():
-                        continue
-                    rel_parts = p.relative_to(root).parts
-                    if any(part.startswith(".") for part in rel_parts):
-                        continue
-
-                    size = p.stat().st_size
-                    ext = p.suffix.lower()
-                    if ext in {".xlsx", ".xls"}:
-                        kind = "excel"
-                    elif ext == ".csv":
-                        kind = "csv"
-                    elif ext == ".pdf":
-                        kind = "pdf"
-                    elif ext in {".docx", ".doc"}:
-                        kind = "word"
-                    elif ext in {".txt", ".log"}:
-                        kind = "text"
-                    elif ext == ".md":
-                        kind = "markdown"
-                    elif ext == ".json":
-                        kind = "json"
-                    elif ext == ".jsonl":
-                        kind = "jsonl"
-                    elif ext in {".sqlite", ".db"}:
-                        kind = "sqlite"
-                    elif ext in {".zip", ".tar", ".gz", ".rar"}:
-                        kind = "archive"
-                    elif ext == ".py":
-                        kind = "python"
-                    else:
-                        kind = "other"
-
-                    if kind in {"excel", "csv", "pdf", "word", "json", "jsonl", "markdown", "sqlite", "archive"}:
-                        rec_tool = "read_document_structure"
-                    elif kind == "text":
-                        rec_tool = "read_file" if size < 100 * 1024 else "search"
-                    elif kind == "python":
-                        rec_tool = "read_file"
-                    else:
-                        rec_tool = "run_python"
-
-                    files.append({
-                        "path": join_domain_path(domain, str(p.relative_to(root)).replace("\\", "/")),
-                        "name": p.name,
-                        "size": size,
-                        "size_human": _format_size(size),
-                        "ext": ext,
-                        "kind": kind,
-                        "recommended_tool": rec_tool
-                    })
+                domain = DEFAULT_FILE_DOMAINS[0]
+            target = ws.resolve_read(subdir)
+            domains = [(domain, read_roots[domain].resolve(), target)]
         else:
-            target = ws.resolve_read(subdir) if subdir else ws.read_root.resolve()
-            ws_dir_abs = ws.read_root.resolve()
-            candidates = [target] if target.is_file() else sorted(target.rglob("*"))
-            for p in candidates:
-                if not p.is_file():
-                    continue
-                rel_parts = p.relative_to(ws_dir_abs).parts
-                if any(part.startswith(".") for part in rel_parts):
-                    continue
-
-                size = p.stat().st_size
-                ext = p.suffix.lower()
-
-                if ext in {".xlsx", ".xls"}:
-                    kind = "excel"
-                elif ext == ".csv":
-                    kind = "csv"
-                elif ext == ".pdf":
-                    kind = "pdf"
-                elif ext in {".docx", ".doc"}:
-                    kind = "word"
-                elif ext in {".txt", ".log"}:
-                    kind = "text"
-                elif ext == ".md":
-                    kind = "markdown"
-                elif ext == ".json":
-                    kind = "json"
-                elif ext == ".jsonl":
-                    kind = "jsonl"
-                elif ext in {".sqlite", ".db"}:
-                    kind = "sqlite"
-                elif ext in {".zip", ".tar", ".gz", ".rar"}:
-                    kind = "archive"
-                elif ext == ".py":
-                    kind = "python"
-                else:
-                    kind = "other"
-
-                if kind in {"excel", "csv", "pdf", "word", "json", "jsonl", "markdown", "sqlite", "archive"}:
-                    rec_tool = "read_document_structure"
-                elif kind == "text":
-                    if size < 100 * 1024:
-                        rec_tool = "read_file"
-                    else:
-                        rec_tool = "search"
-                elif kind == "python":
-                    rec_tool = "read_file"
-                else:
-                    rec_tool = "run_python"
-
-                files.append({
-                    "path": str(p.relative_to(ws_dir_abs)),
-                    "name": p.name,
-                    "size": size,
-                    "size_human": _format_size(size),
-                    "ext": ext,
-                    "kind": kind,
-                    "recommended_tool": rec_tool
-                })
+            domains = [
+                (domain, root.resolve(), root.resolve())
+                for domain, root in read_roots.items()
+            ]
+        payload = {
+            "domains": [
+                _list_domain_entries(domain, domain_root, target)
+                for domain, domain_root, target in domains
+            ]
+        }
     except ValueError as e:
-        return [{"error": str(e), "path": subdir or ""}]
+        return {"error": str(e), "path": subdir or ""}
     if emit_log:
         emit_log("custom_agent", {"level": "info", "message": f"✅ list_files 调用成功: {subdir or '.'}"})
-    return files
+    return payload

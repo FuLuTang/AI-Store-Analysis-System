@@ -1,22 +1,15 @@
 """底层实现：在 workspace 内搜索文本、正则模式或聊天历史记录"""
 import json
 import re
+import sqlite3
+import tarfile
+import zipfile
 from pathlib import Path
 from ...workspace import Workspace
-from ...file_domains import join_domain_path
+from ...file_domains import DEFAULT_FILE_DOMAINS, join_domain_path, split_domain_path
 CHAT_HISTORY_FILENAME = "chat.jsonl"
-
-
-def _is_binary(path: Path) -> bool:
-    try:
-        with path.open("rb") as fh:
-            sample = fh.read(1024)
-        if b"\0" in sample:
-            return True
-        sample.decode("utf-8")
-        return False
-    except Exception:
-        return True
+MAX_PREVIEW_CHARS = 1200
+MAX_TEXT_LINES = 2000
 
 
 def _history_time(message: dict) -> str:
@@ -171,27 +164,181 @@ def _search_serialized_lines(lines: list[dict], pattern: str, regex: bool, max_m
     return output
 
 
-def _collect_files_for_search(target: Path, rel_prefix: str) -> list[tuple[Path, str]]:
-    files: list[tuple[Path, str]] = []
-    if target.is_file():
-        files.append((target, rel_prefix))
-        return files
+def _is_hidden_relative(path: Path, root: Path) -> bool:
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    return any(part.startswith(".") for part in rel_parts)
 
+
+def _domain_path(domain: str, root: Path, path: Path) -> str:
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    return join_domain_path(domain, rel)
+
+
+def _match_text(text: str, rx, pattern_lower: str | None) -> bool:
+    if rx:
+        return bool(rx.search(text))
+    return bool(pattern_lower and pattern_lower in text.lower())
+
+
+def _preview(text: str, limit: int = 500) -> str:
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _iter_text_matches(path: Path, rx, pattern_lower: str | None, remaining: int):
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line_idx, line in enumerate(fh, start=1):
+                if line_idx > MAX_TEXT_LINES or remaining <= 0:
+                    break
+                if _match_text(line, rx, pattern_lower):
+                    yield {
+                        "match_type": "content",
+                        "line": line_idx,
+                        "text": _preview(line),
+                    }
+                    remaining -= 1
+    except Exception:
+        return
+
+
+def _extract_xlsx_preview(path: Path) -> str:
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        parts = []
+        for sheet_name in wb.sheetnames[:5]:
+            ws = wb[sheet_name]
+            parts.append(f"sheet: {sheet_name}")
+            for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                if row_idx > 5:
+                    break
+                values = [str(value) for value in row if value is not None]
+                if values:
+                    parts.append(" | ".join(values[:20]))
+        return "\n".join(parts)[:MAX_PREVIEW_CHARS]
+    finally:
+        wb.close()
+
+
+def _extract_pdf_preview(path: Path) -> str:
+    import pdfplumber
+    parts = []
+    with pdfplumber.open(path) as pdf:
+        for page_idx, page in enumerate(pdf.pages[:3], start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                parts.append(f"page {page_idx}: {text.strip()}")
+    return "\n".join(parts)[:MAX_PREVIEW_CHARS]
+
+
+def _extract_docx_preview(path: Path) -> str:
+    from docx import Document
+    doc = Document(path)
+    parts = []
+    for para in doc.paragraphs[:30]:
+        text = para.text.strip()
+        if text:
+            style = para.style.name if para.style else ""
+            parts.append(f"{style}: {text}" if style else text)
+    for table_idx, table in enumerate(doc.tables[:3], start=1):
+        if table.rows:
+            cells = [cell.text.strip() for cell in table.rows[0].cells if cell.text.strip()]
+            if cells:
+                parts.append(f"table {table_idx}: {' | '.join(cells)}")
+    return "\n".join(parts)[:MAX_PREVIEW_CHARS]
+
+
+def _extract_sqlite_preview(path: Path) -> str:
+    conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        parts = []
+        for (table_name,) in cursor.fetchall()[:20]:
+            cursor.execute(f"PRAGMA table_info(\"{table_name}\")")
+            cols = [row[1] for row in cursor.fetchall()]
+            parts.append(f"table: {table_name} columns: {', '.join(cols)}")
+        return "\n".join(parts)[:MAX_PREVIEW_CHARS]
+    finally:
+        conn.close()
+
+
+def _extract_archive_preview(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()[:100]
+        return "\n".join(names)[:MAX_PREVIEW_CHARS]
+    if ext in {".tar", ".gz"}:
+        with tarfile.open(path) as archive:
+            names = archive.getnames()[:100]
+        return "\n".join(names)[:MAX_PREVIEW_CHARS]
+    if ext == ".rar":
+        import rarfile
+        with rarfile.RarFile(path) as archive:
+            names = archive.namelist()[:100]
+        return "\n".join(names)[:MAX_PREVIEW_CHARS]
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()[:100]
+    return "\n".join(names)[:MAX_PREVIEW_CHARS]
+
+
+def _structured_preview(path: Path) -> tuple[str, str]:
+    ext = path.suffix.lower()
+    if ext in {".txt", ".log", ".md", ".py", ".csv", ".json", ".jsonl"}:
+        return "text", ""
+    if ext in {".xlsx", ".xls"}:
+        return "excel_preview", _extract_xlsx_preview(path)
+    if ext == ".pdf":
+        return "pdf_preview", _extract_pdf_preview(path)
+    if ext in {".docx", ".doc"}:
+        return "word_preview", _extract_docx_preview(path)
+    if ext in {".sqlite", ".db"}:
+        return "sqlite_preview", _extract_sqlite_preview(path)
+    if ext in {".zip", ".tar", ".gz", ".rar"}:
+        return "archive_preview", _extract_archive_preview(path)
+    return "unsupported", ""
+
+
+def _collect_domain_items(domain: str, root: Path, target: Path) -> tuple[list[Path], list[Path]]:
+    directories = []
+    files = []
+    candidates = [target]
     if target.is_dir():
-        for p in sorted(target.rglob("*")):
-            if not p.is_file():
-                continue
-            rel_parts = p.relative_to(target).parts
-            if any(part.startswith(".") for part in rel_parts):
-                continue
-            rel_path = str(p.relative_to(target)).replace("\\", "/")
-            label = rel_prefix.rstrip("/")
-            if label:
-                label = f"{label}/{rel_path}"
-            else:
-                label = rel_path
-            files.append((p, label))
-    return files
+        candidates.extend(sorted(target.rglob("*")))
+    for p in candidates:
+        if _is_hidden_relative(p, root):
+            continue
+        if p.is_dir():
+            directories.append(p)
+        elif p.is_file():
+            files.append(p)
+    return directories, files
+
+
+def _resolve_search_domains(ws: Workspace, domain: str, path: str | None):
+    read_roots = ws.read_roots
+    if domain not in {"", "all", "chat_history"} and path is None:
+        path = domain
+
+    if path:
+        target = ws.resolve_read(path)
+        if ws.has_multi_read_roots:
+            domain_name, _ = split_domain_path(path, allowed_domains=read_roots.keys())
+        else:
+            domain_name = DEFAULT_FILE_DOMAINS[0]
+        return [(domain_name, read_roots[domain_name].resolve(), target)]
+
+    return [
+        (domain_name, root.resolve(), root.resolve())
+        for domain_name, root in read_roots.items()
+    ]
 
 
 def search_files_impl(
@@ -220,42 +367,6 @@ def search_files_impl(
             return json.dumps({"error": f"无效的正则表达式: {e}"}, ensure_ascii=False)
         return json.dumps(output, ensure_ascii=False)
 
-    if domain not in {"", "all"} and path is None:
-        path = domain
-
-    if path:
-        try:
-            target_path = ws.resolve_read(path)
-        except ValueError as e:
-            return json.dumps({"error": str(e), "path": path}, ensure_ascii=False)
-        if not target_path.exists():
-            return json.dumps({"error": f"路径不存在: {path}"}, ensure_ascii=False)
-        files = _collect_files_for_search(target_path, path)
-    else:
-        files = []
-        if ws.has_multi_read_roots:
-            for domain, root in ws.read_roots.items():
-                for p in sorted(root.rglob("*")):
-                    if not p.is_file():
-                        continue
-                    rel_parts = p.relative_to(root).parts
-                    if any(part.startswith(".") for part in rel_parts):
-                        continue
-                    files.append((domain, p, root))
-        else:
-            for p in sorted(ws.read_root.rglob("*")):
-                if not p.is_file():
-                    continue
-                rel_parts = p.relative_to(ws.read_root).parts
-                # 排除隐藏文件/目录（如 .git, .gemini 等）
-                if any(part.startswith(".") for part in rel_parts):
-                    continue
-                files.append(p)
-
-    results = []
-    global_matches_count = 0
-    hit_limit = False
-
     # 编译正则或转换子串模式
     rx = None
     pattern_lower = None
@@ -267,74 +378,136 @@ def search_files_impl(
     else:
         pattern_lower = pattern.lower()
 
-    for item in files:
-        if hit_limit:
-            break
-        
-        if isinstance(item, tuple):
-            if len(item) == 3:
-                domain, p, root = item
-                rel_path = join_domain_path(domain, str(p.relative_to(root)).replace("\\", "/"))
-            else:
-                p, rel_path = item
-        else:
-            p = item
-            rel_path = str(p.relative_to(ws.read_root))
+    try:
+        search_domains = _resolve_search_domains(ws, domain, path)
+    except ValueError as e:
+        return json.dumps({"error": str(e), "path": path or domain}, ensure_ascii=False)
 
-        # 排除二进制文件
-        if _is_binary(p):
-            continue
+    domains_output = []
+    total_matches = 0
+    total_files = 0
+    total_dirs = 0
 
-        file_matches = []
-
-        try:
-            with p.open("r", encoding="utf-8", errors="replace") as fh:
-                for line_idx, line in enumerate(fh):
-                    if global_matches_count >= max_matches:
-                        hit_limit = True
-                        break
-                    
-                    matched = False
-                    if regex and rx:
-                        if rx.search(line):
-                            matched = True
-                    else:
-                        if pattern_lower and pattern_lower in line.lower():
-                            matched = True
-                            
-                    if matched:
-                        # 截断单行长度，防止极长的单行文本挤爆上下文
-                        text = line.rstrip("\r\n")
-                        if len(text) > 500:
-                            text = text[:500] + "..."
-                        
-                        file_matches.append({
-                            "line": line_idx + 1,
-                            "text": text
-                        })
-                        global_matches_count += 1
-        except Exception:
-            # 容忍单个文件读取错误，继续搜索其他文件
-            continue
-
-        if file_matches:
-            results.append({
-                "path": rel_path,
-                "total_matches": len(file_matches),
-                "matches": file_matches
+    for domain_name, root, target in search_domains:
+        if not target.exists():
+            domains_output.append({
+                "domain": domain_name,
+                "root_path": _domain_path(domain_name, root, target),
+                "root_absolute_path": str(target.resolve()),
+                "error": f"路径不存在: {_domain_path(domain_name, root, target)}",
+                "results": [],
+                "totals": {
+                    "files_searched": 0,
+                    "directories_searched": 0,
+                    "matches_found": 0,
+                    "hit_limit": False,
+                },
             })
+            continue
+
+        directories, files = _collect_domain_items(domain_name, root, target)
+        domain_results = []
+        domain_matches = 0
+        hit_limit = False
+
+        for directory in directories:
+            if domain_matches >= max_matches:
+                hit_limit = True
+                break
+            rel_path = _domain_path(domain_name, root, directory)
+            if _match_text(directory.name, rx, pattern_lower):
+                domain_results.append({
+                    "path": rel_path,
+                    "absolute_path": str(directory.resolve()),
+                    "type": "directory",
+                    "total_matches": 1,
+                    "matches": [{
+                        "match_type": "directory_name",
+                        "text": directory.name,
+                    }],
+                })
+                domain_matches += 1
+
+        for file_path in files:
+            if domain_matches >= max_matches:
+                hit_limit = True
+                break
+
+            rel_path = _domain_path(domain_name, root, file_path)
+            file_matches = []
+            if _match_text(file_path.name, rx, pattern_lower):
+                file_matches.append({
+                    "match_type": "file_name",
+                    "text": file_path.name,
+                })
+
+            remaining = max_matches - domain_matches - len(file_matches)
+            if remaining > 0:
+                try:
+                    preview_kind, preview_text = _structured_preview(file_path)
+                    if preview_kind == "text":
+                        file_matches.extend(
+                            _iter_text_matches(file_path, rx, pattern_lower, remaining)
+                        )
+                    elif preview_text and _match_text(preview_text, rx, pattern_lower):
+                        file_matches.append({
+                            "match_type": "content",
+                            "source": preview_kind,
+                            "text": _preview(preview_text),
+                        })
+                except Exception:
+                    # Unreadable structured files still participate through file-name matches.
+                    pass
+
+            if file_matches:
+                if domain_matches + len(file_matches) > max_matches:
+                    file_matches = file_matches[:max(0, max_matches - domain_matches)]
+                    hit_limit = True
+                domain_results.append({
+                    "path": rel_path,
+                    "absolute_path": str(file_path.resolve()),
+                    "type": "file",
+                    "total_matches": len(file_matches),
+                    "matches": file_matches,
+            })
+                domain_matches += len(file_matches)
+
+        total_files += len(files)
+        total_dirs += len(directories)
+        total_matches += domain_matches
+        domains_output.append({
+            "domain": domain_name,
+            "root_path": _domain_path(domain_name, root, target),
+            "root_absolute_path": str(target.resolve()),
+            "results": domain_results,
+            "totals": {
+                "files_searched": len(files),
+                "directories_searched": len(directories),
+                "matches_found": domain_matches,
+                "hit_limit": hit_limit,
+            },
+        })
 
     output = {
         "pattern": pattern,
         "regex": regex,
         "domain": domain,
-        "total_files_searched": len(files),
-        "total_matches_found": global_matches_count,
-        "hit_limit": hit_limit,
-        "results": results
+        "domains": [],
+        "total_files_searched": 0,
+        "total_directories_searched": 0,
+        "total_matches_found": 0,
+        "hit_limit": False,
     }
-    
-    if hit_limit:
-        output["note"] = f"匹配数量已达到最大上限 {max_matches}，部分匹配未展示。"
+
+    output["domains"] = domains_output
+    output["total_files_searched"] = total_files
+    output["total_directories_searched"] = total_dirs
+    output["total_matches_found"] = total_matches
+    output["hit_limit"] = any(
+        item.get("totals", {}).get("hit_limit") for item in domains_output
+    )
+
+    if output["hit_limit"]:
+        output["note"] = f"单个域匹配数量达到最大上限 {max_matches} 时会截断该域后续匹配。"
         
     return json.dumps(output, ensure_ascii=False)

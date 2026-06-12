@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
+    <script src="auth-session.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="chat.js" defer></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -36,11 +37,11 @@
                     <option value="low">省钱优先</option>
                     <option value="high">效果优先</option>
                 </select>
-                <span id="userKeyDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
+                <span id="accountDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
-                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                <button class="nav-btn danger" onclick="window.logout()">
                     <i class="fas fa-sign-out-alt"></i> 退出
                 </button>
             </div>
@@ -235,8 +236,8 @@
         const _rewriteImageSrc = function(href) {
             if (href && (href.startsWith('./') || (!href.includes('://') && !href.startsWith('data:')))) {
                 const filename = href.replace(/^\.\//, '');
-                const key = localStorage.getItem('X-FZT-Key') || '';
-                return `/api/reports/${currentRunId}/assets/${encodeURIComponent(filename)}?x-fzt-key=${encodeURIComponent(key)}`;
+                const key = sessionStorage.getItem('authToken') || '';
+                return `/api/reports/${currentRunId}/assets/${encodeURIComponent(filename)}?auth-token=${encodeURIComponent(key)}`;
             }
             return href;
         };
@@ -262,20 +263,37 @@
 
         // ========== 鉴权守卫 ==========
         function authHeaders() {
-            const key = localStorage.getItem('X-FZT-Key') || '';
-            return { 'X-FZT-Key': key };
+            const key = (typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '')) || '';
+            return { 'X-Auth-Token': key };
         }
 
+        function clearAuthAndReturn() {
+            sessionStorage.removeItem('accountName');
+            if (typeof window.clearAuthToken === 'function') window.clearAuthToken();
+            window.location.href = '/login.html';
+        }
+
+        window.logout = async function() {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
+            } catch(e) {}
+            clearAuthAndReturn();
+        };
+
         (async function authGuard() {
-            const key = localStorage.getItem('X-FZT-Key');
+            const key = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : sessionStorage.getItem('authToken');
             if (!key) { window.location.href = '/login.html'; return; }
             try {
-                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-FZT-Key': key } });
-                if (!r.ok) { localStorage.removeItem('X-FZT-Key'); window.location.href = '/login.html'; return; }
+                const r = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-Auth-Token': key } });
+                if (!r.ok) { clearAuthAndReturn(); return; }
                 const data = await r.json();
-                if (data.status === 'ok' && data.userKey) {
-                    const disp = document.getElementById('userKeyDisplay');
-                    if (disp) disp.innerText = `密钥: ${data.userKey}`;
+                if (data.status === 'ok' && data.account) {
+                    const disp = document.getElementById('accountDisplay');
+                    if (disp) disp.innerText = `账号: ${data.account}`;
                 }
             } catch(e) { window.location.href = '/login.html'; }
         })();
@@ -333,10 +351,12 @@
 
         function connectSSE() {
             if (sseSource) return;
-            const key = localStorage.getItem('X-FZT-Key') || '';
+            const key = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '');
             const urlParams = new URLSearchParams(window.location.search);
             const queryRunId = urlParams.get('run_id');
-            let streamUrl = '/api/stream?x-fzt-key=' + encodeURIComponent(key);
+            let streamUrl = '/api/stream?auth-token=' + encodeURIComponent(key);
             if (queryRunId) {
                 streamUrl += '&run_id=' + encodeURIComponent(queryRunId);
             }
@@ -455,6 +475,7 @@
                     statusUrl += '?run_id=' + encodeURIComponent(queryRunId);
                 }
                 const res = await fetch(statusUrl, { headers: authHeaders() });
+                if (res.status === 401) { clearAuthAndReturn(); return; }
                 const data = await res.json();
                 currentRunId = data.runId || null;
 
@@ -778,11 +799,12 @@
             // 自动保存当前分析参数
             const cleanedParams = collectParamsData();
             try {
-                await fetch('/api/analysis-params', {
+                const paramsResp = await fetch('/api/analysis-params', {
                     method: 'PUT',
                     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
                     body: JSON.stringify({ analysis_params: cleanedParams }),
                 });
+                if (paramsResp.status === 401) { clearAuthAndReturn(); return; }
             } catch (e) { /* 静默失败 */ }
 
             const costTier = document.getElementById('costTierSelect').value || 'medium';
@@ -808,6 +830,7 @@
                     headers: authHeaders(),
                     body: formData
                 });
+                if (response.status === 401) { clearAuthAndReturn(); return; }
 
                 const data = await response.json();
                 
@@ -829,7 +852,8 @@
         stopBtn.onclick = async () => {
             if (!confirm('确认要强制停止当前正在运行的后台分析任务吗？')) return;
             try {
-                await fetch('/api/stop', { method: 'POST', headers: authHeaders() });
+                const res = await fetch('/api/stop', { method: 'POST', headers: authHeaders() });
+                if (res.status === 401) { clearAuthAndReturn(); return; }
                 await checkStatus();
             } catch(e) {
                 console.error(e);
@@ -837,8 +861,10 @@
         };
 
         downloadBtn.onclick = () => {
-            const key = localStorage.getItem('X-FZT-Key') || '';
-            let url = `/api/reports/download?x-fzt-key=${encodeURIComponent(key)}`;
+            const key = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '');
+            let url = `/api/reports/download?auth-token=${encodeURIComponent(key)}`;
             if (currentRunId) {
                 url += `&run_id=${encodeURIComponent(currentRunId)}`;
             }
@@ -1034,6 +1060,7 @@
         async function loadAnalysisParams() {
             try {
                 const res = await fetch('/api/analysis-params', { headers: authHeaders() });
+                if (res.status === 401) { clearAuthAndReturn(); return; }
                 const data = await res.json();
                 const raw = data.analysis_params;
                 if (Array.isArray(raw)) {
@@ -1065,6 +1092,7 @@
         async function loadPresets() {
             try {
                 const res = await fetch('/api/analysis-params/presets', { headers: authHeaders() });
+                if (res.status === 401) { clearAuthAndReturn(); return; }
                 const data = await res.json();
                 presetsMap = data.presets || {};
                 const names = Object.keys(presetsMap);
@@ -1107,11 +1135,12 @@
                 saveParamsBtn.disabled = true;
                 paramsSavedHint.style.display = 'none';
                 const cleaned = collectParamsData();
-                await fetch('/api/analysis-params', {
+                const resp = await fetch('/api/analysis-params', {
                     method: 'PUT',
                     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
                     body: JSON.stringify({ analysis_params: cleaned }),
                 });
+                if (resp.status === 401) { clearAuthAndReturn(); return; }
                 paramsData = cleaned;
                 renderParamsForm(cleaned);
                 paramsSavedHint.style.display = 'inline';

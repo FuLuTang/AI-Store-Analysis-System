@@ -9,6 +9,8 @@
 
     let markedLoaded = typeof marked !== 'undefined';
     let onMarkedLoaded = null;
+    let mermaidLoaded = typeof mermaid !== 'undefined';
+    let onMermaidLoaded = null;
 
     // Dynamically load marked if not loaded by host page
     if (!markedLoaded) {
@@ -17,6 +19,26 @@
         script.onload = () => {
             markedLoaded = true;
             if (onMarkedLoaded) onMarkedLoaded();
+        };
+        document.head.appendChild(script);
+    }
+
+    // Dynamically load mermaid if not loaded by host page
+    if (!mermaidLoaded) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js';
+        script.onload = () => {
+            mermaidLoaded = true;
+            try {
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: (document.documentElement.classList.contains('dark-theme') || document.body.classList.contains('dark-theme')) ? 'dark' : 'default',
+                    securityLevel: 'loose'
+                });
+            } catch (e) {
+                console.error('Failed to initialize mermaid', e);
+            }
+            if (onMermaidLoaded) onMermaidLoaded();
         };
         document.head.appendChild(script);
     }
@@ -39,31 +61,31 @@
             <section id="chatPanel" class="chat-panel" aria-hidden="true">
                 <div class="chat-panel-header">
                     <div>
-                        <h3><i class="fas fa-comments"></i> 对话助手 <span class="chat-status-dot" title="在线"></span></h3>
+                        <h3><i class="fas fa-comments"></i> 对话助手 <span id="chatStatusDot" class="chat-status-dot" title="在线"></span><span id="chatStatusText" class="chat-status-text">在线</span></h3>
                         <div class="chat-run-badge">账号级聊天记录</div>
                     </div>
-                    <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
-                        <i class="fas fa-times"></i>
-                    </button>
+                    <div class="chat-header-actions">
+                        <button id="chatExportBtn" class="chat-export-btn" type="button" title="导出记录" aria-label="导出记录">
+                            <i class="fas fa-download"></i> <span>导出记录</span>
+                        </button>
+                        <button id="chatCloseBtn" class="chat-panel-close" type="button" aria-label="关闭对话助手">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
                 </div>
                 <div id="chatMessages" class="chat-messages">
                     <div class="chat-empty-state">从这里直接开始聊天。</div>
                 </div>
                 <div class="chat-composer">
-                    <textarea id="chatInput" class="chat-input" placeholder="输入你想问的问题..." rows="3"></textarea>
+                    <button id="chatAttachBtn" class="chat-icon-btn chat-attach-btn" type="button" title="添加附件" aria-label="添加附件">
+                        <i class="fas fa-paperclip"></i>
+                    </button>
+                    <textarea id="chatInput" class="chat-input" placeholder="输入你想问的问题..." rows="1"></textarea>
+                    <button id="chatSendBtn" class="chat-icon-btn chat-send-btn" type="button" title="发送消息" aria-label="发送消息">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
                     <input type="file" id="chatAttachmentInput" hidden multiple>
                     <div id="chatAttachmentDrafts" class="chat-attachment-drafts"></div>
-                    <div class="chat-composer-actions">
-                        <span id="chatStatusHint" class="chat-status-hint">账号级多轮对话</span>
-                        <div class="chat-action-buttons">
-                            <button id="chatAttachBtn" class="chat-icon-btn" type="button" title="添加附件" aria-label="添加附件">
-                                <i class="fas fa-paperclip"></i>
-                            </button>
-                            <button id="chatSendBtn" class="btn" type="button">
-                                <i class="fas fa-paper-plane"></i> 发送
-                            </button>
-                        </div>
-                    </div>
                 </div>
             </section>
         `;
@@ -73,19 +95,23 @@
         const chatFab = document.getElementById('chatFab');
         const chatPanel = document.getElementById('chatPanel');
         const chatCloseBtn = document.getElementById('chatCloseBtn');
+        const chatExportBtn = document.getElementById('chatExportBtn');
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const chatAttachmentInput = document.getElementById('chatAttachmentInput');
         const chatAttachmentDrafts = document.getElementById('chatAttachmentDrafts');
         const chatAttachBtn = document.getElementById('chatAttachBtn');
         const chatSendBtn = document.getElementById('chatSendBtn');
-        const chatStatusHint = document.getElementById('chatStatusHint');
+        const chatStatusDot = document.getElementById('chatStatusDot');
+        const chatStatusText = document.getElementById('chatStatusText');
 
         // Chatbot state
         let chatMessagesCache = [];
         let chatHistoryLoaded = false;
         let chatHistoryLoadPromise = null;
         let chatPendingFiles = [];
+        let lastChatUpdate = '';
+        let chatPollTimer = null;
 
         onMarkedLoaded = () => {
             if (chatHistoryLoaded) {
@@ -93,10 +119,24 @@
             }
         };
 
+        onMermaidLoaded = () => {
+            if (chatHistoryLoaded) {
+                renderChatMessages();
+            }
+        };
+
         // Auth helper
         function authHeaders() {
-            const key = localStorage.getItem('X-FZT-Key') || '';
-            return { 'X-FZT-Key': key };
+            const key = (typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '')) || '';
+            return { 'X-Auth-Token': key };
+        }
+
+        function clearAuthAndReturn() {
+            sessionStorage.removeItem('accountName');
+            if (typeof window.clearAuthToken === 'function') window.clearAuthToken();
+            window.location.href = '/login.html';
         }
 
         function escapeChatHtml(text) {
@@ -110,8 +150,32 @@
 
         function formatChatContent(text) {
             const safeText = escapeChatHtml(text);
+            const markdownText = safeText.replace(/&gt;/g, '>');
             if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
-                return marked.parse(safeText);
+                const renderer = new marked.Renderer();
+                const originalCode = renderer.code.bind(renderer);
+                renderer.code = (code, lang, escaped) => {
+                    let rawCode = code;
+                    let language = lang;
+                    if (typeof code === 'object' && code !== null) {
+                        rawCode = code.text;
+                        language = code.lang;
+                    }
+                    if (language === 'mermaid') {
+                        const unescapedCode = rawCode
+                            .replace(/&amp;/g, '&')
+                            .replace(/&lt;/g, '<')
+                            .replace(/&gt;/g, '>')
+                            .replace(/&quot;/g, '"')
+                            .replace(/&#39;/g, "'");
+                        return `<div class="mermaid">${unescapedCode}</div>`;
+                    }
+                    if (typeof code === 'object') {
+                        return originalCode(code);
+                    }
+                    return originalCode(code, lang, escaped);
+                };
+                return marked.parse(markdownText, { renderer });
             }
             return safeText.replace(/\n/g, '<br>');
         }
@@ -134,10 +198,86 @@
             `).join('')}</div>`;
         }
 
+        function getChatCopyText(msg) {
+            const parts = [];
+            const content = String(msg && msg.content ? msg.content : '').trim();
+            if (content) parts.push(content);
+            if (Array.isArray(msg && msg.attachments) && msg.attachments.length > 0) {
+                const names = msg.attachments
+                    .map(item => String(item && item.originalName ? item.originalName : '').trim())
+                    .filter(Boolean);
+                if (names.length > 0) {
+                    parts.push(`附件：${names.join('、')}`);
+                }
+            }
+            return parts.join('\n');
+        }
+
+        async function copyChatText(text) {
+            const value = String(text || '');
+            if (!value.trim()) return false;
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(value);
+                return true;
+            }
+
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            textarea.style.pointerEvents = 'none';
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            textarea.setSelectionRange(0, textarea.value.length);
+            const copied = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return copied;
+        }
+
+        function flashCopyButton(btn, copied) {
+            if (!btn) return;
+            const icon = btn.querySelector('i');
+            if (copied) {
+                btn.classList.add('is-copied');
+                btn.setAttribute('aria-label', '已复制');
+                btn.title = '已复制';
+                if (icon) icon.className = 'fas fa-check';
+                window.clearTimeout(btn._chatCopyTimer);
+                btn._chatCopyTimer = window.setTimeout(() => {
+                    btn.classList.remove('is-copied');
+                    btn.setAttribute('aria-label', '复制消息');
+                    btn.title = '复制消息';
+                    if (icon) icon.className = 'fas fa-copy';
+                }, 1200);
+            } else {
+                btn.classList.add('copy-failed');
+                btn.setAttribute('aria-label', '复制失败');
+                btn.title = '复制失败';
+                window.clearTimeout(btn._chatCopyTimer);
+                btn._chatCopyTimer = window.setTimeout(() => {
+                    btn.classList.remove('copy-failed');
+                    btn.setAttribute('aria-label', '复制消息');
+                    btn.title = '复制消息';
+                    if (icon) icon.className = 'fas fa-copy';
+                }, 1200);
+            }
+        }
+
         function normalizeChatRecord(record) {
             if (!record || typeof record !== 'object') return null;
             if (!record.role) return null;
             return { ...record };
+        }
+
+        function messageUpdateValue(record) {
+            return String((record && (record.datetime || record.time)) || '');
+        }
+
+        function updateLastChatUpdate(messages) {
+            const values = (messages || []).map(messageUpdateValue).filter(Boolean);
+            if (values.length) lastChatUpdate = values[values.length - 1];
         }
 
         function formatChatTimestamp(record) {
@@ -149,6 +289,7 @@
 
         function setChatMessages(messages) {
             chatMessagesCache = (messages || []).map(normalizeChatRecord).filter(Boolean);
+            updateLastChatUpdate(chatMessagesCache);
             chatHistoryLoaded = true;
             renderChatMessages();
         }
@@ -157,6 +298,7 @@
             chatPanel.classList.toggle('open', open);
             chatPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
             chatFab.setAttribute('aria-expanded', open ? 'true' : 'false');
+            document.body.classList.toggle('chatbot-open', open);
             if (open) {
                 loadChatHistory().catch((err) => {
                     console.error('Failed to load chatbot history', err);
@@ -173,6 +315,7 @@
 
             const history = chatMessagesCache.filter(msg => {
                 if (msg.role === 'notice') return String(msg.content || '').trim().length > 0;
+                if (msg.role === 'card') return true;
                 if (msg.role === 'user') return true;
                 if (msg.role !== 'assistant') return false;
                 return String(msg.content || '').trim().length > 0;
@@ -182,25 +325,107 @@
                 return;
             }
 
-            chatMessages.innerHTML = history.map(msg => `
-                ${msg.role === 'notice' ? `
-                    <div class="chat-notice">
-                        <span class="markdown-body chat-markdown">${formatChatContent(msg.content)}</span>
-                    </div>
-                ` : `
+            chatMessages.innerHTML = history.map(msg => {
+                if (msg.role === 'notice') {
+                    return `
+                        <div class="chat-notice">
+                            <div class="chat-notice-text">${escapeChatHtml(String(msg.content || '')).replace(/\n/g, '<br>')}</div>
+                        </div>
+                    `;
+                }
+                if (msg.role === 'card') {
+                    return renderChatCard(msg);
+                }
+                const rendered = formatChatContent(msg.content);
+                const isWide = rendered.includes('<table') || rendered.includes('class="mermaid"') || String(msg.content || '').includes('```mermaid');
+                return `
                 <div class="chat-message ${msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'}">
                     <div class="chat-message-role">
                         ${msg.role === 'user' ? '你' : 'AI'}
                         ${formatChatTimestamp(msg) ? ` · ${formatChatTimestamp(msg)}` : ''}
                     </div>
-                    <div class="chat-message-bubble">
-                        <div class="markdown-body chat-markdown">${formatChatContent(msg.content)}</div>
-                        ${renderChatAttachments(msg.attachments)}
+                    <div class="chat-message-row ${msg.role === 'user' ? 'chat-message-row-user' : 'chat-message-row-assistant'}">
+                        ${msg.role === 'user' ? `
+                            <button type="button" class="chat-message-copy-btn" title="复制消息" aria-label="复制消息" data-chat-copy-text="${escapeChatHtml(getChatCopyText(msg))}">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        ` : ''}
+                        <div class="chat-message-bubble ${isWide ? 'chat-message-bubble-wide' : ''}">
+                            <div class="markdown-body chat-markdown">${rendered}</div>
+                            ${renderChatAttachments(msg.attachments)}
+                        </div>
+                        ${msg.role === 'assistant' ? `
+                            <button type="button" class="chat-message-copy-btn" title="复制消息" aria-label="复制消息" data-chat-copy-text="${escapeChatHtml(getChatCopyText(msg))}">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
-                `}
-            `).join('');
+                `;
+            }).join('');
+            bindChatCardActions();
+            bindChatMessageActions();
+            if (typeof mermaid !== 'undefined' && mermaid && typeof mermaid.run === 'function') {
+                try {
+                    const isDark = document.documentElement.classList.contains('dark-theme') || document.body.classList.contains('dark-theme');
+                    mermaid.initialize({
+                        startOnLoad: false,
+                        theme: isDark ? 'dark' : 'default',
+                        securityLevel: 'loose'
+                    });
+                } catch (e) {
+                    console.error('Failed to re-initialize mermaid', e);
+                }
+                mermaid.run({
+                    querySelector: '#chatMessages .mermaid'
+                }).catch(err => console.error('Mermaid render error', err));
+            }
             chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function renderChatCard(msg) {
+            const options = Array.isArray(msg.options) ? msg.options : [];
+            const choice = msg.choice || '';
+            const buttons = (choice ? [choice] : options).map(option => `
+                <button type="button"
+                    class="chat-card-option ${choice === option ? 'selected' : ''}"
+                    data-card-name="${escapeChatHtml(msg.name || '')}"
+                    data-card-choice="${escapeChatHtml(option)}"
+                    ${choice ? 'disabled' : ''}>
+                    ${escapeChatHtml(option)}
+                </button>
+            `).join('');
+            return `
+                <div class="chat-card">
+                    <div class="chat-card-title">${escapeChatHtml(msg.title || '请求确认')}</div>
+                    <div class="chat-card-detail">${formatChatContent(msg.detail || '')}</div>
+                    ${buttons ? `<div class="chat-card-options">${buttons}</div>` : ''}
+                    ${formatChatTimestamp(msg) ? `<div class="chat-card-time">${formatChatTimestamp(msg)}</div>` : ''}
+                </div>
+            `;
+        }
+
+        function bindChatCardActions() {
+            chatMessages.querySelectorAll('.chat-card-option:not([disabled])').forEach(btn => {
+                btn.onclick = () => submitChatCardChoice(
+                    btn.getAttribute('data-card-name') || '',
+                    btn.getAttribute('data-card-choice') || ''
+                );
+            });
+        }
+
+        function bindChatMessageActions() {
+            chatMessages.querySelectorAll('.chat-message-copy-btn').forEach(btn => {
+                btn.onclick = async () => {
+                    const text = btn.getAttribute('data-chat-copy-text') || '';
+                    try {
+                        const copied = await copyChatText(text);
+                        flashCopyButton(btn, copied);
+                    } catch (err) {
+                        flashCopyButton(btn, false);
+                    }
+                };
+            });
         }
 
         function updateChatComposerState() {
@@ -208,7 +433,15 @@
             chatInput.disabled = false;
             chatAttachBtn.disabled = false;
             chatAttachmentInput.disabled = false;
-            chatStatusHint.textContent = '账号级多轮对话';
+        }
+
+        function setChatStatusDot(state) {
+            const hasState = String(state || '').trim().length > 0;
+            chatStatusDot.classList.toggle('chat-status-dot-waiting', hasState);
+            chatStatusDot.classList.toggle('chat-status-dot-online', !hasState);
+            chatStatusDot.title = hasState ? String(state).trim() : '在线';
+            chatStatusText.textContent = hasState ? String(state).trim() : '在线';
+            chatStatusText.classList.toggle('chat-status-text-waiting', hasState);
         }
 
         function renderChatAttachmentDrafts() {
@@ -246,6 +479,10 @@
                 body: formData
             });
             if (!response.ok) {
+                if (response.status === 401) {
+                    clearAuthAndReturn();
+                    throw new Error('登录状态失效，请重新登录');
+                }
                 let errorText = '附件上传失败';
                 try {
                     const errorData = await response.json();
@@ -262,15 +499,22 @@
         async function loadChatHistory() {
             if (chatHistoryLoadPromise) return chatHistoryLoadPromise;
             chatHistoryLoadPromise = (async () => {
-                chatHistoryLoaded = false;
-                renderChatMessages();
+                if (!chatHistoryLoaded) {
+                    chatHistoryLoaded = false;
+                    renderChatMessages();
+                }
                 try {
                     const response = await fetch('/api/chatbot/history', { headers: authHeaders() });
                     if (!response.ok) {
+                        if (response.status === 401) {
+                            clearAuthAndReturn();
+                            return;
+                        }
                         throw new Error(await response.text() || '历史记录加载失败');
                     }
                     const data = await response.json();
                     setChatMessages(Array.isArray(data.messages) ? data.messages : []);
+                    if (data.last_update) lastChatUpdate = data.last_update;
                 } catch (err) {
                     chatMessages.innerHTML = `<div class="chat-empty-state">聊天记录加载失败：${escapeChatHtml(err.message)}</div>`;
                     chatHistoryLoaded = true;
@@ -281,17 +525,69 @@
             return chatHistoryLoadPromise;
         }
 
+        async function refreshChatStatus() {
+            try {
+                const response = await fetch('/api/chatbot/status', { headers: authHeaders() });
+                if (response.status === 401) {
+                    clearAuthAndReturn();
+                    return;
+                }
+                if (response.status === 429) return;
+                if (!response.ok) return;
+                const data = await response.json();
+                setChatStatusDot(data.state || '');
+                const nextUpdate = data.last_update || '';
+                if (nextUpdate && nextUpdate !== lastChatUpdate) {
+                    await loadChatHistory();
+                }
+            } catch (_) {}
+        }
+
+        function ensureChatPolling() {
+            if (chatPollTimer) return;
+            chatPollTimer = setInterval(refreshChatStatus, 3000);
+        }
+
+        async function submitChatCardChoice(name, choice) {
+            if (!name || !choice) return;
+            const token = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '');
+            try {
+                const response = await fetch('/api/chatbot', {
+                    method: 'POST',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        choice,
+                        detail: token
+                    })
+                });
+                if (response.status === 401) {
+                    clearAuthAndReturn();
+                    return;
+                }
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.detail || '提交授权选择失败');
+                }
+                await loadChatHistory();
+                await refreshChatStatus();
+            } catch (err) {
+                setChatStatusDot('在线');
+            }
+        }
+
         async function sendChatMessage() {
             const content = chatInput.value.trim();
             const filesToUpload = [...chatPendingFiles];
             if (!content && filesToUpload.length === 0) return;
 
             chatInput.value = '';
+            chatInput.style.height = '';
             await loadChatHistory().catch(() => {});
 
             let userMessage = null;
-            let assistantMessage = null;
-
             try {
                 const uploadedAttachments = await uploadChatAttachments(filesToUpload);
                 chatPendingFiles = [];
@@ -303,9 +599,8 @@
                     attachments: uploadedAttachments,
                     datetime: new Date().toISOString()
                 };
-                assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
                 chatMessagesCache.push(userMessage);
-                chatMessagesCache.push(assistantMessage);
+                updateLastChatUpdate(chatMessagesCache);
                 renderChatMessages();
 
                 const response = await fetch('/api/chatbot', {
@@ -318,6 +613,10 @@
                 });
 
                 if (!response.ok) {
+                    if (response.status === 401) {
+                        clearAuthAndReturn();
+                        throw new Error('登录状态失效，请重新登录');
+                    }
                     let errorText = '请求失败';
                     try {
                         const errorData = await response.json();
@@ -328,39 +627,116 @@
                     throw new Error(errorText);
                 }
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    assistantMessage.content += decoder.decode(value, { stream: true });
-                    renderChatMessages();
-                }
-                assistantMessage.content += decoder.decode();
-                if (!assistantMessage.content.trim()) {
-                    assistantMessage.content = '当前没有返回可显示的内容。';
-                }
-                await loadChatHistory().catch(() => {});
+                await refreshChatStatus();
             } catch (err) {
-                if (!assistantMessage) {
-                    assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
-                    chatMessagesCache.push(assistantMessage);
-                }
+                const assistantMessage = { role: 'assistant', content: '', datetime: new Date().toISOString() };
+                chatMessagesCache.push(assistantMessage);
                 assistantMessage.content = `对话失败：${err.message}`;
             } finally {
                 renderChatMessages();
             }
         }
 
+        async function exportChatHistory() {
+            try {
+                const response = await fetch('/api/chatbot/history', { headers: authHeaders() });
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        clearAuthAndReturn();
+                        return;
+                    }
+                    throw new Error(await response.text() || '历史记录加载失败');
+                }
+                const data = await response.json();
+                const messages = Array.isArray(data.messages) ? data.messages : [];
+                
+                function formatTime(isoStr) {
+                    if (!isoStr) return '';
+                    const date = new Date(isoStr);
+                    if (isNaN(date.getTime())) return isoStr;
+                    return date.toLocaleString('zh-CN', { hour12: false });
+                }
+
+                let mdText = `# 客服会话记录\n\n`;
+                mdText += `* **导出时间**: ${formatTime(new Date().toISOString())}\n`;
+                if (data.last_update) {
+                    mdText += `* **最后更新**: ${formatTime(data.last_update)}\n`;
+                }
+                mdText += `\n---\n\n`;
+
+                messages.forEach(msg => {
+                    const role = msg.role;
+                    const content = msg.content || '';
+                    const timeStr = msg.datetime ? ` *(${formatTime(msg.datetime)})*` : '';
+
+                    if (role === 'user') {
+                        mdText += `### 👤 我${timeStr}\n\n> ${content.replace(/\n/g, '\n> ')}\n\n`;
+                        if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+                            mdText += `**附件列表**:\n`;
+                            msg.attachments.forEach(att => {
+                                mdText += `- 📎 [${att.originalName}](${att.relativePath || '#'}) (${(att.size / 1024).toFixed(1)} KB)\n`;
+                            });
+                            mdText += `\n`;
+                        }
+                    } else if (role === 'assistant') {
+                        if (!content.trim()) return;
+                        mdText += `### 🤖 AI 客服${timeStr}\n\n> ${content.replace(/\n/g, '\n> ')}\n\n`;
+                        if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+                            mdText += `**附件列表**:\n`;
+                            msg.attachments.forEach(att => {
+                                mdText += `- 📎 [${att.originalName}](${att.relativePath || '#'}) (${(att.size / 1024).toFixed(1)} KB)\n`;
+                            });
+                            mdText += `\n`;
+                        }
+                    } else if (role === 'notice') {
+                        mdText += `> 📢 **系统通知**${timeStr}\n> ${content.replace(/\n/g, '\n> ')}\n\n`;
+                    } else if (role === 'card') {
+                        mdText += `> 💳 **交互操作卡片: ${msg.title || '请求确认'}**${timeStr}\n`;
+                        mdText += `> - **操作名称**: ${msg.name || ''}\n`;
+                        if (msg.detail) {
+                            mdText += `> - **详情**: ${msg.detail}\n`;
+                        }
+                        if (Array.isArray(msg.options) && msg.options.length > 0) {
+                            mdText += `> - **可选项**: ${msg.options.join(' / ')}\n`;
+                        }
+                        if (msg.choice) {
+                            mdText += `> - **已选结果**: **${msg.choice}**\n`;
+                        }
+                        mdText += `\n`;
+                    }
+                    mdText += `\n---\n\n`;
+                });
+
+                const blob = new Blob([mdText], { type: 'text/markdown;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `chat_history_${new Date().toISOString().slice(0, 10)}.md`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                alert(`导出失败: ${err.message}`);
+            }
+        }
+
         // Binding Events
         chatFab.onclick = () => setChatOpen(!chatPanel.classList.contains('open'));
         chatCloseBtn.onclick = () => setChatOpen(false);
+        if (chatExportBtn) {
+            chatExportBtn.onclick = () => exportChatHistory();
+        }
         chatSendBtn.onclick = () => sendChatMessage();
         chatInput.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 sendChatMessage();
             }
+        });
+        chatInput.addEventListener('input', () => {
+            chatInput.style.height = 'auto';
+            chatInput.style.height = chatInput.scrollHeight + 'px';
         });
 
         chatAttachBtn.addEventListener('click', () => chatAttachmentInput.click());
@@ -374,6 +750,7 @@
         loadChatHistory().catch((err) => {
             console.error('Initial chatbot history load failed', err);
         });
+        ensureChatPolling();
         updateChatComposerState();
     });
 })();

@@ -21,6 +21,9 @@ TOOL_BLACKLIST_BY_TASK_TYPE: dict[str, set[str]] = {
         "read_plan",
         "check_plan",
         "finish_task",
+        "duckdb_query",
+        "duckdb_register_parquet",
+        "list_tables",
     },
 }
 
@@ -47,7 +50,7 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         # ── 文档解析 ──
         _make_tool(
             name="read_document_structure",
-            description="读取任意文档的结构信息（xlsx/csv/pdf/docx/txt/md/json/sqlite/zip），返回表结构摘要、列名、行数和样本行。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'.",
+            description="读取任意文档的结构信息（xlsx/csv/pdf/docx/txt/md/json/sqlite/zip），返回表结构摘要、列名、行数和样本行。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'. 遇到想读的文件优先使用此工具来快速了解文件内容。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -62,7 +65,7 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         # ── 文件读写 ──
         _make_tool(
             name="read_file",
-            description="读取 workspace 内的文本文件内容。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'.",
+            description="读取 workspace 内的文本文件内容。多域工作区中路径必须带域名前缀，例如 'chatbot/...' 或 'service_docs/...'. 禁止直接使用此工具，强烈建议优先使用read_document_structure + python脚本结构化筛选处理 来解析文件。实在无法处理便可以使用此工具。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -123,16 +126,20 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
         ),
         _make_tool(
             name="search",
-            description="在 workspace 内检索文本或正则模式。多域工作区中 path 需要带域名前缀，例如 'chatbot/...' 或 'service_docs/...'; 不传 path 时会搜索所有域。",
+            description="在 workspace 内检索文本或正则模式。domain 可取 'all'、'chat_history'，或指定某个域路径（例如 'chatbot/'、'service_docs/'）。若 domain='chat_history'，会在聊天历史中搜索，并保留 reasoning_content 以便匹配。",
             parameters={
                 "type": "object",
                 "properties": {
+                    "domain": {
+                        "type": "string",
+                        "description": "检索范围；可选 'all'、'chat_history'，或指定域路径如 'chatbot/'、'service_docs/'",
+                    },
                     "pattern": {"type": "string", "description": "要搜索的关键词或正则"},
                     "path": {"type": "string", "description": "可选：限定在某个带域名的路径下搜索"},
                     "regex": {"type": "boolean", "description": "是否按正则搜索"},
                     "max_matches": {"type": "integer", "description": "最多返回多少条匹配"},
                 },
-                "required": ["pattern"],
+                "required": ["domain", "pattern"],
             },
         ),
         # ── Python 脚本执行 ──
@@ -145,7 +152,9 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                 "2. 同时传 script_path + content —— 自动将 content 写入 script_path 再运行，"
                 "相当于 write_file + run_python 一步到位。\n"
                 "提示：可以直接对 'scripts/old_session_scripts/[run_id]/[脚本名]' 执行 run_python，"
-                "系统会自动将其复制一份到 'scripts/[脚本名]' 里面并运行。"
+                "系统会自动将其复制一份到 'scripts/[脚本名]' 里面并运行。\n"
+                "如果脚本会产生较长输出、触发外部请求，或你希望工具完成后稍等再继续总结，"
+                "可传 wait_seconds；系统会在工具结果写入历史后等待对应秒数，再恢复 Agent 循环。"
             ),
             parameters={
                 "type": "object",
@@ -157,6 +166,10 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                     "content": {
                         "type": "string",
                         "description": "（可选）脚本代码内容。传入后自动写入 script_path 再执行，无需先调用 write_file。",
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "（可选）工具结果写入后等待多少秒再恢复 Agent 循环，建议 1-30 秒。",
                     },
                 },
                 "required": ["script_path"],
@@ -260,26 +273,40 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                            "description": "功能路径（例如 'ai_analyse/diagnosis/launch_diagnosis'）"
                         }
                     },
                     "required": ["path"],
                 },
             ),
             _make_tool(
+                name="get_user_service_token",
+                description="请求用户授权代理操作。只有当你需要代表用户执行系统操作时调用；调用后系统会向用户展示确认卡片，用户同意后你会收到客服 token。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "一句话说明为什么需要用户授权代理操作。"
+                        }
+                    },
+                    "required": ["reason"],
+                },
+            ),
+            _make_tool(
                 name="execute_system_function",
-                description="执行指定的系统服务功能。必须传入准确的功能路径与符合说明要求的参数对象。",
+                description="执行指定系统服务功能。执行前必须先调用 get_user_service_token 获得客服 token，并把该 token 放入 params.service_token。",
                 parameters={
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "功能路径（例如 'ai_analyse/launch_diagnosis'）"
+                            "description": "功能路径（例如 'ai_analyse/diagnosis/launch_diagnosis'）"
                         },
                         "params": {
                             "type": "object",
-                            "description": "具体入参键值对。请务必提前通过查看功能说明工具（view_system_function_doc）确认此参数对象中应当包含哪些属性及如何填写。"
-                        }
+                            "description": "功能参数对象；必须包含 service_token 字段，其他字段按 view_system_function_doc 的说明填写。"
+                        },
                     },
                     "required": ["path", "params"],
                 },
@@ -343,7 +370,7 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
     def _read_document_structure(path: str) -> str:
         return read_document_structure_impl(ws, path, emit_log=_emit_log)
 
-    def _read_file(path: str, offset: int = 0, limit: int = 2000, head: int = None, tail: int = None) -> str:
+    def _read_file(path: str, offset: int = 0, limit: int = 800, head: int = None, tail: int = None) -> str:
         return read_file_impl(ws, path, offset=offset, limit=limit, head=head, tail=tail, emit_log=_emit_log)
 
     def _write_file(path: str, content: str, mode: str = "overwrite") -> str:
@@ -359,10 +386,10 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         files = list_files_impl(ws, subdir, emit_log=_emit_log)
         return json.dumps(files, ensure_ascii=False)
 
-    def _search(pattern: str, path: str = None, regex: bool = False, max_matches: int = 50) -> str:
-        return search_files_impl(ws, pattern, path=path, regex=regex, max_matches=max_matches)
+    def _search(pattern: str, domain: str = "all", path: str = None, regex: bool = False, max_matches: int = 50) -> str:
+        return search_files_impl(ws, pattern, domain=domain, path=path, regex=regex, max_matches=max_matches)
 
-    def _run_python(script_path: str, content: str = None) -> str:
+    def _run_python(script_path: str, content: str = None, wait_seconds: int = 0) -> str:
         return run_python_impl(ws, script_path, content=content, emit_log=_emit_log)
 
     def _duckdb_query(sql: str) -> str:
@@ -490,9 +517,9 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
 
     if task_type == "chatbot":
         from .tools.impl.system_function_impl import (
+            execute_system_function_impl,
             list_system_functions_impl,
             view_system_function_doc_impl,
-            execute_system_function_impl,
         )
 
         def _list_system_functions() -> str:
@@ -501,12 +528,19 @@ def build_tool_map(ws: Workspace, task_type: str = "diagnosis", emit_log=None, e
         def _view_system_function_doc(path: str) -> str:
             return view_system_function_doc_impl(path)
 
-        def _execute_system_function(path: str, params: dict) -> str:
-            return execute_system_function_impl(ws, path, params, llm_preset)
+        def _get_user_service_token(reason: str) -> str:
+            return json.dumps({
+                "status": "pending_user_authorization",
+                "reason": str(reason or "").strip(),
+            }, ensure_ascii=False)
+
+        def _execute_system_function(path: str, params: dict | str) -> str:
+            return execute_system_function_impl(ws, path, params, llm_preset or {})
 
         tool_map.update({
             "list_system_functions": _list_system_functions,
             "view_system_function_doc": _view_system_function_doc,
+            "get_user_service_token": _get_user_service_token,
             "execute_system_function": _execute_system_function,
         })
 

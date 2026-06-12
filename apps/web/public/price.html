@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
+    <script src="auth-session.js"></script>
     <script src="chat.js" defer></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
@@ -378,7 +379,7 @@
                 <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm);">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
-                <button class="nav-btn danger" onclick="localStorage.removeItem('X-FZT-Key'); window.location.href='/login.html';">
+                <button class="nav-btn danger" onclick="window.logout()">
                     <i class="fas fa-sign-out-alt"></i> 退出
                 </button>
             </div>
@@ -475,7 +476,7 @@
                         <strong id="authStateText" style="color: var(--text);">未检查</strong>
                     </div>
                     <div style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; word-break: break-all;" id="authStateHint">
-                        会从本地保存 of X-FZT-Key 读取。
+                        使用当前浏览器会话中的登录 token。
                     </div>
                     <hr style="margin: 0.75rem 0; border: none; border-top: 1px solid var(--border);">
                     <div style="font-size: 0.9rem;">
@@ -604,19 +605,35 @@
         let currentCharts = [];
 
         function authKey() {
-            return (localStorage.getItem('X-FZT-Key') || '').trim();
+            const key = typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : sessionStorage.getItem('authToken');
+            return (key || '').trim();
         }
 
         function authHeaders() {
             const key = authKey();
-            return key ? { 'X-FZT-Key': key } : {};
+            return key ? { 'X-Auth-Token': key } : {};
         }
+
+        function clearAuthAndReturn() {
+            sessionStorage.removeItem('accountName');
+            if (typeof window.clearAuthToken === 'function') window.clearAuthToken();
+            window.location.href = '/login.html';
+        }
+
+        window.logout = async function() {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
+            } catch(e) {}
+            clearAuthAndReturn();
+        };
 
         function updateAuthState() {
             const key = authKey();
             if (key) {
                 authStateText.textContent = '已登录';
-                authStateHint.textContent = `Key: ${key.slice(0, 6)}...${key.slice(-4)}`;
+                authStateHint.textContent = sessionStorage.getItem('accountName') || '当前账号';
             } else {
                 authStateText.textContent = '未登录';
                 authStateHint.textContent = '请先登录后再运行推算。';
@@ -657,7 +674,7 @@
             if (!key) return;
             const urlParams = new URLSearchParams(window.location.search);
             const queryRunId = urlParams.get('run_id');
-            let streamUrl = `/api/price-recommendations/stream?x-fzt-key=${encodeURIComponent(key)}`;
+            let streamUrl = `/api/price-recommendations/stream?auth-token=${encodeURIComponent(key)}`;
             if (queryRunId) {
                 streamUrl += '&run_id=' + encodeURIComponent(queryRunId);
             }
@@ -1410,6 +1427,10 @@
                         setStatus('启动失败，请重试。');
                     }
                 } else {
+                    if (xhr.status === 401) {
+                        clearAuthAndReturn();
+                        return;
+                    }
                     let msg = xhr.responseText;
                     try {
                         const errData = JSON.parse(xhr.responseText);
@@ -1442,6 +1463,7 @@
                     statusUrl += '?run_id=' + encodeURIComponent(queryRunId);
                 }
                 const resp = await fetch(statusUrl, { headers: authHeaders() });
+                if (resp.status === 401) { clearAuthAndReturn(); return; }
                 const data = await resp.json();
                 
                 const status = data.status;
@@ -1529,7 +1551,8 @@
         stopBtn.onclick = async () => {
             if (!confirm('确认要强制停止当前价格推算任务吗？')) return;
             try {
-                await fetch('/api/price-recommendations/stop', { method: 'POST', headers: authHeaders() });
+                const resp = await fetch('/api/price-recommendations/stop', { method: 'POST', headers: authHeaders() });
+                if (resp.status === 401) { clearAuthAndReturn(); return; }
                 await refreshStatus();
             } catch (e) {
                 console.error(e);
@@ -1555,6 +1578,7 @@
                 try {
                     const resp = await fetch('/api/auth/verify', { method: 'POST', headers: authHeaders() });
                     if (!resp.ok) {
+                        if (resp.status === 401) clearAuthAndReturn();
                         setStatus('登录状态失效，请重新登录。');
                     }
                 } catch (e) {

@@ -26,6 +26,11 @@ if not logger.handlers:
     _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logger.addHandler(_handler)
 
+AUTH_TOOL_NAME = "get_user_service_token"
+AUTH_CARD_NAME = "ask_token_auth"
+RESUMABLE_TOOL_NAMES = {"run_python"}
+MAX_TOOL_RESUME_WAIT_SECONDS = 60
+
 
 class ChatAgentLoop:
     """薄封装：OpenAI SDK 客户端 + messages 管理 + tool 执行。"""
@@ -39,6 +44,7 @@ class ChatAgentLoop:
         load_messages=None,
         emit_log=None,
         emit_status=None,
+        set_status=None,
         check_aborted=None,
         persist_messages=None,
     ):
@@ -63,8 +69,10 @@ class ChatAgentLoop:
         self.tools = available_tool_call_for_agent(ws, task_type="chatbot")
         self._emit_log = emit_log or (lambda nid, msg: None)
         self._emit_status = emit_status or (lambda nid, st: None)
+        self._set_status = set_status or (lambda state: None)
         self._round = 0
         self._persist_messages = persist_messages or (lambda msgs: None)
+        self._logged_message_count = max(0, len(self.messages) - 1)
 
         self.tool_map = build_tool_map(
             ws,
@@ -74,6 +82,27 @@ class ChatAgentLoop:
             on_finish=None,
             llm_preset=llm_preset,
         )
+
+    def _summarize_message_for_log(self, message: dict) -> dict:
+        role = str(message.get("role", "")).strip().lower()
+        text = message.get("content") or ""
+        if not isinstance(text, str):
+            text = str(text)
+        preview = text.strip().replace("\n", " ")
+        if len(preview) > 200:
+            preview = preview[:200] + "..."
+        summary = {
+            "role": role,
+            "content_preview": preview,
+            "content_chars": len(text),
+        }
+        if message.get("name"):
+            summary["name"] = str(message.get("name") or "")
+        if message.get("tool_call_id"):
+            summary["tool_call_id"] = str(message.get("tool_call_id") or "")
+        if "tool_calls" in message and message["tool_calls"]:
+            summary["tool_calls"] = len(message["tool_calls"])
+        return summary
 
     def run(self) -> dict:
         if not self.messages:
@@ -151,7 +180,39 @@ class ChatAgentLoop:
                     return self._with_usage(self._parse_final_output(sr.content))
 
                 if sr.tool_calls:
+                    self._set_status("正在处理信息......")
+                    auth_call = next((tc for tc in sr.tool_calls if tc.get("name") == AUTH_TOOL_NAME), None)
+                    if auth_call:
+                        try:
+                            auth_args = json.loads(auth_call.get("arguments") or "{}")
+                        except json.JSONDecodeError:
+                            auth_args = {}
+                        reason = str(auth_args.get("reason") or auth_args.get("detail") or "").strip()
+                        auth_card = {
+                            "role": "system",
+                            "name": AUTH_CARD_NAME,
+                            "title": "请求代理操作许可",
+                            "detail": reason or "AI 客服请求获取代理操作许可。",
+                            "options": ["是", "否"],
+                            "datetime": datetime.now().astimezone().isoformat(timespec="seconds"),
+                        }
+                        round_messages.append(auth_card)
+                        self.messages = round_messages
+                        self._set_status(None)
+                        self._persist_messages([auth_card])
+                        self._emit_log("chatbot_agent", {"level": "info", "message": "等待用户确认代理操作许可"})
+                        self._emit_status("chatbot_agent", "waiting_auth")
+                        return self._with_usage({
+                            "full_report": "",
+                            "cards": [],
+                            "metrics": [],
+                            "mapping": [],
+                            "warnings": [],
+                            "_waiting_auth": True,
+                        })
+
                     for tc in sr.tool_calls:
+                        self._set_status("正在处理信息......")
                         target = _tool_target(tc["name"], tc["arguments"])
                         self._emit_log("chatbot_agent", {"level": "info", "message": f"🔧 {target}"})
 
@@ -166,6 +227,25 @@ class ChatAgentLoop:
                         round_messages.append(tool_message)
                         self.messages = round_messages
                         self._persist_messages([tool_message])
+
+                        wait_seconds = self._tool_resume_wait_seconds(tc)
+                        if wait_seconds > 0:
+                            self._set_status(f"等待 {wait_seconds} 秒后继续处理......")
+                            self._emit_log(
+                                "chatbot_agent",
+                                {"level": "info", "message": f"⏱️ 工具结果已写入，{wait_seconds} 秒后恢复 Agent"},
+                            )
+                            self._emit_status("chatbot_agent", "scheduled_resume")
+                            return self._with_usage({
+                                "full_report": "",
+                                "cards": [],
+                                "metrics": [],
+                                "mapping": [],
+                                "warnings": [],
+                                "_resume_after_seconds": wait_seconds,
+                            })
+
+                    self._set_status("正在整理回复......")
 
                 self.messages = round_messages
 
@@ -193,10 +273,17 @@ class ChatAgentLoop:
         if "deepseek" in self.model.lower():
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
 
-        logger.info("[round_%d] → 发送 LLM 请求 (messages 共 %d 条):", self._round, len(messages))
+        log_start = min(self._logged_message_count, len(messages))
+        log_messages = messages[log_start:]
+        logger.info(
+            "[round_%d] → 发送 LLM 请求 (messages 共 %d 条, 本轮新增 %d 条):",
+            self._round,
+            len(messages),
+            len(log_messages),
+        )
         if self._round == 0 and self.tools:
             logger.info("[round_0] 发送的 Tools 列表 Schema:\n%s", json.dumps(self.tools, ensure_ascii=False, indent=2))
-        for idx, msg in enumerate(messages):
+        for idx, msg in enumerate(log_messages, start=log_start):
             role = msg.get("role", "")
             text = msg.get("content") or ""
             if not isinstance(text, str):
@@ -212,6 +299,7 @@ class ChatAgentLoop:
                 logger.info("  [%d] role=%s (id=%s): %s", idx, role, tc_id, preview)
             else:
                 logger.info("  [%d] role=%s%s: %s", idx, role, tc_info, preview)
+        self._logged_message_count = len(messages)
 
         t0 = time.time()
         last_exc = None
@@ -302,7 +390,7 @@ class ChatAgentLoop:
                     "round": self._round,
                     "model": self.model,
                     "elapsed_ms": round(elapsed, 1),
-                    "request_last_message": messages[-1] if messages else None,
+                    "request_new_messages": [self._summarize_message_for_log(msg) for msg in log_messages],
                     "response": {
                         "content_len": len(content),
                         "reasoning_len": len(reasoning),
@@ -395,6 +483,19 @@ class ChatAgentLoop:
         except Exception as e:
             logger.error("tool_exec_error tool=%s error=%s", name, e)
             return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+    def _tool_resume_wait_seconds(self, tc: dict) -> int:
+        if tc.get("name") not in RESUMABLE_TOOL_NAMES:
+            return 0
+        try:
+            args = json.loads(tc.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            return 0
+        try:
+            raw = int(args.get("wait_seconds") or 0)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(raw, MAX_TOOL_RESUME_WAIT_SECONDS))
 
     def _with_usage(self, result: dict) -> dict:
         total = self._total_input + self._total_output

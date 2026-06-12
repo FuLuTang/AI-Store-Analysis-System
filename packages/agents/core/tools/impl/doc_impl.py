@@ -1,4 +1,4 @@
-"""底层实现：解析并探测工作区内各种文档的结构信息 (XLSX, CSV, PDF, DOCX, JSON, MD, TXT, ZIP, SQLite)"""
+"""底层实现：解析并探测工作区内各种文档的结构信息 (XLSX, CSV, PDF, DOCX, JSON/JSONL, MD, TXT, ZIP, SQLite)"""
 import json
 import io
 import re
@@ -147,8 +147,8 @@ def _read_docx_structure(raw: bytes) -> dict:
     }
 
 
-def _read_json_structure(content: str) -> dict:
-    data = json.loads(content)
+def _read_json_structure(content_or_data) -> dict:
+    data = json.loads(content_or_data) if isinstance(content_or_data, str) else content_or_data
     if isinstance(data, list):
         keys = []
         types = {}
@@ -178,6 +178,19 @@ def _read_json_structure(content: str) -> dict:
             "root_type": type(data).__name__,
             "value_preview": str(data)[:100]
         }
+
+
+def _read_jsonl_structure(content: str) -> dict:
+    records = []
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            records.append(json.loads(raw))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"JSONL 第 {line_no} 行解析失败: {e.msg}") from e
+    return _read_json_structure(records)
 
 
 def _read_md_structure(content: str) -> dict:
@@ -389,6 +402,11 @@ def read_document_structure_impl(
                 content = p.read_text(encoding="utf-8", errors="replace")
                 summary = _read_json_structure(content)
                 kind = "json"
+                rec_tool = "read_file" if size < 100 * 1024 else "run_python"
+            elif lower.endswith(".jsonl"):
+                content = p.read_text(encoding="utf-8", errors="replace")
+                summary = _read_jsonl_structure(content)
+                kind = "jsonl"
                 rec_tool = "read_file" if size < 100 * 1024 else "run_python"
             elif lower.endswith(".md"):
                 content = p.read_text(encoding="utf-8", errors="replace")

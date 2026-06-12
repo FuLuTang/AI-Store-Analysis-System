@@ -28,7 +28,19 @@ from packages.agents.core.models import RawFile
 from packages.agents.core.errors import PipelineAbortedError
 from packages.agents.registry import create_pipeline
 from packages.agents.analysis_params import wash_analysis_params, validate_analysis_params
-from packages.auth import generate_user_key, hash_user_key, mask_user_key, RegisterRateLimiter
+from packages.auth import (
+    RegisterRateLimiter,
+    account_ref_from_token,
+    account_ref_for_username,
+    append_token_event,
+    check_token_logable,
+    generate_service_token,
+    generate_user_token,
+    hash_password,
+    mask_username,
+    token_hash,
+    verify_password,
+)
 from packages.price_recommendation.models import (
     DEFAULT_CANDIDATE_COUNT,
     MAX_CANDIDATE_COUNT,
@@ -77,7 +89,6 @@ STORAGE_DIR = ROOT_DIR / "storage"
 _ensure_file_log()
 ACCOUNTS_DIR = STORAGE_DIR / "accounts"
 SERVICE_DOCS_DIR = STORAGE_DIR / "service_docs"
-LEGACY_ACCOUNT_KEY = os.getenv("LEGACY_USER_KEY", "fzt_legacy_local")
 MAX_UPLOAD_FILE_SIZE = 100 * 1024 * 1024
 MAX_UPLOAD_FILE_SIZE_LABEL = f"{MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB"
 DEFAULT_REASONING_EFFORT = "medium"
@@ -339,7 +350,10 @@ def update_llm_presets(raw_presets: dict):
 
 
 def require_admin_authorization(x_admin_token: Optional[str]):
-    return  # 内部工具，不做管理员鉴权
+    token = (x_admin_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少管理员令牌")
+    return token  # 测试版仅要求存在，不校验内容
 
 
 def _service_docs_rel_path(path: str) -> str:
@@ -410,11 +424,6 @@ def _list_service_docs_entries(target: Path) -> list[dict]:
 
 # ── 账号 / Run 目录辅助 ──
 
-def _make_account_slug(user_key: str, key_hash: str) -> str:
-    prefix = user_key[:10] if len(user_key) >= 10 else user_key
-    return f"{prefix}_{key_hash[:6]}"
-
-
 def _make_run_id() -> str:
     ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     short = uuid.uuid4().hex[:6]
@@ -449,19 +458,7 @@ def _save_session_json(session: "SessionState"):
         pass
 
 
-def _save_latest_run_json(session: "SessionState"):
-    if not session.run_id:
-        return
-    try:
-        (session.account_dir / "latest_run.json").write_text(json.dumps({
-            "runId": session.run_id,
-            "createdAt": datetime.datetime.now().isoformat(),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _save_account_json(account_dir: Path, user_key: str, key_hash: str):
+def _save_account_seen(account_dir: Path):
     path = account_dir / "account.json"
     now = datetime.datetime.now().isoformat()
     if path.exists():
@@ -469,18 +466,11 @@ def _save_account_json(account_dir: Path, user_key: str, key_hash: str):
             existing = json.loads(path.read_text(encoding="utf-8"))
             existing["lastSeenAt"] = now
             path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-            return
         except Exception:
             pass
-    path.write_text(json.dumps({
-        "keyHash": key_hash,
-        "keyMask": mask_user_key(user_key),
-        "createdAt": now,
-        "lastSeenAt": now,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-SERVER_SECRET_KEY = os.getenv("SERVER_SECRET_KEY", "fzt_default_secret_key_123456").strip()
+SERVER_SECRET_KEY = os.getenv("SERVER_SECRET_KEY", "default_report_share_secret_123456").strip()
 
 def generate_share_sign(run_id: str) -> str:
     h = hashlib.sha256(f"{run_id}:{SERVER_SECRET_KEY}".encode("utf-8"))
@@ -534,10 +524,11 @@ def _update_run_status_in_meta(session: "SessionState", status: str):
 
 
 class SessionState:
-    def __init__(self, user_key: str, key_hash: str, account_slug: str, account_dir: Path, config: dict):
-        self.user_key = user_key
-        self.key_hash = key_hash
-        self.account_slug = account_slug
+    def __init__(self, account_name: str, account_hash: str, account_id: str, account_dir: Path, config: dict):
+        self.account_name = account_name
+        self.account_hash = account_hash
+        self.account_id = account_id
+        self.account_slug = account_id
         self.account_dir = account_dir
         self.cache_dir = account_dir / "cache"
         self.status = "idle"  # idle, queued, running, completed, error, aborted, interrupted
@@ -566,6 +557,10 @@ class SessionState:
             return self.run_dir / "latest_report.md"
         return self.account_dir / "latest_report.md"
 
+    @property
+    def profile_path(self) -> Path:
+        return self.account_dir / "profile.json"
+
 
 class SessionManager:
     def __init__(self, base_dir: Path):
@@ -582,10 +577,9 @@ class SessionManager:
     def _load_profile(self, account_dir: Path) -> dict:
         return self._default_config()
 
-    def _account_dir(self, user_key: str) -> tuple[str, str, Path]:
-        key_hash = hash_user_key(user_key)
-        slug = _make_account_slug(user_key, key_hash)
-        return key_hash, slug, self.base_dir / slug
+    def _account_dir(self, account_name: str) -> tuple[str, str, Path]:
+        account_ref = account_ref_for_username(self.base_dir, account_name)
+        return account_ref.username_hash, account_ref.account_id, account_ref.account_dir
 
     def _try_load_session(self, account_dir: Path, task_type: str = "diagnosis") -> dict | None:
         target_dir = account_dir / "runs" / task_type
@@ -614,21 +608,6 @@ class SessionManager:
             except Exception:
                 pass
 
-        # 2. 向后兼容：如果在子目录下未找到，且为诊断分析任务，则退化到读取 latest_run.json 并在根目录 runs 下查找
-        if not state and task_type == "diagnosis":
-            latest = account_dir / "latest_run.json"
-            if latest.exists():
-                try:
-                    meta = json.loads(latest.read_text(encoding="utf-8"))
-                    run_id = meta.get("runId")
-                    if run_id:
-                        run_dir = account_dir / "runs" / run_id
-                        session_path = run_dir / "session.json"
-                        if session_path.exists():
-                            state = json.loads(session_path.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-
         if not state or not run_id or not run_dir:
             return None
 
@@ -645,14 +624,14 @@ class SessionManager:
         state["_runDir"] = str(run_dir)
         return state
 
-    def get_session(self, user_key: str, create_if_missing: bool = True, task_type: str = "diagnosis") -> SessionState:
-        key_hash, slug, account_dir = self._account_dir(user_key)
+    def get_session(self, account_name: str, create_if_missing: bool = True, task_type: str = "diagnosis") -> SessionState:
+        account_hash, account_id, account_dir = self._account_dir(account_name)
         task_type = (task_type or "diagnosis").strip() or "diagnosis"
-        cache_key = (key_hash, task_type)
+        cache_key = (account_hash, task_type)
         with self._lock:
             existing = self._sessions.get(cache_key)
             if existing:
-                _save_account_json(account_dir, user_key, key_hash)
+                _save_account_seen(account_dir)
                 return existing
 
             account_json_path = account_dir / "account.json"
@@ -660,9 +639,9 @@ class SessionManager:
                 raise KeyError("invalid_key")
 
             account_dir.mkdir(parents=True, exist_ok=True)
-            _save_account_json(account_dir, user_key, key_hash)
+            _save_account_seen(account_dir)
             cfg = self._load_profile(account_dir)
-            session = SessionState(user_key=user_key, key_hash=key_hash, account_slug=slug, account_dir=account_dir, config=cfg)
+            session = SessionState(account_name=account_name, account_hash=account_hash, account_id=account_id, account_dir=account_dir, config=cfg)
             session.task_type = task_type
 
             saved = self._try_load_session(account_dir, task_type=task_type)
@@ -681,9 +660,6 @@ class SessionManager:
             self._sessions[cache_key] = session
             return session
 
-    def get_legacy_session(self) -> SessionState:
-        return self.get_session(LEGACY_ACCOUNT_KEY, create_if_missing=True)
-
     def save_profile(self, session: SessionState):
         session.account_dir.mkdir(parents=True, exist_ok=True)
         session.profile_path.write_text(
@@ -693,12 +669,12 @@ class SessionManager:
             encoding="utf-8"
         )
 
-    def drop_session(self, key_hash: str, task_type: Optional[str] = None):
+    def drop_session(self, account_hash: str, task_type: Optional[str] = None):
         with self._lock:
             if task_type:
-                self._sessions.pop((key_hash, task_type), None)
+                self._sessions.pop((account_hash, task_type), None)
                 return
-            for cache_key in [k for k in self._sessions if k[0] == key_hash]:
+            for cache_key in [k for k in self._sessions if k[0] == account_hash]:
                 self._sessions.pop(cache_key, None)
 
 
@@ -779,7 +755,7 @@ def add_log(session: SessionState, node_id: str, message):
         payload = {"nodeId": node_id, "level": level, "message": safe_msg}
 
     log_entry = emit_event(session, "log", payload)
-    hash_prefix = session.key_hash[:8]
+    hash_prefix = session.account_hash[:8]
     logger.info("[%s] %s %s [%s]", log_entry["time"], hash_prefix, node_id, level)
 
 
@@ -813,14 +789,27 @@ def sanitize_settings(raw: Optional[dict]) -> dict:
     }
 
 
-def resolve_session(x_fzt_key: Optional[str], task_type: str = "diagnosis") -> SessionState:
-    key = (x_fzt_key or "").strip()
-    if not key:
+SERVICE_FORBIDDEN_OPERATIONS = {"delete", "security"}
+
+
+def _service_operation_guard(auth_result, operation: str):
+    if auth_result.is_service and operation in SERVICE_FORBIDDEN_OPERATIONS:
+        raise HTTPException(status_code=403, detail="客服 token 无权执行该操作")
+
+
+def resolve_session(
+    auth_token: Optional[str],
+    task_type: str = "diagnosis",
+    operation: str = "read",
+) -> SessionState:
+    token = (auth_token or "").strip()
+    if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
-    try:
-        return session_manager.get_session(key, create_if_missing=False, task_type=task_type)
-    except KeyError:
-        raise HTTPException(status_code=401, detail="Invalid or expired key")
+    auth_result = check_token_logable(ACCOUNTS_DIR, token)
+    if not auth_result:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    _service_operation_guard(auth_result, operation)
+    return session_manager.get_session(auth_result.account.username, create_if_missing=False, task_type=task_type)
 
 
 def _normalize_candidate_count(value: Optional[int]) -> int:
@@ -855,29 +844,114 @@ async def auth_register(request: Request):
     except Exception:
         data = {}
 
-    user_key = generate_user_key()
-    session = session_manager.get_session(user_key, create_if_missing=True)
+    username = str(data.get("username") or data.get("accountName") or "").strip()
+    password = str(data.get("password") or "")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="密码至少需要 8 位")
+    try:
+        account_ref = account_ref_for_username(ACCOUNTS_DIR, username)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    account_json_path = account_ref.account_dir / "account.json"
+    if account_json_path.exists():
+        raise HTTPException(status_code=409, detail="账号已存在")
+
+    now = datetime.datetime.now().isoformat()
+    account_ref.account_dir.mkdir(parents=True, exist_ok=True)
+    account_json_path.write_text(json.dumps({
+        "accountId": account_ref.account_id,
+        "username": account_ref.username,
+        "usernameHash": account_ref.username_hash,
+        "passwordHash": hash_password(password),
+        "createdAt": now,
+        "lastSeenAt": now,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    session = session_manager.get_session(account_ref.username, create_if_missing=True)
     _ensure_session_dirs(session)
 
-    api_key = data.get("apiKey") or data.get("openaiKey")
-    if isinstance(api_key, str) and api_key.strip():
-        set_global_api_key(api_key)
+    token = generate_user_token(account_ref)
+    hashed = token_hash(token)
+    append_token_event(account_ref.account_dir, {"action": "creation", "token_hash": hashed})
 
-    return {"userKey": user_key, "status": "ok"}
+    return {"token": token, "status": "ok", "account": mask_username(account_ref.username)}
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    username = str(data.get("username") or data.get("accountName") or "").strip()
+    password = str(data.get("password") or "")
+    try:
+        account_ref = account_ref_for_username(ACCOUNTS_DIR, username)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    account_json_path = account_ref.account_dir / "account.json"
+    if not account_json_path.exists():
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    try:
+        account_data = json.loads(account_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    if account_data.get("usernameHash") != account_ref.username_hash:
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    if not verify_password(password, str(account_data.get("passwordHash") or "")):
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+
+    token = generate_user_token(account_ref)
+    hashed = token_hash(token)
+    append_token_event(account_ref.account_dir, {"action": "creation", "token_hash": hashed})
+    session_manager.get_session(account_ref.username, create_if_missing=True)
+    return {"token": token, "status": "ok", "account": mask_username(account_ref.username)}
+
+
+@app.post("/api/auth/service-token")
+async def create_service_token(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    raw_token = str(data.get("token") or data.get("userToken") or "").strip()
+    auth_result = check_token_logable(ACCOUNTS_DIR, raw_token)
+    if not auth_result or auth_result.is_service:
+        raise HTTPException(status_code=401, detail="用户 token 无效或已过期")
+
+    service_token = generate_service_token(auth_result.account)
+    service_hash = token_hash(service_token)
+    append_token_event(auth_result.account.account_dir, {
+        "action": "serv_creation",
+        "token_hash": service_hash,
+        "parent_token_hash": auth_result.token_hash,
+    })
+    return {"token": service_token, "status": "ok", "account": mask_username(auth_result.account.username)}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(x_auth_token: Optional[str] = Header(default=None, alias="X-Auth-Token")):
+    token = (x_auth_token or "").strip()
+    auth_result = check_token_logable(ACCOUNTS_DIR, token)
+    account_ref = auth_result.account if auth_result else account_ref_from_token(ACCOUNTS_DIR, token)
+    if not account_ref:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    append_token_event(account_ref.account_dir, {"action": "revoke", "token_hash": token_hash(token)})
+    return {"status": "ok"}
 
 
 @app.post("/api/auth/verify")
-def auth_verify(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
+def auth_verify(x_auth_token: Optional[str] = Header(default=None, alias="X-Auth-Token")):
+    session = resolve_session(x_auth_token)
     return {
         "status": "ok",
-        "userKey": mask_user_key(session.user_key)
+        "account": mask_username(session.account_name),
     }
 
 
 @app.get("/api/config")
-def get_config(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
+def get_config(x_auth_token: Optional[str] = Header(default=None)):
+    session = resolve_session(x_auth_token)
     effort = normalize_reasoning_effort(session.config.get("reasoningEffort"))
     preset = get_llm_preset(effort)
     return {
@@ -1006,6 +1080,30 @@ async def upload_admin_service_doc_file(
     }
 
 
+@app.post("/api/admin/service-docs/folder")
+async def create_admin_service_doc_folder(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="缺少 path")
+
+    rel = _service_docs_rel_path(path)
+    if not rel:
+        raise HTTPException(status_code=400, detail="文件夹路径不能为空")
+
+    target = _service_docs_abs_path(path)
+    if target.exists() and target.is_file():
+        raise HTTPException(status_code=400, detail="目标路径已存在且是文件")
+    target.mkdir(parents=True, exist_ok=True)
+    return {
+        "status": "ok",
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()) + "/",
+    }
+
+
 @app.delete("/api/admin/service-docs/file")
 def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Header(default=None)):
     require_admin_authorization(x_admin_token)
@@ -1018,12 +1116,33 @@ def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Head
         target.unlink()
     return {"status": "ok", "path": path}
 
+
+@app.post("/api/admin/chatbot/notice")
+async def broadcast_chatbot_notice(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    require_admin_authorization(x_admin_token)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是对象")
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="缺少 content")
+
+    from packages.agents.system_service_functions.ai_analyse.history._append_notice_to_all_chats import (
+        broadcast_notice_to_all_chats,
+    )
+
+    result = broadcast_notice_to_all_chats(ACCOUNTS_DIR, content)
+    return {
+        "status": "ok",
+        **result,
+    }
+
 @app.get("/api/status")
 def get_status(
     run_id: Optional[str] = Query(None),
-    x_fzt_key: Optional[str] = Header(default=None)
+    x_auth_token: Optional[str] = Header(default=None)
 ):
-    session = resolve_session(x_fzt_key)
+    session = resolve_session(x_auth_token)
     
     target_run_id = run_id or session.run_id
     if not target_run_id:
@@ -1084,9 +1203,9 @@ def get_status(
 @app.get("/api/logs")
 def get_logs(
     run_id: Optional[str] = Query(None),
-    x_fzt_key: Optional[str] = Header(default=None)
+    x_auth_token: Optional[str] = Header(default=None)
 ):
-    session = resolve_session(x_fzt_key)  # 确保 session 缓存存在
+    session = resolve_session(x_auth_token)  # 确保 session 缓存存在
     return {"logs": _load_logs_from_file(session, run_id)}
 
 
@@ -1155,9 +1274,9 @@ async def sse_generator(session: SessionState, run_id: Optional[str] = None):
 @app.get("/api/stream")
 async def stream(
     run_id: Optional[str] = Query(None),
-    x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
+    x_auth_token: Optional[str] = Query(default=None, alias="auth-token")
 ):
-    session = resolve_session(x_fzt_key)
+    session = resolve_session(x_auth_token)
     return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
 
 
@@ -1349,11 +1468,11 @@ async def run_price_recommendation_task(session: SessionState, decoded_files: li
 async def price_recommendation_precheck(
     files: List[UploadFile] = File(...),
     productName: str = Form(...),
-    x_fzt_key: Optional[str] = Header(default=None),
+    x_auth_token: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None),
     costTier: Optional[str] = Form(None),
 ):
-    resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    resolve_session(x_auth_token, task_type=PRICE_RECOMMENDATION_TASK_TYPE, operation="execute")
     product_name = (productName or "").strip()
     if not product_name:
         raise HTTPException(status_code=400, detail="缺少 productName")
@@ -1365,12 +1484,12 @@ async def price_recommendation_precheck(
 async def start_price_recommendation(
     files: List[UploadFile] = File(...),
     productName: str = Form(...),
-    x_fzt_key: Optional[str] = Header(default=None),
+    x_auth_token: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None),
     costTier: Optional[str] = Form(None),
     candidateCount: Optional[int] = Form(None),
 ):
-    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    session = resolve_session(x_auth_token, task_type=PRICE_RECOMMENDATION_TASK_TYPE, operation="execute")
     product_name = (productName or "").strip()
     if not product_name:
         raise HTTPException(status_code=400, detail="缺少 productName")
@@ -1415,9 +1534,9 @@ async def start_price_recommendation(
 @app.get("/api/price-recommendations/status")
 def get_price_recommendation_status(
     run_id: Optional[str] = Query(None),
-    x_fzt_key: Optional[str] = Header(default=None)
+    x_auth_token: Optional[str] = Header(default=None)
 ):
-    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    session = resolve_session(x_auth_token, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
     
     target_run_id = run_id or session.run_id
     if not target_run_id:
@@ -1475,24 +1594,24 @@ def get_price_recommendation_status(
 @app.get("/api/price-recommendations/logs")
 def get_price_recommendation_logs(
     run_id: Optional[str] = Query(None),
-    x_fzt_key: Optional[str] = Header(default=None)
+    x_auth_token: Optional[str] = Header(default=None)
 ):
-    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    session = resolve_session(x_auth_token, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
     return {"logs": _load_logs_from_file(session, run_id)}
 
 
 @app.get("/api/price-recommendations/stream")
 async def stream_price_recommendation(
     run_id: Optional[str] = Query(None),
-    x_fzt_key: Optional[str] = Query(default=None, alias="x-fzt-key")
+    x_auth_token: Optional[str] = Query(default=None, alias="auth-token")
 ):
-    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+    session = resolve_session(x_auth_token, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
     return StreamingResponse(sse_generator(session, run_id), media_type="text/event-stream")
 
 
 @app.post("/api/price-recommendations/stop")
-def stop_price_recommendation(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
+def stop_price_recommendation(x_auth_token: Optional[str] = Header(default=None)):
+    session = resolve_session(x_auth_token, task_type=PRICE_RECOMMENDATION_TASK_TYPE)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
             session.force_stop = True
@@ -1509,11 +1628,11 @@ def stop_price_recommendation(x_fzt_key: Optional[str] = Header(default=None)):
 @app.post("/api/analyze")
 async def analyze(
     files: List[UploadFile] = File(...),
-    x_fzt_key: Optional[str] = Header(default=None),
+    x_auth_token: Optional[str] = Header(default=None),
     reasoningEffort: Optional[str] = Form(None),
     costTier: Optional[str] = Form(None),
 ):
-    session = resolve_session(x_fzt_key)
+    session = resolve_session(x_auth_token, operation="execute")
     session.config["reasoningEffort"] = normalize_reasoning_effort(costTier or reasoningEffort)
     with session.runtime_lock:
         if session.status in ("queued", "running"):
@@ -1555,7 +1674,6 @@ async def analyze(
     # 创建 run 目录
     _ensure_run_dir(session)
     _save_session_json(session)
-    _save_latest_run_json(session)
     
     # 记录运行历史
     file_names = [df["name"] for df in decoded_files]
@@ -1571,8 +1689,8 @@ async def analyze(
 
 
 @app.post("/api/stop")
-def stop(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
+def stop(x_auth_token: Optional[str] = Header(default=None)):
+    session = resolve_session(x_auth_token)
     with session.runtime_lock:
         if session.status == "running":
             session.force_stop = True
@@ -1590,10 +1708,10 @@ def stop(x_fzt_key: Optional[str] = Header(default=None)):
 @app.get("/api/reports/download")
 async def download_report_zip(
     run_id: Optional[str] = Query(None),
-    x_fzt_key: Optional[str] = Query(None, alias="x-fzt-key"),
-    x_fzt_key_header: Optional[str] = Header(None, alias="X-FZT-Key")
+    x_auth_token: Optional[str] = Query(None, alias="auth-token"),
+    x_auth_token_header: Optional[str] = Header(None, alias="X-Auth-Token")
 ):
-    key = x_fzt_key or x_fzt_key_header
+    key = x_auth_token or x_auth_token_header
     session = resolve_session(key)
     
     target_run_id = run_id or session.run_id
@@ -1645,10 +1763,10 @@ async def download_report_zip(
 
 @app.get("/api/reports")
 def get_reports_list(
-    x_fzt_key: Optional[str] = Header(default=None),
+    x_auth_token: Optional[str] = Header(default=None),
     request: Request = None
 ):
-    session = resolve_session(x_fzt_key)
+    session = resolve_session(x_auth_token)
     runs = _load_runs(session.account_dir)
     
     # Calculate share URL and sign dynamically for each run
@@ -1669,9 +1787,9 @@ def get_reports_list(
 async def toggle_report_public(
     run_id: str,
     request: Request,
-    x_fzt_key: Optional[str] = Header(default=None)
+    x_auth_token: Optional[str] = Header(default=None)
 ):
-    session = resolve_session(x_fzt_key)
+    session = resolve_session(x_auth_token, operation="security")
     body = await request.json()
     is_public = bool(body.get("public", False))
     
@@ -1724,9 +1842,9 @@ async def toggle_report_public(
 @app.delete("/api/reports/{run_id}")
 def delete_report(
     run_id: str,
-    x_fzt_key: Optional[str] = Header(default=None)
+    x_auth_token: Optional[str] = Header(default=None)
 ):
-    session = resolve_session(x_fzt_key)
+    session = resolve_session(x_auth_token, operation="delete")
     runs = _load_runs(session.account_dir)
     
     # Find the run
@@ -1819,12 +1937,12 @@ def get_public_report_status(
     if full_path.exists():
         full_str = full_path.read_text(encoding="utf-8")
         
-    user_key = target_account_dir.name
+    account_label = target_account_dir.name
     account_json_path = target_account_dir / "account.json"
     if account_json_path.exists():
         try:
             adata = json.loads(account_json_path.read_text(encoding="utf-8"))
-            user_key = adata.get("keyMask", user_key)
+            account_label = mask_username(str(adata.get("username") or ""))
         except Exception:
             pass
 
@@ -1837,7 +1955,7 @@ def get_public_report_status(
         "result": result_str,
         "fullResult": full_str,
         "runId": run_id,
-        "userKey": user_key
+        "account": account_label
     }
 
 
@@ -1929,8 +2047,8 @@ def get_examples():
 
 
 @app.get("/api/analysis-params")
-def get_analysis_params(x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
+def get_analysis_params(x_auth_token: Optional[str] = Header(default=None)):
+    session = resolve_session(x_auth_token)
     params_path = session.account_dir / "analysis_params.json"
     if params_path.exists():
         try:
@@ -1942,8 +2060,8 @@ def get_analysis_params(x_fzt_key: Optional[str] = Header(default=None)):
 
 
 @app.put("/api/analysis-params")
-async def update_analysis_params(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
-    session = resolve_session(x_fzt_key)
+async def update_analysis_params(request: Request, x_auth_token: Optional[str] = Header(default=None)):
+    session = resolve_session(x_auth_token)
     body = await request.json()
     raw = body.get("analysis_params", "")
     validated = validate_analysis_params(raw)
@@ -1975,10 +2093,10 @@ def get_params_presets():
 def get_report_asset(
     run_id: str,
     filename: str,
-    x_fzt_key: Optional[str] = Header(default=None),
-    x_fzt_key_query: Optional[str] = Query(default=None, alias="x-fzt-key")
+    x_auth_token: Optional[str] = Header(default=None),
+    x_auth_token_query: Optional[str] = Query(default=None, alias="auth-token")
 ):
-    key = x_fzt_key or x_fzt_key_query
+    key = x_auth_token or x_auth_token_query
     session = resolve_session(key)
 
     # 路径安全检查，防止目录遍历攻击
@@ -2073,7 +2191,7 @@ def get_public_report_asset(
 
 register_chatbot_routes(
     app,
-    resolve_session=resolve_session,
+    resolve_session=lambda auth_token: resolve_session(auth_token, task_type="chatbot"),
     get_chatbot_preset=get_chatbot_preset,
 )
 

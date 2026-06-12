@@ -14,11 +14,17 @@ from typing import Callable, Optional
 
 from openai import OpenAI
 from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 
 from packages.agents.core.chat_agent_loop import ChatAgentLoop
 from packages.agents.core.workspace import Workspace
 from packages.agents.chatbot.prompt_builder import build_system_content as build_chatbot_system_content
+from packages.auth import (
+    append_token_event,
+    check_token_logable,
+    generate_service_token,
+    token_hash,
+)
 
 logger = logging.getLogger("app.chatbot_service")
 if not logger.handlers:
@@ -47,9 +53,24 @@ MODEL_MESSAGE_KEYS = {
     "reasoning_content",
     "refusal",
     "audio",
+    "title",
+    "detail",
+    "options",
+    "choice",
 }
 HISTORY_EXTRA_KEYS = {"attachments"}
 NOTICE_NAME = "notice"
+ASK_TOKEN_AUTH_NAME = "ask_token_auth"
+SERVICE_TOKEN_TOOL_NAME = "get_user_service_token"
+CHATBOT_TYPING_STATE = "AI客服输入中......"
+CHATBOT_STATUS_MIN_INTERVAL_SECONDS = 2
+CHATBOT_HISTORY_COMPRESS_EVERY = 150
+CHATBOT_HISTORY_KEEP_AT_LEAST = 20
+
+CHATBOT_STATUS_STATE: dict[str, Optional[str]] = {}
+CHATBOT_RUNNING_LOCK = Lock()
+CHATBOT_STATUS_POLLS: dict[str, float] = {}
+CHATBOT_STATUS_LOCK = Lock()
 
 
 class ChatbotStreamError(Exception):
@@ -130,6 +151,13 @@ def _is_notice_message(message: dict) -> bool:
     )
 
 
+def _is_card_message(message: dict) -> bool:
+    return (
+        str(message.get("role", "")).strip().lower() == "system"
+        and bool(str(message.get("title") or "").strip())
+    )
+
+
 def _history_time(message: dict) -> str:
     return str(message.get("datetime") or message.get("time") or "").strip()
 
@@ -154,6 +182,36 @@ def _notice_messages_for_model(messages: list[dict]) -> list[dict]:
     return notices
 
 
+def _system_card_message_for_model(message: dict) -> dict:
+    lines = [
+        "【系统卡片消息】",
+        f"name: {str(message.get('name') or '').strip() or '(未命名)'}",
+        f"title: {str(message.get('title') or '').strip() or '(无标题)'}",
+    ]
+    detail = str(message.get("detail") or "").strip()
+    if detail:
+        lines.append(f"detail: {detail}")
+    options = message.get("options")
+    if isinstance(options, list) and options:
+        lines.append("options: " + " / ".join(str(item) for item in options))
+    if "choice" in message:
+        lines.append(f"choice: {str(message.get('choice') or '').strip()}")
+    card_time = _history_time(message)
+    if card_time:
+        lines.append(f"time: {card_time}")
+    return {"role": "system", "content": "\n".join(lines)}
+
+
+def _has_pending_token_auth(messages: list[dict]) -> bool:
+    for message in reversed(messages):
+        if (
+            str(message.get("role", "")).strip().lower() == "system"
+            and str(message.get("name", "")).strip() == ASK_TOKEN_AUTH_NAME
+        ):
+            return "choice" not in message
+    return False
+
+
 def _public_history_messages(messages: list[dict]) -> list[dict]:
     visible: list[dict] = []
     for message in messages:
@@ -168,16 +226,43 @@ def _public_history_messages(messages: list[dict]) -> list[dict]:
                 notice["datetime"] = notice_time
             visible.append(notice)
             continue
-        if role == "system":
+        if _is_card_message(message):
+            card = {
+                "role": "card",
+                "name": str(message.get("name") or ""),
+                "title": str(message.get("title") or ""),
+                "detail": str(message.get("detail") or ""),
+            }
+            options = message.get("options")
+            if isinstance(options, list):
+                card["options"] = [str(item) for item in options]
+            if "choice" in message:
+                card["choice"] = str(message.get("choice") or "")
+            card_time = _history_time(message)
+            if card_time:
+                card["datetime"] = card_time
+            visible.append(card)
             continue
-        public_message = dict(message)
-        attachments = public_message.get("attachments")
-        if isinstance(attachments, list):
-            public_message["attachments"] = [
-                _public_attachment_record(item) if isinstance(item, dict) else item
-                for item in attachments
-            ]
-        visible.append(public_message)
+        if role in {"user", "assistant"}:
+            content_val = str(message.get("content") or "")
+            if role == "assistant" and not content_val.strip():
+                continue
+            public_msg = {
+                "role": role,
+                "content": content_val,
+            }
+            msg_time = _history_time(message)
+            if msg_time:
+                public_msg["datetime"] = msg_time
+            attachments = message.get("attachments")
+            if isinstance(attachments, list):
+                public_msg["attachments"] = [
+                    _public_attachment_record(item) if isinstance(item, dict) else item
+                    for item in attachments
+                ]
+            visible.append(public_msg)
+            continue
+        # Strictly ignore all other roles (system, tool, etc.) as per API docs
     return visible
 
 
@@ -236,6 +321,67 @@ def _validate_message_record(record: object) -> dict | None:
         return None
 
 
+def is_history_message_compressed(
+    total: int,
+    index: int,
+    compress_every: int = CHATBOT_HISTORY_COMPRESS_EVERY,
+    keep_at_least: int = CHATBOT_HISTORY_KEEP_AT_LEAST,
+) -> bool:
+    compressed_prefix_length = compress_every * max(0, (total - keep_at_least) // compress_every)
+    return index < compressed_prefix_length
+
+
+def _tool_call_ids_from_message(message: dict) -> set[str]:
+    tool_call_ids: set[str] = set()
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return tool_call_ids
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        tool_call_id = str(call.get("id") or "").strip()
+        if tool_call_id:
+            tool_call_ids.add(tool_call_id)
+    return tool_call_ids
+
+
+def _compress_history_for_model(history: list[dict]) -> list[dict]:
+    total = len(history)
+    compressed_tool_call_ids: set[str] = set()
+    for index, message in enumerate(history):
+        if is_history_message_compressed(total, index) and str(message.get("role", "")).strip().lower() == "assistant":
+            compressed_tool_call_ids.update(_tool_call_ids_from_message(message))
+
+    compressed_history: list[dict] = []
+    for index, message in enumerate(history):
+        role = str(message.get("role", "")).strip().lower()
+        if not is_history_message_compressed(total, index):
+            if role == "tool" and str(message.get("tool_call_id") or "").strip() in compressed_tool_call_ids:
+                continue
+            compressed_history.append(message)
+            continue
+
+        if role in {"system", "user"}:
+            compressed_history.append(message)
+            continue
+
+        if role == "tool":
+            tool_call_id = str(message.get("tool_call_id") or "").strip()
+            if tool_call_id in compressed_tool_call_ids:
+                continue
+            continue
+
+        if role == "assistant":
+            compressed = dict(message)
+            compressed.pop("reasoning_content", None)
+            compressed.pop("tool_calls", None)
+            compressed_history.append(compressed)
+            continue
+
+        compressed_history.append(message)
+    return compressed_history
+
+
 class ChatbotHistoryStore:
     def __init__(self):
         self._locks: dict[str, Lock] = {}
@@ -288,6 +434,82 @@ class ChatbotHistoryStore:
             with path.open("a", encoding="utf-8") as fh:
                 for message in messages:
                     fh.write(json.dumps(message, ensure_ascii=False) + "\n")
+
+    def last_update(self, account_dir: Path) -> str:
+        messages = self.load_messages(account_dir)
+        for message in reversed(messages):
+            ts = _history_time(message)
+            if ts:
+                return ts
+        return ""
+
+    def complete_token_auth(self, account_dir: Path, choice: str, tool_content: str) -> None:
+        path = self.history_path(account_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock = self._get_lock(account_dir)
+        now = _now_iso()
+
+        with lock:
+            raw_messages: list[dict] = []
+            if path.exists():
+                with path.open("r", encoding="utf-8") as fh:
+                    for line in fh:
+                        raw = line.strip()
+                        if not raw:
+                            continue
+                        try:
+                            data = json.loads(raw)
+                            if isinstance(data, dict):
+                                raw_messages.append(data)
+                        except json.JSONDecodeError:
+                            continue
+
+            card_index = None
+            for idx in range(len(raw_messages) - 1, -1, -1):
+                msg = raw_messages[idx]
+                if (
+                    str(msg.get("role", "")).strip().lower() == "system"
+                    and str(msg.get("name", "")).strip() == ASK_TOKEN_AUTH_NAME
+                    and "choice" not in msg
+                ):
+                    card_index = idx
+                    break
+            if card_index is None:
+                raise HTTPException(status_code=400, detail="未找到待确认的授权请求")
+            raw_messages[card_index]["choice"] = choice
+            raw_messages[card_index]["datetime"] = raw_messages[card_index].get("datetime") or now
+
+            tool_call_id = ""
+            for msg in reversed(raw_messages):
+                if str(msg.get("role", "")).strip().lower() != "assistant":
+                    continue
+                calls = msg.get("tool_calls")
+                if not isinstance(calls, list):
+                    continue
+                for call in reversed(calls):
+                    if not isinstance(call, dict):
+                        continue
+                    function = call.get("function") if isinstance(call.get("function"), dict) else {}
+                    name = function.get("name") or call.get("name")
+                    if name == SERVICE_TOKEN_TOOL_NAME:
+                        tool_call_id = str(call.get("id") or "")
+                        break
+                if tool_call_id:
+                    break
+            if not tool_call_id:
+                raise HTTPException(status_code=400, detail="未找到对应的工具调用记录")
+
+            raw_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "name": SERVICE_TOKEN_TOOL_NAME,
+                "content": tool_content,
+                "datetime": now,
+            })
+            path.write_text(
+                "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in raw_messages),
+                encoding="utf-8",
+            )
 
 
 history_store = ChatbotHistoryStore()
@@ -425,16 +647,8 @@ def _build_chatbot_workspace(account_dir: Path) -> Workspace:
 
 
 def _build_initial_messages(history: list[dict], content: str, attachments: list[dict]) -> tuple[list[dict], list[dict]]:
-    initial_messages: list[dict] = [
-        {"role": "system", "content": build_chatbot_system_content()}
-    ]
+    initial_messages = _build_messages_from_history(history)
     prefix_to_persist: list[dict] = []
-
-    initial_messages.extend(
-        _normalize_message_for_model(item)
-        for item in history
-        if str(item.get("role", "")).strip().lower() != "system"
-    )
 
     user_message = {"role": "user", "content": content, "datetime": _now_iso()}
     if attachments:
@@ -445,13 +659,32 @@ def _build_initial_messages(history: list[dict], content: str, attachments: list
 
 
 def _build_messages_from_history(history: list[dict]) -> list[dict]:
+    history = _compress_history_for_model(history)
     messages: list[dict] = [{"role": "system", "content": build_chatbot_system_content()}]
-    messages.extend(_notice_messages_for_model(history))
-    messages.extend(
-        _normalize_message_for_model(item)
-        for item in history
-        if str(item.get("role", "")).strip().lower() != "system"
-    )
+    pending_card_messages: list[dict] = []
+    for item in history:
+        role = str(item.get("role", "")).strip().lower()
+        if _is_notice_message(item):
+            messages.extend(_notice_messages_for_model([item]))
+            continue
+        if _is_card_message(item):
+            pending_card_messages.append(_system_card_message_for_model(item))
+            continue
+        if role == "system":
+            continue
+        messages.append(_normalize_message_for_model(item))
+        if role == "tool" and pending_card_messages:
+            messages.extend(pending_card_messages)
+            pending_card_messages = []
+    if pending_card_messages:
+        last = messages[-1] if messages else {}
+        # 未闭合的 assistant tool_call 不能后接 system 消息；这种情况通常会被发送入口拦截。
+        if not (
+            str(last.get("role", "")).strip().lower() == "assistant"
+            and isinstance(last.get("tool_calls"), list)
+            and last.get("tool_calls")
+        ):
+            messages.extend(pending_card_messages)
     return messages
 
 
@@ -463,6 +696,55 @@ def _extract_final_text(result: dict) -> str:
     return json.dumps(compact, ensure_ascii=False)
 
 
+def _running_key(account_dir: Path) -> str:
+    return str(account_dir)
+
+
+def _set_chatbot_state(account_dir: Path, state: Optional[str]):
+    with CHATBOT_RUNNING_LOCK:
+        CHATBOT_STATUS_STATE[_running_key(account_dir)] = None if state is None else str(state)
+
+
+def _get_chatbot_state(account_dir: Path) -> Optional[str]:
+    with CHATBOT_RUNNING_LOCK:
+        return CHATBOT_STATUS_STATE.get(_running_key(account_dir))
+
+
+def _is_chatbot_running(account_dir: Path) -> bool:
+    return _get_chatbot_state(account_dir) is not None
+
+
+def _check_status_poll_limit(token: str):
+    hashed = token_hash(token)
+    now = time.time()
+    with CHATBOT_STATUS_LOCK:
+        last = CHATBOT_STATUS_POLLS.get(hashed, 0)
+        if now - last < CHATBOT_STATUS_MIN_INTERVAL_SECONDS:
+            raise HTTPException(status_code=429, detail="chatbot status 查询过于频繁")
+        CHATBOT_STATUS_POLLS[hashed] = now
+
+
+def _build_service_token_from_user_token(accounts_dir: Path, user_token: str) -> str:
+    auth_result = check_token_logable(accounts_dir, user_token)
+    if not auth_result or auth_result.is_service:
+        raise HTTPException(status_code=401, detail="用户 token 无效或已过期")
+    service_token = generate_service_token(auth_result.account)
+    append_token_event(auth_result.account.account_dir, {
+        "action": "serv_creation",
+        "token_hash": token_hash(service_token),
+        "parent_token_hash": auth_result.token_hash,
+    })
+    return service_token
+
+
+def _is_token_auth_choice(payload: dict) -> bool:
+    return (
+        str(payload.get("name") or "").strip() == ASK_TOKEN_AUTH_NAME
+        and ("choice" in payload or "choise" in payload)
+        and "detail" in payload
+    )
+
+
 def register_chatbot_routes(
     app,
     *,
@@ -472,16 +754,20 @@ def register_chatbot_routes(
     router = APIRouter()
 
     @router.get("/api/chatbot/history")
-    def get_chatbot_history(x_fzt_key: Optional[str] = Header(default=None)):
-        session = resolve_session(x_fzt_key)
-        return {"messages": _public_history_messages(history_store.load_messages(session.account_dir))}
+    def get_chatbot_history(x_auth_token: Optional[str] = Header(default=None)):
+        session = resolve_session(x_auth_token)
+        messages = history_store.load_messages(session.account_dir)
+        return {
+            "messages": _public_history_messages(messages),
+            "last_update": history_store.last_update(session.account_dir),
+        }
 
     @router.post("/api/chatbot/attachments")
     async def upload_chatbot_attachments(
         attachments: list[UploadFile] = File(...),
-        x_fzt_key: Optional[str] = Header(default=None),
+        x_auth_token: Optional[str] = Header(default=None),
     ):
-        session = resolve_session(x_fzt_key)
+        session = resolve_session(x_auth_token)
         saved = await attachment_store.save_uploads(session.account_dir, attachments)
         logger.info(
             "[chatbot] stage=attachments_uploaded account=%s count=%d bytes=%d",
@@ -491,13 +777,162 @@ def register_chatbot_routes(
         )
         return {"attachments": saved}
 
+    async def _resume_chatbot_agent_after(
+        session,
+        request_id: str,
+        preset: dict,
+        base_url: str,
+        api_key: str,
+        model: str,
+        delay_seconds: int,
+        t0: float,
+    ):
+        await asyncio.sleep(max(0, delay_seconds))
+        await _run_chatbot_agent_background(session, f"{request_id}:resume", preset, base_url, api_key, model, t0)
+
+    async def _run_chatbot_agent_background(session, request_id: str, preset: dict, base_url: str, api_key: str, model: str, t0: float):
+        _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
+        keep_state_for_resume = False
+        try:
+            history = history_store.load_messages(session.account_dir)
+            initial_messages = _build_messages_from_history(history)
+            ws = _build_chatbot_workspace(session.account_dir)
+            logger.info(
+                "[chatbot] stage=server_to_llm_prepare request_id=%s model=%s upstream_messages=%d base_url=%s workspace=%s",
+                request_id,
+                model,
+                len(initial_messages),
+                base_url,
+                ws.dir,
+            )
+            llm_preset = {
+                "model": model,
+                "baseUrl": base_url,
+                "apiKey": api_key,
+            }
+            client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+
+            def load_messages_for_loop():
+                return _build_messages_from_history(history_store.load_messages(session.account_dir))
+
+            loop = ChatAgentLoop(
+                client=client,
+                ws=ws,
+                llm_preset=llm_preset,
+                initial_messages=initial_messages,
+                load_messages=load_messages_for_loop,
+                persist_messages=lambda msgs: history_store.append_messages(session.account_dir, msgs),
+                emit_log=lambda nid, msg: logger.info(
+                    "[chatbot-agent] request_id=%s node=%s message=%s",
+                    request_id,
+                    nid,
+                    json.dumps(msg, ensure_ascii=False) if isinstance(msg, dict) else str(msg),
+                ),
+                emit_status=lambda nid, st: logger.info(
+                    "[chatbot-agent] request_id=%s node=%s status=%s",
+                    request_id,
+                    nid,
+                    st,
+                ),
+                set_status=lambda state: _set_chatbot_state(session.account_dir, state),
+                check_aborted=None,
+            )
+            result = await asyncio.to_thread(loop.run)
+            resume_after_seconds = int(result.get("_resume_after_seconds") or 0)
+            if resume_after_seconds > 0:
+                keep_state_for_resume = True
+                _set_chatbot_state(session.account_dir, f"等待 {resume_after_seconds} 秒后继续处理......")
+                logger.info(
+                    "[chatbot] stage=agent_scheduled_resume request_id=%s delay_seconds=%d",
+                    request_id,
+                    resume_after_seconds,
+                )
+                asyncio.create_task(
+                    _resume_chatbot_agent_after(
+                        session,
+                        request_id,
+                        preset,
+                        base_url,
+                        api_key,
+                        model,
+                        resume_after_seconds,
+                        t0,
+                    )
+                )
+                return
+            final_text = _extract_final_text(result)
+            elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+            logger.info(
+                "[chatbot] stage=agent_done request_id=%s elapsed_ms=%s output_chars=%d new_messages=%d waiting_auth=%s",
+                request_id,
+                elapsed_ms,
+                len(final_text),
+                max(len(loop.messages) - len(initial_messages), 0),
+                bool(result.get("_waiting_auth")),
+            )
+            logger.info(
+                json.dumps(
+                    {
+                        "kind": "chatbot_service",
+                        "request_id": request_id,
+                        "model": model,
+                        "output_chars": len(final_text),
+                        "new_messages": max(len(loop.messages) - len(initial_messages), 0),
+                        "usage": result.get("_token_usage", {}),
+                        "elapsed_ms": elapsed_ms,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+            logger.exception(
+                "[chatbot] stage=background_failed request_id=%s elapsed_ms=%s error=%s",
+                request_id,
+                elapsed_ms,
+                str(exc),
+            )
+            history_store.append_messages(session.account_dir, [{
+                "role": "assistant",
+                "content": f"\n[对话失败] {str(exc)}",
+                "datetime": _now_iso(),
+            }])
+        finally:
+            if not keep_state_for_resume:
+                _set_chatbot_state(session.account_dir, None)
+
     @router.post("/api/chatbot")
-    async def chat_stream(request: Request, x_fzt_key: Optional[str] = Header(default=None)):
+    async def chat_stream(request: Request, x_auth_token: Optional[str] = Header(default=None)):
         t0 = time.perf_counter()
-        session = resolve_session(x_fzt_key)
+        session = resolve_session(x_auth_token)
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
+
+        request_id = f"chatbot:{int(time.time() * 1000)}"
+        preset = get_chatbot_preset()
+        base_url = preset.get("baseUrl", "")
+        api_key = preset.get("apiKey", "")
+        model = preset.get("model", "")
+        if not base_url or not api_key or not model:
+            raise HTTPException(status_code=500, detail="LLM 配置不完整")
+
+        if _is_token_auth_choice(payload):
+            choice = str(payload.get("choice") or payload.get("choise") or "").strip()
+            detail = str(payload.get("detail") or "").strip()
+            if choice == "是":
+                service_token = _build_service_token_from_user_token(session.account_dir.parent, detail)
+                tool_content = service_token
+            else:
+                tool_content = json.dumps({"status": "denied", "message": "用户拒绝授权"}, ensure_ascii=False)
+            history_store.complete_token_auth(session.account_dir, choice, tool_content)
+            _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
+            asyncio.create_task(_run_chatbot_agent_background(session, request_id, preset, base_url, api_key, model, t0))
+            return JSONResponse({"status": "ok"})
+
+        history = history_store.load_messages(session.account_dir)
+        if _has_pending_token_auth(history):
+            raise HTTPException(status_code=409, detail="当前有待确认的代理操作许可，请先选择“是”或“否”")
 
         content = str(
             payload.get("content")
@@ -519,19 +954,16 @@ def register_chatbot_routes(
         if not content and attachments:
             content = "请查看本次上传的附件。"
 
-        request_id = f"chatbot:{int(time.time() * 1000)}"
-
-        preset = get_chatbot_preset()
-        base_url = preset.get("baseUrl", "")
-        api_key = preset.get("apiKey", "")
-        model = preset.get("model", "")
-        if not base_url or not api_key or not model:
-            raise HTTPException(status_code=500, detail="LLM 配置不完整")
-
-        history = history_store.load_messages(session.account_dir)
         initial_messages, prefix_to_persist = _build_initial_messages(history, content, attachments)
         history_store.append_messages(session.account_dir, prefix_to_persist)
-        ws = _build_chatbot_workspace(session.account_dir)
+
+        if _is_chatbot_running(session.account_dir):
+            logger.info(
+                "[chatbot] stage=user_message_appended_during_run request_id=%s content_preview=%s",
+                request_id,
+                _preview_text(content),
+            )
+            return JSONResponse({"status": "ok", "queued": True})
 
         logger.info(
             "[chatbot] stage=web_to_server_received request_id=%s remote=%s model=%s messages=%d",
@@ -548,114 +980,26 @@ def register_chatbot_routes(
             _preview_text(content),
         )
 
-        async def _logged_stream():
-            try:
-                logger.info(
-                    "[chatbot] stage=server_to_llm_prepare request_id=%s model=%s upstream_messages=%d base_url=%s workspace=%s",
-                    request_id,
-                    model,
-                    len(initial_messages),
-                    base_url,
-                    ws.dir,
-                )
-                llm_preset = {
-                    "model": model,
-                    "baseUrl": base_url,
-                    "apiKey": api_key,
-                }
-                client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
-                loop = ChatAgentLoop(
-                    client=client,
-                    ws=ws,
-                    llm_preset=llm_preset,
-                    initial_messages=initial_messages,
-                    load_messages=lambda: _build_messages_from_history(history_store.load_messages(session.account_dir)),
-                    persist_messages=lambda msgs: history_store.append_messages(session.account_dir, msgs),
-                    emit_log=lambda nid, msg: logger.info(
-                        "[chatbot-agent] request_id=%s node=%s message=%s",
-                        request_id,
-                        nid,
-                        json.dumps(msg, ensure_ascii=False) if isinstance(msg, dict) else str(msg),
-                    ),
-                    emit_status=lambda nid, st: logger.info(
-                        "[chatbot-agent] request_id=%s node=%s status=%s",
-                        request_id,
-                        nid,
-                        st,
-                    ),
-                    check_aborted=None,
-                )
-                result = await asyncio.to_thread(loop.run)
-                final_text = _extract_final_text(result)
-                if final_text:
-                    yield final_text.encode("utf-8")
-                elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
-                logger.info(
-                    "[chatbot] stage=server_to_web_done request_id=%s elapsed_ms=%s output_chars=%d new_messages=%d",
-                    request_id,
-                    elapsed_ms,
-                    len(final_text),
-                    max(len(loop.messages) - len(initial_messages), 0),
-                )
-                logger.info(
-                    json.dumps(
-                        {
-                            "kind": "chatbot_service",
-                            "request_id": request_id,
-                            "model": model,
-                            "input_messages": [
-                                {"role": item.get("role"), "chars": len(str(item.get("content", "") or ""))}
-                                for item in initial_messages
-                            ],
-                            "output_chars": len(final_text),
-                            "new_messages": max(len(loop.messages) - len(initial_messages), 0),
-                            "usage": result.get("_token_usage", {}),
-                            "elapsed_ms": elapsed_ms,
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-            except ChatbotStreamError as exc:
-                elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
-                logger.exception(
-                    "[chatbot] stage=llm_or_bridge_failed request_id=%s elapsed_ms=%s error=%s",
-                    request_id,
-                    elapsed_ms,
-                    exc.message,
-                )
-                error_text = f"\n[对话失败] {exc.message}"
-                logger.info(
-                    "[chatbot] stage=server_to_web_error_text request_id=%s error_preview=%s",
-                    request_id,
-                    _preview_text(error_text),
-                )
-                history_store.append_messages(session.account_dir, [{
-                    "role": "assistant",
-                    "content": error_text,
-                    "datetime": _now_iso(),
-                }])
-                yield error_text.encode("utf-8")
-            except Exception as exc:
-                elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
-                logger.exception(
-                    "[chatbot] stage=unexpected_failed request_id=%s elapsed_ms=%s error=%s",
-                    request_id,
-                    elapsed_ms,
-                    str(exc),
-                )
-                error_text = f"\n[对话失败] {str(exc)}"
-                logger.info(
-                    "[chatbot] stage=server_to_web_error_text request_id=%s error_preview=%s",
-                    request_id,
-                    _preview_text(error_text),
-                )
-                history_store.append_messages(session.account_dir, [{
-                    "role": "assistant",
-                    "content": error_text,
-                    "datetime": _now_iso(),
-                }])
-                yield error_text.encode("utf-8")
+        _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
+        asyncio.create_task(_run_chatbot_agent_background(session, request_id, preset, base_url, api_key, model, t0))
+        return JSONResponse({"status": "ok"})
 
-        return StreamingResponse(_logged_stream(), media_type="text/plain; charset=utf-8")
+    def _build_chatbot_state_payload(x_auth_token: Optional[str] = Header(default=None)):
+        token = (x_auth_token or "").strip()
+        session = resolve_session(token)
+        _check_status_poll_limit(token)
+        payload = {"last_update": history_store.last_update(session.account_dir)}
+        state = _get_chatbot_state(session.account_dir)
+        if state is not None:
+            payload["state"] = state
+        return payload
+
+    @router.get("/api/chatbot/status")
+    def get_chatbot_status(x_auth_token: Optional[str] = Header(default=None)):
+        return _build_chatbot_state_payload(x_auth_token)
+
+    @router.get("/api/chatbot/state")
+    def get_chatbot_state(x_auth_token: Optional[str] = Header(default=None)):
+        return _build_chatbot_state_payload(x_auth_token)
 
     app.include_router(router)

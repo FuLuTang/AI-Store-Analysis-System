@@ -1,6 +1,6 @@
 # 最优价格推荐 API 接口方案 (v0.1)
 
-本方案用于新增一组独立的“最优价格推荐”接口。该能力与现有 `/api/analyze` 的门店经营诊断属于不同业务任务，但复用现有 **User Key 鉴权**、文件上传、任务状态、日志流、LLM 预设与 Agent Workspace 基础设施。
+本方案用于新增一组独立的“最优价格推荐”接口。该能力与现有 `/api/analyze` 的门店经营诊断属于不同业务任务，但复用现有账号密码登录后的 **用户 token 鉴权**、文件上传、任务状态、日志流、LLM 预设与 Agent Workspace 基础设施。
 
 当前阶段先固定外围 workflow 与接口契约，内部算法、曲线拟合方式、定价模型可以后续替换。
 
@@ -25,7 +25,7 @@ graph TD
     F --> B
 
     D -->|是| G[POST /api/price-recommendations]
-    G --> H[校验 Key<br/>检查任务占用<br/>创建 run]
+    G --> H[校验用户 token<br/>检查任务占用<br/>创建 run]
     H --> I[启动异步价格推荐任务]
     I --> J[Price Workflow<br/>程序化编排 + Agent Runner]
     J --> K[清洗数据<br/>商品定位<br/>推荐价格生成]
@@ -38,12 +38,13 @@ graph TD
 
 ## 2. 鉴权规范
 
-沿用现有用户鉴权。
+沿用现有用户 token 鉴权。
 
-- **Header Name**: `x-fzt-key`
-- **Value**: 用户的唯一通行证（如 `fzt_abc123...`）
+- **Header Name**: `X-Auth-Token`
+- **Query Name**: `auth-token`，用于 SSE 日志流。
+- **Value**: 登录或注册接口返回的完整 token。
 
-> 所有最优价格核心接口均要求提供有效的 `x-fzt-key`，不传 key 返回 401 Unauthorized。
+> 所有最优价格核心接口均要求提供有效 token，不传 token 或 token 过期返回 401 Unauthorized。
 
 ---
 
@@ -54,7 +55,7 @@ graph TD
 #### [POST] /api/price-recommendations/precheck
 
 - **说明**: 对上传文件和商品名称做快速合法性检查。该接口用于前置拦截明显不可分析的请求，目标是极快返回。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **Content-Type**: `multipart/form-data`
 - **Body (Multipart)**:
   - `files`: 一个或多个文件。每文件最大 **100MB**。
@@ -116,14 +117,14 @@ graph TD
 | `400` | 文件超过 100MB |
 | `400` | 不支持的文件格式 |
 | `400` | 文件解析失败 |
-| `401` | Key 无效或缺失 |
+| `401` | token 无效、过期或缺失 |
 
 ### 3.2 启动价格推荐任务
 
 #### [POST] /api/price-recommendations
 
 - **说明**: 提交文件与商品名称，启动异步价格推荐任务。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **Content-Type**: `multipart/form-data`
 - **Body (Multipart)**:
   - `files`: 一个或多个文件。每文件最大 **100MB**。
@@ -151,14 +152,14 @@ graph TD
 | `400` | 缺少 `productName` |
 | `400` | 文件超过 100MB |
 | `400` | 文件解析失败 |
-| `401` | Key 无效或缺失 |
+| `401` | token 无效、过期或缺失 |
 
 ### 3.3 查询任务状态与结果
 
 #### [GET] /api/price-recommendations/status
 
 - **说明**: 获取该账户最近一次价格推荐任务的状态与结果。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**:
 
 ```json
@@ -217,7 +218,7 @@ graph TD
 #### [GET] /api/price-recommendations/logs
 
 - **说明**: 获取该账户最近一次价格推荐任务的日志快照。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**:
 
 ```json
@@ -249,7 +250,7 @@ graph TD
 #### [GET] /api/price-recommendations/stream
 
 - **说明**: SSE 日志流，供前端实时刷新价格推荐进度与日志。
-- **Query**: `?x-fzt-key=...`（必填，通过 URL 查询参数传递，适配 EventSource 场景）
+- **Query**: `?auth-token=...`（必填，通过 URL 查询参数传递，适配 EventSource 场景）
 - **响应**: `text/event-stream`
 
 首条事件为：
@@ -276,7 +277,7 @@ graph TD
 #### [POST] /api/price-recommendations/stop
 
 - **说明**: 强行停止该账户下正在执行的价格推荐任务。
-- **Header**: `x-fzt-key`（必填）
+- **Header**: `X-Auth-Token`（必填）
 - **响应 (200)**:
 
 ```json

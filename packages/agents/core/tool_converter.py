@@ -280,8 +280,9 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                     "登记一个未来时间点来自动唤醒当前客服 Agent，不会阻塞当前对话。"
                     "用户要求倒计时、稍后提醒、到某个时间提醒时使用。"
                     "如果你提交了异步任务、调用了外部 API，且需要稍后继续查询或总结，也可以使用。"
-                    "小任务可以不传任何参数，系统默认 3 秒后唤醒。"
+                    "小任务可以不传任何参数，系统默认 1 秒后唤醒。"
                     "mode='delay' 时传 delay_seconds；mode='alarm' 时传 ISO 格式 run_at。"
+                    "特殊用法(使回答更拟人化): 推荐当 长回答/回答包括图片 时，通过使用此工具(如先回答第一部分或先塞入图片，同时调用无参数wait，然后便可以等待输出第二段内容)来实现多条回复。"
                 ),
                 parameters={
                     "type": "object",

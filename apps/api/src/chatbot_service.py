@@ -602,30 +602,78 @@ class ChatbotAttachmentStore:
         files_dir.mkdir(parents=True, exist_ok=True)
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
+        import zipfile
+        import io
+
         records: list[dict] = []
+        total_files_count = 0
+
         for upload in uploads:
             original_name = _safe_original_name(upload.filename)
             raw = await upload.read()
             if len(raw) > CHATBOT_MAX_ATTACHMENT_SIZE:
                 raise HTTPException(status_code=400, detail=f"附件过大(>100MB): {original_name}")
 
-            attachment_id = uuid.uuid4().hex
-            ext = _safe_extension(original_name)
-            stored_name = f"{attachment_id}{ext}"
-            target = files_dir / stored_name
-            target.write_bytes(raw)
-            mime_type = upload.content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
-            record = {
-                "attachmentId": attachment_id,
-                "originalName": original_name,
-                "storedName": stored_name,
-                "mimeType": mime_type,
-                "size": len(raw),
-                "sha256": hashlib.sha256(raw).hexdigest(),
-                "createdAt": _now_iso(),
-                "relativePath": f"{CHATBOT_DIRNAME}/{CHATBOT_FILES_DIRNAME}/{stored_name}",
-            }
-            records.append(record)
+            # 检查是否为 zip 压缩文件
+            if original_name.lower().endswith(".zip") or zipfile.is_zipfile(io.BytesIO(raw)):
+                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                    zip_files = [m for m in zf.infolist() if not m.is_dir()]
+                    total_files_count += len(zip_files)
+                    if total_files_count > CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE:
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"解压后文件总数超过单次会话上限 ({CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE} 个)"
+                        )
+
+                    for member in zip_files:
+                        clean_filename = member.filename.replace("\\", "/").strip("/")
+                        if ".." in clean_filename or clean_filename.startswith("/"):
+                            raise HTTPException(status_code=400, detail=f"压缩包内包含非法路径: {member.filename}")
+                        
+                        member_data = zf.read(member.filename)
+                        attachment_id = uuid.uuid4().hex
+                        ext = _safe_extension(clean_filename)
+                        stored_name = f"{attachment_id}{ext}"
+                        target = files_dir / stored_name
+                        target.write_bytes(member_data)
+                        
+                        mime_type = mimetypes.guess_type(clean_filename)[0] or "application/octet-stream"
+                        record = {
+                            "attachmentId": attachment_id,
+                            "originalName": clean_filename,
+                            "storedName": stored_name,
+                            "mimeType": mime_type,
+                            "size": len(member_data),
+                            "sha256": hashlib.sha256(member_data).hexdigest(),
+                            "createdAt": _now_iso(),
+                            "relativePath": f"{CHATBOT_DIRNAME}/{CHATBOT_FILES_DIRNAME}/{stored_name}",
+                        }
+                        records.append(record)
+            else:
+                total_files_count += 1
+                if total_files_count > CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"解压后文件总数超过单次会话上限 ({CHATBOT_MAX_ATTACHMENTS_PER_MESSAGE} 个)"
+                    )
+
+                attachment_id = uuid.uuid4().hex
+                ext = _safe_extension(original_name)
+                stored_name = f"{attachment_id}{ext}"
+                target = files_dir / stored_name
+                target.write_bytes(raw)
+                mime_type = upload.content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+                record = {
+                    "attachmentId": attachment_id,
+                    "originalName": original_name,
+                    "storedName": stored_name,
+                    "mimeType": mime_type,
+                    "size": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "createdAt": _now_iso(),
+                    "relativePath": f"{CHATBOT_DIRNAME}/{CHATBOT_FILES_DIRNAME}/{stored_name}",
+                }
+                records.append(record)
 
         lock = self._get_lock(account_dir)
         with lock:

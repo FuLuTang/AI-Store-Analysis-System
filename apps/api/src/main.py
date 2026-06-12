@@ -1085,15 +1085,68 @@ async def upload_admin_service_doc_file(
         target = _service_docs_abs_path(target_path)
     else:
         target = _service_docs_abs_path(f"{SERVICE_DOCS_DOMAIN}/{file.filename}")
+    
     raw = await file.read()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(raw)
     
     is_undown = False
     if undownloadable and str(undownloadable).lower() in ("true", "1", "yes", "on"):
         is_undown = True
         
     from apps.api.src.download_guard import add_restricted_pattern, remove_restricted_pattern
+    
+    import zipfile
+    import io
+    
+    # 检查是否为 zip 压缩文件
+    if target.suffix.lower() == ".zip" or zipfile.is_zipfile(io.BytesIO(raw)):
+        extract_dir = target.parent
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        
+        bytes_written = 0
+        extracted_paths = []
+        
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            # 安全检查：防御 Zip Slip 漏洞（路径穿越攻击）
+            for member in zf.infolist():
+                member_path = Path(member.filename)
+                abs_path = (extract_dir / member_path).resolve()
+                if not abs_path.is_relative_to(extract_dir.resolve()):
+                    raise HTTPException(status_code=400, detail=f"非法压缩包路径: {member.filename}")
+            
+            # 安全释放解压
+            for member in zf.infolist():
+                member_path = Path(member.filename)
+                abs_path = (extract_dir / member_path).resolve()
+                
+                if member.is_dir():
+                    abs_path.mkdir(parents=True, exist_ok=True)
+                else:
+                    abs_path.parent.mkdir(parents=True, exist_ok=True)
+                    member_data = zf.read(member.filename)
+                    abs_path.write_bytes(member_data)
+                    bytes_written += len(member_data)
+                    
+                    # 针对解压后的每个文件，设置对应的下载权限
+                    rel_path = abs_path.relative_to(SERVICE_DOCS_DIR).as_posix()
+                    if is_undown:
+                        add_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+                    else:
+                        remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+                        
+                    extracted_paths.append(rel_path)
+                    
+        return {
+            "status": "ok",
+            "message": f"成功解压并上传 {len(extracted_paths)} 个文件",
+            "path": join_domain_path(SERVICE_DOCS_DOMAIN, extract_dir.relative_to(SERVICE_DOCS_DIR).as_posix()),
+            "bytesWritten": bytes_written,
+            "mimeType": "application/zip-extracted",
+        }
+        
+    # 普通单文件上传处理
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+    
     rel_path = target.relative_to(SERVICE_DOCS_DIR).as_posix()
     if is_undown:
         add_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
@@ -1102,7 +1155,7 @@ async def upload_admin_service_doc_file(
         
     return {
         "status": "ok",
-        "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()),
+        "path": join_domain_path(SERVICE_DOCS_DOMAIN, rel_path),
         "bytesWritten": len(raw),
         "mimeType": file.content_type or "application/octet-stream",
     }

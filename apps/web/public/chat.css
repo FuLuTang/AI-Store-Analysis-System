@@ -401,7 +401,8 @@
 
 .chat-message-bubble-wide,
 .chat-message-bubble:has(table),
-.chat-message-bubble:has(.mermaid) {
+.chat-message-bubble:has(.mermaid),
+.chat-message-bubble:has(img) {
     width: 100% !important;
     max-width: 96% !important;
 }
@@ -419,6 +420,21 @@
     color: var(--chat-bubble-assistant-text);
     border: 1px solid var(--chat-bubble-assistant-border);
     border-radius: 18px 18px 18px 4px;
+    position: relative;
+    min-height: 40px;
+}
+
+.chat-message-assistant .chat-message-copy-btn {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    z-index: 10;
+    opacity: 0.5;
+}
+
+.chat-message-assistant .chat-message-bubble:hover .chat-message-copy-btn,
+.chat-message-assistant .chat-message-copy-btn:hover {
+    opacity: 1;
 }
 
 /* Markdown styling inside bubbles (with emphasis on text & background readability) */
@@ -707,8 +723,15 @@
     box-sizing: border-box;
 }
 
-.chat-attach-btn {
+.chat-attach-group {
     grid-area: attach;
+    display: flex;
+    gap: 0.28rem;
+    align-items: center;
+    flex: 0 0 auto;
+}
+
+.chat-attach-btn {
     width: 38px;
     height: 38px;
     border-radius: 10px;

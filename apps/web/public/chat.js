@@ -11,6 +11,19 @@
     let onMarkedLoaded = null;
     let mermaidLoaded = typeof mermaid !== 'undefined';
     let onMermaidLoaded = null;
+    let jszipLoaded = typeof JSZip !== 'undefined';
+    let onJszipLoaded = null;
+
+    // Dynamically load JSZip if not loaded by host page
+    if (!jszipLoaded) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/jszip/dist/jszip.min.js';
+        script.onload = () => {
+            jszipLoaded = true;
+            if (onJszipLoaded) onJszipLoaded();
+        };
+        document.head.appendChild(script);
+    }
 
     // Dynamically load marked if not loaded by host page
     if (!markedLoaded) {
@@ -77,14 +90,21 @@
                     <div class="chat-empty-state">从这里直接开始聊天。</div>
                 </div>
                 <div class="chat-composer">
-                    <button id="chatAttachBtn" class="chat-icon-btn chat-attach-btn" type="button" title="添加附件" aria-label="添加附件">
-                        <i class="fas fa-paperclip"></i>
-                    </button>
+                    <div class="chat-attach-dropdown" style="position: relative; display: inline-block; grid-area: attach;">
+                        <button id="chatAttachBtn" class="chat-icon-btn chat-attach-btn" type="button" title="添加附件" aria-label="添加附件">
+                            <i class="fas fa-paperclip"></i>
+                        </button>
+                        <div class="chat-attach-menu" id="chatAttachMenu" style="display: none; position: absolute; bottom: 100%; left: 0; z-index: 1000; background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-border); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 0.35rem 0; min-width: 120px; margin-bottom: 0.25rem;">
+                            <button type="button" id="chatUploadFileOption" style="display: flex; align-items: center; gap: 0.5rem; width: 100%; border: 0; background: transparent; padding: 0.5rem 0.8rem; font-size: 0.8rem; color: var(--text); cursor: pointer; text-align: left;"><i class="fas fa-file"></i> 添加文件</button>
+                            <button type="button" id="chatUploadFolderOption" style="display: flex; align-items: center; gap: 0.5rem; width: 100%; border: 0; background: transparent; padding: 0.5rem 0.8rem; font-size: 0.8rem; color: var(--text); cursor: pointer; text-align: left;"><i class="fas fa-folder-open"></i> 添加文件夹</button>
+                        </div>
+                    </div>
                     <textarea id="chatInput" class="chat-input" placeholder="输入你想问的问题..." rows="1"></textarea>
                     <button id="chatSendBtn" class="chat-icon-btn chat-send-btn" type="button" title="发送消息" aria-label="发送消息">
                         <i class="fas fa-paper-plane"></i>
                     </button>
                     <input type="file" id="chatAttachmentInput" hidden multiple>
+                    <input type="file" id="chatAttachmentFolderInput" hidden webkitdirectory directory multiple>
                     <div id="chatAttachmentDrafts" class="chat-attachment-drafts"></div>
                 </div>
             </section>
@@ -99,8 +119,12 @@
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const chatAttachmentInput = document.getElementById('chatAttachmentInput');
+        const chatAttachmentFolderInput = document.getElementById('chatAttachmentFolderInput');
         const chatAttachmentDrafts = document.getElementById('chatAttachmentDrafts');
         const chatAttachBtn = document.getElementById('chatAttachBtn');
+        const chatAttachMenu = document.getElementById('chatAttachMenu');
+        const chatUploadFileOption = document.getElementById('chatUploadFileOption');
+        const chatUploadFolderOption = document.getElementById('chatUploadFolderOption');
         const chatSendBtn = document.getElementById('chatSendBtn');
         const chatStatusDot = document.getElementById('chatStatusDot');
         const chatStatusText = document.getElementById('chatStatusText');
@@ -353,7 +377,12 @@
                     : (sessionStorage.getItem('authToken') || '')) || '';
                 content = content.replace(/\{\{AUTH_TOKEN\}\}/g, token);
                 const rendered = formatChatContent(content);
-                const isWide = rendered.includes('<table') || rendered.includes('class="mermaid"') || String(msg.content || '').includes('```mermaid');
+                const hasTable = rendered.includes('<table');
+                const hasMermaid = rendered.includes('class="mermaid"') || String(msg.content || '').includes('```mermaid');
+                const hasImage = rendered.includes('<img') || 
+                                  /!\[.*?\]\(.*?\)/.test(msg.content || '') || 
+                                  /\[.*?\]\(.*?\.(?:png|jpg|jpeg|gif|webp|svg|bmp)(?:\?.*?)?\)/i.test(msg.content || '');
+                const isWide = hasTable || hasMermaid || hasImage;
                 const timestamp = formatChatTimestamp(msg);
                 const tokenCount = formatChatTokenCount(msg);
                 const metaText = [timestamp, tokenCount].filter(Boolean).join(' ');
@@ -370,14 +399,14 @@
                             </button>
                         ` : ''}
                         <div class="chat-message-bubble ${isWide ? 'chat-message-bubble-wide' : ''}">
+                            ${msg.role === 'assistant' ? `
+                                <button type="button" class="chat-message-copy-btn" title="复制消息" aria-label="复制消息" data-chat-copy-text="${escapeChatHtml(getChatCopyText(msg))}">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            ` : ''}
                             <div class="markdown-body chat-markdown">${rendered}</div>
                             ${renderChatAttachments(msg.attachments)}
                         </div>
-                        ${msg.role === 'assistant' ? `
-                            <button type="button" class="chat-message-copy-btn" title="复制消息" aria-label="复制消息" data-chat-copy-text="${escapeChatHtml(getChatCopyText(msg))}">
-                                <i class="fas fa-copy"></i>
-                            </button>
-                        ` : ''}
                     </div>
                 </div>
                 `;
@@ -457,6 +486,7 @@
             chatInput.disabled = false;
             chatAttachBtn.disabled = false;
             chatAttachmentInput.disabled = false;
+            if (chatAttachmentFolderInput) chatAttachmentFolderInput.disabled = false;
         }
 
         function setChatStatusDot(state) {
@@ -763,11 +793,73 @@
             chatInput.style.height = chatInput.scrollHeight + 'px';
         });
 
-        chatAttachBtn.addEventListener('click', () => chatAttachmentInput.click());
+        chatAttachBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isDisp = chatAttachMenu.style.display === 'block';
+            chatAttachMenu.style.display = isDisp ? 'none' : 'block';
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (chatAttachMenu && !e.target.closest('.chat-attach-dropdown')) {
+                chatAttachMenu.style.display = 'none';
+            }
+        });
+
+        chatUploadFileOption.addEventListener('click', () => {
+            chatAttachMenu.style.display = 'none';
+            chatAttachmentInput.click();
+        });
+
+        chatUploadFolderOption.addEventListener('click', () => {
+            chatAttachMenu.style.display = 'none';
+            if (typeof JSZip === 'undefined') {
+                alert('压缩组件正在加载中，请稍候重试...');
+                return;
+            }
+            chatAttachmentFolderInput.click();
+        });
+
         chatAttachmentInput.addEventListener('change', () => {
             chatPendingFiles = chatPendingFiles.concat(Array.from(chatAttachmentInput.files || []));
             chatAttachmentInput.value = '';
             renderChatAttachmentDrafts();
+        });
+
+        chatAttachmentFolderInput.addEventListener('change', async () => {
+            const files = chatAttachmentFolderInput.files;
+            if (!files || files.length === 0) return;
+
+            const folderFiles = Array.from(files);
+            const topDirName = folderFiles[0].webkitRelativePath.split('/')[0] || 'folder';
+
+            chatAttachBtn.disabled = true;
+            chatSendBtn.disabled = true;
+
+            try {
+                const zip = new JSZip();
+                folderFiles.forEach(f => {
+                    const relPath = f.webkitRelativePath || f.name;
+                    zip.file(relPath, f);
+                });
+
+                const zipBlob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'DEFLATE',
+                    compressionOptions: { level: 6 }
+                });
+
+                const zipFile = new File([zipBlob], `${topDirName}.zip`, { type: 'application/zip' });
+                chatPendingFiles.push(zipFile);
+                renderChatAttachmentDrafts();
+            } catch (err) {
+                console.error(err);
+                alert('文件夹压缩打包失败: ' + err.message);
+            } finally {
+                chatAttachBtn.disabled = false;
+                chatSendBtn.disabled = false;
+                chatAttachmentFolderInput.value = '';
+            }
         });
 
         // Initialize Chat History load

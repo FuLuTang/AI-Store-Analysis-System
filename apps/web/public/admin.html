@@ -9,6 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="index.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/jszip/dist/jszip.min.js"></script>
     <style>
         .service-docs-launch-row {
             display: flex;
@@ -95,6 +96,42 @@
             background: var(--input-bg);
             color: var(--text-muted);
             cursor: pointer;
+        }
+        .service-docs-upload-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .service-docs-upload-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            z-index: 1100;
+            background: var(--card-bg, #ffffff);
+            border: 1px solid var(--border, #e2e8f0);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            padding: 0.35rem 0;
+            min-width: 130px;
+            margin-top: 0.25rem;
+        }
+        .service-docs-upload-menu button {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            width: 100%;
+            border: 0;
+            background: transparent;
+            padding: 0.5rem 0.8rem;
+            font-size: 0.8rem;
+            color: var(--text, #1e293b);
+            cursor: pointer;
+            text-align: left;
+            transition: background 0.15s ease;
+        }
+        .service-docs-upload-menu button:hover {
+            background: rgba(99, 102, 241, 0.08);
+            color: var(--primary);
         }
 
         .service-docs-toolbar {
@@ -396,6 +433,54 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* Folder tree styles */
+        .folder-tree-node {
+            margin-left: 1.25rem;
+            position: relative;
+        }
+        .folder-tree-node-content {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.38rem 0.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.15s ease;
+        }
+        .folder-tree-node-content:hover {
+            background: rgba(99, 102, 241, 0.05);
+        }
+        .folder-tree-node-checkbox {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            margin: 0;
+        }
+        .folder-tree-node-icon {
+            width: 20px;
+            text-align: center;
+            font-size: 0.95rem;
+        }
+        .folder-tree-node.folder > .folder-tree-node-content > .folder-tree-node-icon {
+            color: #d97706;
+        }
+        .folder-tree-node.file > .folder-tree-node-content > .folder-tree-node-icon {
+            color: var(--primary);
+        }
+        .folder-tree-node-name {
+            font-size: 0.88rem;
+            color: var(--text);
+            word-break: break-all;
+        }
+        .folder-tree-node-content.is-unchecked {
+            opacity: 0.45;
+        }
+        .folder-tree-node-content.is-unchecked .folder-tree-node-name,
+        .folder-tree-node-content.is-unchecked .folder-tree-node-icon {
+            color: var(--text-muted) !important;
+        }
     </style>
     <script>
         (function initTheme() {
@@ -484,10 +569,19 @@
             <div class="service-docs-toolbar">
                 <button class="btn-secondary" id="serviceDocsUpBtn" type="button"><i class="fas fa-arrow-up"></i> 返回上级</button>
                 <button class="btn-secondary" id="serviceDocsRefreshBtn" type="button"><i class="fas fa-rotate"></i> 刷新</button>
-                <button class="btn-secondary" id="serviceDocsUploadBtn" type="button"><i class="fas fa-upload"></i> 上传文件</button>
+                <div class="service-docs-upload-dropdown" id="serviceDocsUploadDropdown">
+                    <button class="btn-secondary" id="serviceDocsUploadBtn" type="button">
+                        <i class="fas fa-upload"></i> 上传 <i class="fas fa-caret-down" style="margin-left: 4px;"></i>
+                    </button>
+                    <div class="service-docs-upload-menu" id="serviceDocsUploadMenu">
+                        <button type="button" id="serviceDocsUploadFileOption"><i class="fas fa-file"></i> 上传文件</button>
+                        <button type="button" id="serviceDocsUploadFolderOption"><i class="fas fa-folder-open"></i> 上传文件夹</button>
+                    </div>
+                </div>
                 <button class="btn-secondary" id="serviceDocsNewFolderBtn" type="button"><i class="fas fa-folder-plus"></i> 新建文件夹</button>
                 <button class="btn-secondary" id="serviceDocsNewTextBtn" type="button"><i class="fas fa-file-pen"></i> 新建文本</button>
                 <input type="file" id="serviceDocsUploadInput" hidden multiple>
+                <input type="file" id="serviceDocsUploadFolderInput" hidden webkitdirectory directory multiple>
                 <label class="checkbox-label" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; cursor: pointer; margin-left: 0.5rem; user-select: none; color: var(--text-primary);">
                     <input type="checkbox" id="uploadUndownloadable" style="cursor: pointer;" />
                     <span>上传时禁止下载</span>
@@ -516,6 +610,30 @@
         </div>
     </div>
 
+    <!-- 文件夹上传文件树展示弹窗 -->
+    <div id="folderUploadModal" class="service-docs-modal" aria-hidden="true" style="z-index: 1300;">
+        <div class="service-docs-shell" style="width: min(500px, 95vw); height: min(600px, 90vh);" role="dialog" aria-modal="true" aria-labelledby="folderUploadTitle">
+            <div class="service-docs-header">
+                <div>
+                    <h3 id="folderUploadTitle"><i class="fas fa-folder-tree"></i> 上传文件夹</h3>
+                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;" id="folderUploadSubtitle"></div>
+                </div>
+                <button class="service-docs-close" id="closeFolderUploadBtn" type="button" aria-label="关闭">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div style="flex: 1; overflow: auto; padding: 1.25rem;" id="folderUploadTreeContainer"></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.9rem 1.15rem; border-top: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); gap: 0.5rem;">
+                <div style="display: flex; gap: 0.4rem;">
+                    <button class="btn-secondary" id="folderSelectAllBtn" type="button" style="min-height: 32px; padding: 0.35rem 0.65rem; font-size: 0.78rem;">全选</button>
+                    <button class="btn-secondary" id="folderSelectNoneBtn" type="button" style="min-height: 32px; padding: 0.35rem 0.65rem; font-size: 0.78rem;">不选</button>
+                    <button class="btn-secondary" id="folderSelectInvertBtn" type="button" style="min-height: 32px; padding: 0.35rem 0.65rem; font-size: 0.78rem;">反选</button>
+                </div>
+                <button class="btn" id="folderStartUploadBtn" type="button" style="min-height: 32px; padding: 0.35rem 1rem; font-size: 0.78rem; width: auto; margin-top: 0;">开始上传</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const EFFORTS = ['low', 'medium', 'high'];
         const presetContainer = document.getElementById('presetContainer');
@@ -529,6 +647,9 @@
         const serviceDocsUpBtn = document.getElementById('serviceDocsUpBtn');
         const serviceDocsRefreshBtn = document.getElementById('serviceDocsRefreshBtn');
         const serviceDocsUploadBtn = document.getElementById('serviceDocsUploadBtn');
+        const serviceDocsUploadMenu = document.getElementById('serviceDocsUploadMenu');
+        const serviceDocsUploadFileOption = document.getElementById('serviceDocsUploadFileOption');
+        const serviceDocsUploadFolderOption = document.getElementById('serviceDocsUploadFolderOption');
         const serviceDocsUploadInput = document.getElementById('serviceDocsUploadInput');
         const serviceDocsNewFolderBtn = document.getElementById('serviceDocsNewFolderBtn');
         const serviceDocsNewTextBtn = document.getElementById('serviceDocsNewTextBtn');
@@ -542,6 +663,16 @@
         const serviceDocsList = document.getElementById('serviceDocsList');
         const serviceDocsDetail = document.getElementById('serviceDocsDetail');
         const serviceDocsDetailEmpty = document.getElementById('serviceDocsDetailEmpty');
+        const serviceDocsUploadFolderInput = document.getElementById('serviceDocsUploadFolderInput');
+        const folderUploadModal = document.getElementById('folderUploadModal');
+        const closeFolderUploadBtn = document.getElementById('closeFolderUploadBtn');
+        const folderUploadTreeContainer = document.getElementById('folderUploadTreeContainer');
+        const folderUploadSubtitle = document.getElementById('folderUploadSubtitle');
+        const folderSelectAllBtn = document.getElementById('folderSelectAllBtn');
+        const folderSelectNoneBtn = document.getElementById('folderSelectNoneBtn');
+        const folderSelectInvertBtn = document.getElementById('folderSelectInvertBtn');
+        const folderStartUploadBtn = document.getElementById('folderStartUploadBtn');
+
         let currentPresets = {};
         let serviceDocsCurrentPath = 'service_docs/';
         let serviceDocsEntries = [];
@@ -550,6 +681,8 @@
         let serviceDocsSelectedText = '';
         let serviceDocsLoading = false;
         let serviceDocsUploadState = null;
+        let folderUploadFilesList = [];
+        let folderUploadTreeRoot = null;
         adminTokenInput.value = localStorage.getItem('adminToken') || '';
         noticeContentInput.value = localStorage.getItem('adminNoticeDraft') || '';
 
@@ -1090,7 +1223,24 @@
                 loadServiceDocs(serviceDocsCurrentPath);
             }
         };
-        serviceDocsUploadBtn.onclick = () => serviceDocsUploadInput.click();
+        serviceDocsUploadBtn.onclick = (e) => {
+            e.stopPropagation();
+            const isDisp = serviceDocsUploadMenu.style.display === 'block';
+            serviceDocsUploadMenu.style.display = isDisp ? 'none' : 'block';
+        };
+        serviceDocsUploadFileOption.onclick = () => {
+            serviceDocsUploadMenu.style.display = 'none';
+            serviceDocsUploadInput.click();
+        };
+        serviceDocsUploadFolderOption.onclick = () => {
+            serviceDocsUploadMenu.style.display = 'none';
+            serviceDocsUploadFolderInput.click();
+        };
+        document.addEventListener('click', (e) => {
+            if (serviceDocsUploadMenu && !e.target.closest('#serviceDocsUploadDropdown')) {
+                serviceDocsUploadMenu.style.display = 'none';
+            }
+        });
         serviceDocsUploadInput.addEventListener('change', async () => {
             try {
                 await uploadServiceDocsFiles(serviceDocsUploadInput.files || []);
@@ -1115,6 +1265,361 @@
             } catch (err) {
                 console.error(err);
                 alert(err.message || '新建文件失败');
+            }
+        };
+
+        // --- 文件夹上传与本地压缩核心逻辑 ---
+        function toggleFolderUploadModalOpen(open) {
+            folderUploadModal.classList.toggle('open', open);
+            folderUploadModal.setAttribute('aria-hidden', open ? 'false' : 'true');
+            if (open) {
+                document.body.style.overflow = 'hidden';
+            } else {
+                if (!serviceDocsModal.classList.contains('open')) {
+                    document.body.style.overflow = '';
+                }
+            }
+        }
+
+        function buildFolderTree(files) {
+            const root = {
+                name: 'root',
+                isDir: true,
+                children: new Map(),
+                path: '',
+                checked: true
+            };
+
+            Array.from(files).forEach((file, index) => {
+                const relPath = file.webkitRelativePath || file.name;
+                const pathParts = relPath.split('/').filter(Boolean);
+                let current = root;
+
+                pathParts.forEach((part, partIdx) => {
+                    const isLast = partIdx === pathParts.length - 1;
+                    const currentPath = pathParts.slice(0, partIdx + 1).join('/');
+
+                    if (isLast) {
+                        current.children.set(part, {
+                            name: part,
+                            isDir: false,
+                            file: file,
+                            fileIndex: index,
+                            path: currentPath,
+                            checked: true
+                        });
+                    } else {
+                        if (!current.children.has(part)) {
+                            current.children.set(part, {
+                                name: part,
+                                isDir: true,
+                                children: new Map(),
+                                path: currentPath,
+                                checked: true
+                            });
+                        }
+                        current = current.children.get(part);
+                    }
+                });
+            });
+
+            return root;
+        }
+
+        function setNodeCheckedState(node, isChecked) {
+            node.checked = isChecked;
+            if (node.isDir) {
+                node.children.forEach(child => {
+                    setNodeCheckedState(child, isChecked);
+                });
+            }
+        }
+
+        function invertNodeCheckedState(node) {
+            if (!node.isDir) {
+                node.checked = !node.checked;
+            } else {
+                node.children.forEach(child => {
+                    invertNodeCheckedState(child);
+                });
+            }
+        }
+
+        function recalculateNodeParentStates(node) {
+            if (!node.isDir) return node.checked;
+            
+            let allChecked = true;
+            node.children.forEach(child => {
+                const childChecked = recalculateNodeParentStates(child);
+                if (!childChecked) allChecked = false;
+            });
+            node.checked = allChecked;
+            return allChecked;
+        }
+
+        function syncFolderTreeDom(node) {
+            const syncNode = (n) => {
+                if (!n.isDir) {
+                    const chk = document.getElementById(`node-file-${n.fileIndex}`);
+                    const content = document.getElementById(`content-node-file-${n.fileIndex}`);
+                    if (chk) chk.checked = n.checked;
+                    if (content) content.classList.toggle('is-unchecked', !n.checked);
+                } else {
+                    const idSafe = n.path.replace(/[^a-zA-Z0-9]/g, '_');
+                    const chk = document.getElementById(`node-folder-${idSafe}`);
+                    const content = document.getElementById(`content-node-folder-${idSafe}`);
+                    if (chk) chk.checked = n.checked;
+                    if (content) content.classList.toggle('is-unchecked', !n.checked);
+                    
+                    n.children.forEach(child => {
+                        syncNode(child);
+                    });
+                }
+            };
+            node.children.forEach(child => {
+                syncNode(child);
+            });
+        }
+
+        function renderFolderTree(node, container) {
+            const renderNode = (n, depth = 0) => {
+                if (!n.isDir) {
+                    const fileId = `node-file-${n.fileIndex}`;
+                    return `
+                        <div class="folder-tree-node file" style="margin-left: ${depth > 0 ? 1.25 : 0}rem;">
+                            <div class="folder-tree-node-content ${n.checked ? '' : 'is-unchecked'}" id="content-${fileId}">
+                                <input type="checkbox" class="folder-tree-node-checkbox" data-file-index="${n.fileIndex}" id="${fileId}" ${n.checked ? 'checked' : ''}>
+                                <span class="folder-tree-node-icon"><i class="fas fa-file"></i></span>
+                                <span class="folder-tree-node-name">${escapeHtml(n.name)}</span>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    const idSafe = n.path.replace(/[^a-zA-Z0-9]/g, '_');
+                    const folderId = `node-folder-${idSafe}`;
+                    const childrenHtml = Array.from(n.children.values())
+                        .map(child => renderNode(child, depth + 1))
+                        .join('');
+                    return `
+                        <div class="folder-tree-node folder" style="margin-left: ${depth > 0 ? 1.25 : 0}rem;">
+                            <div class="folder-tree-node-content ${n.checked ? '' : 'is-unchecked'}" id="content-${folderId}">
+                                <input type="checkbox" class="folder-tree-node-checkbox" data-folder-path="${escapeHtml(n.path)}" id="${folderId}" ${n.checked ? 'checked' : ''}>
+                                <span class="folder-tree-node-icon"><i class="fas fa-folder"></i></span>
+                                <span class="folder-tree-node-name" style="font-weight: 600;">${escapeHtml(n.name)}</span>
+                            </div>
+                            <div class="folder-tree-node-children" id="children-${folderId}">
+                                ${childrenHtml}
+                            </div>
+                        </div>
+                    `;
+                }
+            };
+
+            const topLevelHtml = Array.from(node.children.values())
+                .map(child => renderNode(child, 0))
+                .join('');
+            container.innerHTML = topLevelHtml;
+
+            const onNodeToggle = (type, key, checked) => {
+                if (type === 'file') {
+                    const findAndToggle = (curr) => {
+                        if (!curr.isDir && curr.fileIndex === key) {
+                            curr.checked = checked;
+                            return true;
+                        }
+                        if (curr.isDir) {
+                            for (let c of curr.children.values()) {
+                                if (findAndToggle(c)) return true;
+                            }
+                        }
+                        return false;
+                    };
+                    findAndToggle(folderUploadTreeRoot);
+                } else {
+                    const findAndToggle = (curr) => {
+                        if (curr.isDir && curr.path === key) {
+                            setNodeCheckedState(curr, checked);
+                            return true;
+                        }
+                        if (curr.isDir) {
+                            for (let c of curr.children.values()) {
+                                if (findAndToggle(c)) return true;
+                            }
+                        }
+                        return false;
+                    };
+                    findAndToggle(folderUploadTreeRoot);
+                }
+                
+                recalculateNodeParentStates(folderUploadTreeRoot);
+                syncFolderTreeDom(folderUploadTreeRoot);
+            };
+
+            container.querySelectorAll('.folder-tree-node-checkbox').forEach(chk => {
+                chk.onchange = (e) => {
+                    const isChecked = e.target.checked;
+                    const fileIdx = chk.getAttribute('data-file-index');
+                    const folderPath = chk.getAttribute('data-folder-path');
+
+                    if (fileIdx !== null) {
+                        onNodeToggle('file', Number(fileIdx), isChecked);
+                    } else if (folderPath !== null) {
+                        onNodeToggle('folder', folderPath, isChecked);
+                    }
+                };
+            });
+        }
+
+        function getCheckedFilesList(node, result = []) {
+            if (!node.isDir) {
+                if (node.checked) {
+                    result.push({
+                        file: node.file,
+                        path: node.path,
+                        fileIndex: node.fileIndex
+                    });
+                }
+            } else {
+                node.children.forEach(child => {
+                    getCheckedFilesList(child, result);
+                });
+            }
+            return result;
+        }
+
+        async function uploadFolderAsZip(checkedFiles, topDirName) {
+            if (checkedFiles.length === 0) return;
+
+            setServiceDocsUploadProgress(true, 0, '正在生成压缩包...');
+
+            const zip = new JSZip();
+            checkedFiles.forEach(item => {
+                zip.file(item.path, item.file);
+            });
+
+            const zipBlob = await zip.generateAsync({
+                type: 'blob',
+                compression: 'DEFLATE',
+                compressionOptions: { level: 6 }
+            }, (metadata) => {
+                setServiceDocsUploadProgress(true, metadata.percent * 0.3, `正在生成压缩包: ${Math.round(metadata.percent)}%`);
+            });
+
+            const zipFile = new File([zipBlob], `${topDirName}.zip`, { type: 'application/zip' });
+            const totalBytes = zipFile.size;
+            serviceDocsUploadState = { totalBytes, uploadedBytes: 0, currentFile: `${topDirName}.zip` };
+            setServiceDocsUploadProgress(true, 30, '开始上传压缩包...');
+
+            const uploadUndownCheckbox = document.getElementById('uploadUndownloadable');
+            const isUndown = uploadUndownCheckbox ? uploadUndownCheckbox.checked : false;
+
+            return new Promise((resolve, reject) => {
+                const formData = new FormData();
+                formData.append('file', zipFile);
+                formData.append('path', serviceDocsJoinPath(serviceDocsCurrentPath, zipFile.name, false));
+                formData.append('undownloadable', isUndown ? "true" : "false");
+
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/admin/service-docs/upload', true);
+                Object.entries(adminHeaders()).forEach(([key, value]) => {
+                    xhr.setRequestHeader(key, value);
+                });
+
+                xhr.upload.onprogress = (event) => {
+                    const loaded = event.lengthComputable ? event.loaded : 0;
+                    const uploadPct = totalBytes > 0 ? (loaded / totalBytes) * 70 : 0;
+                    const pct = Math.round(30 + uploadPct);
+                    setServiceDocsUploadProgress(true, pct, `正在上传: ${pct}%`);
+                };
+
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        setServiceDocsUploadProgress(true, 100, '上传完成，正在解压...');
+                        resolve(true);
+                    } else {
+                        reject(new Error(xhr.responseText || `上传失败 (${xhr.status})`));
+                    }
+                };
+
+                xhr.onerror = () => reject(new Error('上传失败：网络异常'));
+                xhr.onabort = () => reject(new Error('上传已取消'));
+                xhr.send(formData);
+            });
+        }
+
+        serviceDocsUploadFolderInput.addEventListener('change', () => {
+            const files = serviceDocsUploadFolderInput.files;
+            if (!files || files.length === 0) return;
+            
+            folderUploadFilesList = Array.from(files);
+            folderUploadTreeRoot = buildFolderTree(folderUploadFilesList);
+            
+            const topDirName = folderUploadFilesList[0].webkitRelativePath.split('/')[0] || '文件夹';
+            document.getElementById('folderUploadTitle').innerHTML = `<i class="fas fa-folder-tree"></i> 上传文件夹: ${escapeHtml(topDirName)}`;
+            folderUploadSubtitle.textContent = `共选中 ${folderUploadFilesList.length} 个文件，将上传至当前目录`;
+            
+            renderFolderTree(folderUploadTreeRoot, folderUploadTreeContainer);
+            toggleFolderUploadModalOpen(true);
+            serviceDocsUploadFolderInput.value = '';
+        });
+
+        closeFolderUploadBtn.onclick = () => toggleFolderUploadModalOpen(false);
+        folderUploadModal.addEventListener('click', (event) => {
+            if (event.target === folderUploadModal) toggleFolderUploadModalOpen(false);
+        });
+
+        folderSelectAllBtn.onclick = () => {
+            if (!folderUploadTreeRoot) return;
+            setNodeCheckedState(folderUploadTreeRoot, true);
+            recalculateNodeParentStates(folderUploadTreeRoot);
+            syncFolderTreeDom(folderUploadTreeRoot);
+        };
+
+        folderSelectNoneBtn.onclick = () => {
+            if (!folderUploadTreeRoot) return;
+            setNodeCheckedState(folderUploadTreeRoot, false);
+            recalculateNodeParentStates(folderUploadTreeRoot);
+            syncFolderTreeDom(folderUploadTreeRoot);
+        };
+
+        folderSelectInvertBtn.onclick = () => {
+            if (!folderUploadTreeRoot) return;
+            invertNodeCheckedState(folderUploadTreeRoot);
+            recalculateNodeParentStates(folderUploadTreeRoot);
+            syncFolderTreeDom(folderUploadTreeRoot);
+        };
+
+        folderStartUploadBtn.onclick = async () => {
+            if (!folderUploadTreeRoot) return;
+            const checkedFiles = getCheckedFilesList(folderUploadTreeRoot);
+            if (checkedFiles.length === 0) {
+                alert('请至少勾选一个文件进行上传');
+                return;
+            }
+            
+            folderStartUploadBtn.disabled = true;
+            folderSelectAllBtn.disabled = true;
+            folderSelectNoneBtn.disabled = true;
+            folderSelectInvertBtn.disabled = true;
+            
+            const topDirName = folderUploadFilesList[0].webkitRelativePath.split('/')[0] || 'folder';
+            toggleFolderUploadModalOpen(false);
+            
+            try {
+                await uploadFolderAsZip(checkedFiles, topDirName);
+                await loadServiceDocs(serviceDocsCurrentPath);
+            } catch (err) {
+                resetServiceDocsUploadProgress();
+                console.error(err);
+                alert(err.message || '部分或全部文件上传失败');
+            } finally {
+                folderStartUploadBtn.disabled = false;
+                folderSelectAllBtn.disabled = false;
+                folderSelectNoneBtn.disabled = false;
+                folderSelectInvertBtn.disabled = false;
+                folderUploadFilesList = [];
+                folderUploadTreeRoot = null;
+                resetServiceDocsUploadProgress();
             }
         };
 

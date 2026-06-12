@@ -174,13 +174,28 @@
 
         function formatChatContent(text) {
             const safeText = escapeChatHtml(text);
-            const markdownText = safeText.replace(/&gt;/g, '>');
+            let markdownText = safeText.replace(/&gt;/g, '>');
+            
+            // Auto encode spaces in Markdown link/image URLs to %20 to help marked parse them correctly
+            markdownText = markdownText.replace(/(!?\[.*?\])\((.*?)\)/g, (match, p1, p2) => {
+                const encodedUrl = p2.replace(/ /g, '%20');
+                return `${p1}(${encodedUrl})`;
+            });
+
             if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
                 const renderer = new marked.Renderer();
                 const originalCode = renderer.code.bind(renderer);
-                renderer.image = (href, title, text) => {
-                    const cleanHref = href ? href.replace(/&amp;/g, '&') : '';
-                    return `<img src="${cleanHref}" alt="${text || ''}" title="${title || ''}" loading="lazy" onerror="this.style.display='none'" />`;
+                renderer.image = (token, val1, val2) => {
+                    let href = token;
+                    let title = val1 || '';
+                    let text = val2 || '';
+                    if (typeof token === 'object' && token !== null) {
+                        href = token.href;
+                        title = token.title || '';
+                        text = token.text || '';
+                    }
+                    const cleanHref = href ? String(href).replace(/&amp;/g, '&') : '';
+                    return `<img src="${cleanHref}" alt="${text}" title="${title}" loading="lazy" onerror="this.style.display='none'" />`;
                 };
                 renderer.code = (code, lang, escaped) => {
                     let rawCode = code;

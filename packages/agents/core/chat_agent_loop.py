@@ -253,7 +253,7 @@ class ChatAgentLoop:
                                 "_resume_after_seconds": wait_seconds,
                             })
 
-                    self._set_status("正在整理回复......")
+                    self._set_status("正在调查数据......")
 
                 self.messages = round_messages
 

@@ -152,3 +152,36 @@
 3. **400 Bad Request (Busy)**：同一账号已有任务运行，等待结束或调用 `/api/stop`。
 
 管理员后台仍使用独立的 `X-Admin-Token`，不属于用户 token 链路。
+
+---
+
+## 6. 账号级 Chatbot 与定时唤醒
+
+### 聊天接口
+
+| 项目 | 内容 |
+| :--- | :--- |
+| **方法** | `POST` |
+| **URL** | `/api/chatbot` |
+| **Header** | `X-Auth-Token: <完整token>`（必填） |
+| **Body (JSON)** | `{"content": "用户消息", "attachmentIds": ["可选附件ID"]}` |
+| **成功返回** | `{"status": "ok"}` |
+
+聊天历史存放在账号目录下的 `chatbot/chat.jsonl`。前端通过 `/api/chatbot/status` 轮询 `state` 和 `last_update`，再通过 `/api/chatbot/history` 拉取可展示历史。
+
+### Chatbot `wait` 工具
+
+Chatbot Agent 可调用 `wait` 登记未来唤醒任务。该工具不阻塞当前对话。
+
+| 模式 | 行为 |
+| :--- | :--- |
+| `delay` | 到点后直接唤醒 Agent；空参数调用默认 3 秒后唤醒。 |
+| `alarm` | 到点后先向 `chatbot/chat.jsonl` 追加 `role=system, name=notice` 的提醒消息，再唤醒 Agent。 |
+
+待触发任务统一保存在：
+
+```text
+storage/accounts/chatbot_scheduler.jsonl
+```
+
+该文件只保存未触发任务。管理员可直接编辑该文件，删除某一行即取消对应闹钟。后台 scheduler 每秒扫描一次；如果对应账号 chatbot 正在运行，任务会保留到下一轮再尝试触发。

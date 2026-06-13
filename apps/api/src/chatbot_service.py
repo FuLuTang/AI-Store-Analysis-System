@@ -722,7 +722,7 @@ def _build_messages_from_history(history: list[dict]) -> list[dict]:
     history = _compress_history_for_model(history)
     messages: list[dict] = [{"role": "system", "content": build_chatbot_system_content()}]
     pending_card_messages: list[dict] = []
-    for item in history:
+    for index, item in enumerate(history):
         role = str(item.get("role", "")).strip().lower()
         if _is_notice_message(item):
             messages.extend(_notice_messages_for_model([item]))
@@ -734,8 +734,13 @@ def _build_messages_from_history(history: list[dict]) -> list[dict]:
             continue
         messages.append(_normalize_message_for_model(item))
         if role == "tool" and pending_card_messages:
-            messages.extend(pending_card_messages)
-            pending_card_messages = []
+            next_role = ""
+            if index + 1 < len(history):
+                next_item = history[index + 1]
+                next_role = str(next_item.get("role", "")).strip().lower()
+            if next_role != "tool":
+                messages.extend(pending_card_messages)
+                pending_card_messages = []
     if pending_card_messages:
         last = messages[-1] if messages else {}
         # 未闭合的 assistant tool_call 不能后接 system 消息；这种情况通常会被发送入口拦截。

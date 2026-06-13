@@ -62,6 +62,17 @@
 | **Header** | `X-Auth-Token: <完整token>`（必填） |
 | **成功返回** | `{"status": "ok"}` |
 
+### 修改密码
+
+| 项目 | 内容 |
+| :--- | :--- |
+| **方法** | `POST` |
+| **URL** | `/api/auth/change-password` |
+| **Header** | 普通用户携带 `X-Auth-Token: <用户token>`；管理员携带 `X-Admin-Token: <管理员token>` |
+| **Body (JSON)** | 普通用户：`{"old_password": "原密码", "password": "新密码"}`<br>管理员：`{"accountId": "账号id", "password": "新密码"}`（免校验原密码） |
+| **成功返回** | `{"status": "ok", "message": "密码修改成功"}` |
+| **错误 (400)** | `{"detail": "密码至少需要 4 位"}` 或 `{"detail": "原密码错误"}` |
+
 ---
 
 ## 3. 提交数据
@@ -160,7 +171,7 @@
 | **方法** | `GET /api/admin/accounts` |
 | **说明** | 列出可管理账号及其身份描述摘要 |
 | **方法** | `GET /api/admin/accounts/profile?account_id=...` |
-| **说明** | 读取单个账号的身份描述 |
+| **说明** | 读取单个账号的身份描述。管理员可使用 `X-Admin-Token` 读取任意账号；普通用户可使用 `X-Auth-Token` 读取自身账号（此时 `account_id` 可选，默认为自身，输入他人 ID 会返回 403 越权错误） |
 | **方法** | `POST /api/admin/accounts/profile` |
 | **说明** | 更新身份描述；若身份变化，自动清空该账号的 `service_docs` 规则表 |
 

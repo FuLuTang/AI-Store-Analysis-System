@@ -921,8 +921,8 @@ async def auth_register(request: Request):
 
     username = str(data.get("username") or data.get("accountName") or "").strip()
     password = str(data.get("password") or "")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="密码至少需要 8 位")
+    if len(password) < 4:
+        raise HTTPException(status_code=400, detail="密码至少需要 4 位")
     try:
         account_ref = account_ref_for_username(ACCOUNTS_DIR, username)
     except ValueError as e:
@@ -1079,8 +1079,35 @@ def list_admin_accounts(x_admin_token: Optional[str] = Header(default=None)):
 
 
 @app.get("/api/admin/accounts/profile")
-def get_admin_account_profile(account_id: str = Query(...), x_admin_token: Optional[str] = Header(default=None)):
-    require_admin_authorization(x_admin_token)
+def get_admin_account_profile(
+    account_id: Optional[str] = Query(default=None),
+    x_admin_token: Optional[str] = Header(default=None),
+    x_auth_token: Optional[str] = Header(default=None, alias="X-Auth-Token")
+):
+    is_admin = False
+    if x_admin_token and x_admin_token.strip():
+        try:
+            require_admin_authorization(x_admin_token)
+            is_admin = True
+        except HTTPException:
+            pass
+
+    if not is_admin:
+        if not x_auth_token:
+            raise HTTPException(status_code=401, detail="缺少令牌")
+        auth_result = check_token_logable(ACCOUNTS_DIR, x_auth_token)
+        if not auth_result:
+            raise HTTPException(status_code=401, detail="无效或已过期的令牌")
+        
+        token_account_id = auth_result.account.account_id
+        if account_id is None:
+            account_id = token_account_id
+        elif account_id != token_account_id:
+            raise HTTPException(status_code=403, detail="仅可以查看当前账号的信息")
+    else:
+        if not account_id:
+            raise HTTPException(status_code=400, detail="缺少 account_id")
+
     account_dir = _account_dir_by_id(account_id)
     account_json = _load_account_json(account_dir)
     profile = load_service_docs_account_profile(account_dir)
@@ -1096,6 +1123,78 @@ def get_admin_account_profile(account_id: str = Query(...), x_admin_token: Optio
         "ruleCount": rules_summary["count"],
         "rules": rules_summary["rules"],
     }
+
+
+@app.post("/api/auth/change-password")
+async def change_password(
+    request: Request,
+    x_auth_token: Optional[str] = Header(default=None, alias="X-Auth-Token"),
+    x_admin_token: Optional[str] = Header(default=None)
+):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+        
+    is_admin = False
+    if x_admin_token and x_admin_token.strip():
+        try:
+            require_admin_authorization(x_admin_token)
+            is_admin = True
+        except HTTPException:
+            pass
+
+    new_password = str(data.get("new_password") or data.get("password") or "").strip()
+    if len(new_password) < 4:
+        raise HTTPException(status_code=400, detail="密码至少需要 4 位")
+
+    if is_admin:
+        target_account_id = str(data.get("accountId") or data.get("account_id") or "").strip()
+        if not target_account_id:
+            if x_auth_token:
+                try:
+                    session = resolve_session(x_auth_token)
+                    target_account_id = session.account_id
+                except Exception:
+                    pass
+            if not target_account_id:
+                raise HTTPException(status_code=400, detail="缺少 account_id")
+        try:
+            account_dir = _account_dir_by_id(target_account_id)
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="未找到账号")
+    else:
+        session = resolve_session(x_auth_token)
+        account_dir = session.account_dir
+        
+        old_password = str(data.get("old_password") or "").strip()
+        if not old_password:
+            raise HTTPException(status_code=400, detail="请填写原密码")
+            
+        account_json_path = account_dir / "account.json"
+        if not account_json_path.exists():
+            raise HTTPException(status_code=404, detail="未找到账号")
+        try:
+            account_data = json.loads(account_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            raise HTTPException(status_code=500, detail="加载账号数据失败")
+        
+        if not verify_password(old_password, str(account_data.get("passwordHash") or "")):
+            raise HTTPException(status_code=400, detail="原密码错误")
+
+    account_json_path = account_dir / "account.json"
+    if not account_json_path.exists():
+        raise HTTPException(status_code=404, detail="未找到账号")
+    try:
+        account_data = json.loads(account_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(status_code=500, detail="加载账号数据失败")
+
+    account_data["passwordHash"] = hash_password(new_password)
+    account_data["lastSeenAt"] = datetime.datetime.now().isoformat()
+    account_json_path.write_text(json.dumps(account_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    
+    return {"status": "ok", "message": "密码修改成功"}
 
 
 @app.post("/api/admin/accounts/profile")

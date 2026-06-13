@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人信息 - AI 分析系统</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+    <script src="auth-session.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .profile-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+        
+        @media (max-width: 768px) {
+            .profile-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .profile-info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.02);
+            transition: all 0.2s ease;
+        }
+        
+        .profile-info-item:hover {
+            border-color: var(--border-hover);
+            background: rgba(255, 255, 255, 0.04);
+        }
+        
+        .profile-info-item .label {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .profile-info-item .value {
+            color: var(--text);
+            font-size: 1rem;
+            font-weight: 600;
+            word-break: break-all;
+        }
+        
+        .profile-info-item .identity-desc {
+            font-size: 0.95rem;
+            line-height: 1.6;
+            color: var(--text);
+            white-space: pre-wrap;
+        }
+        
+        .password-tips {
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        
+        .admin-link-section {
+            margin-top: 3rem;
+            text-align: center;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border);
+        }
+        
+        .rule-list {
+            margin-top: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+        
+        .rule-tag {
+            font-size: 0.8rem;
+            padding: 0.4rem 0.6rem;
+            background: var(--placeholder-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+        }
+    </style>
+    <script>
+        (function initTheme() {
+            const theme = localStorage.getItem('theme') || 'dark';
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark-theme');
+            }
+        })();
+    </script>
+</head>
+<body>
+    <div class="ambient-glow-1"></div>
+    <div class="ambient-glow-2"></div>
+    <div class="container">
+        <nav>
+            <a href="index.html">用户工作台</a>
+            <a href="history.html">历史记录</a>
+            <a href="profile.html" class="active">个人信息</a>
+            <div class="nav-right">
+                <span id="accountDisplay" style="font-size:0.82rem; color:var(--text-muted); margin-right:8px; font-family:'JetBrains Mono',monospace; user-select:none;"></span>
+                <button class="nav-btn" onclick="window.toggleTheme()" id="themeToggleBtn" title="切换主题" style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm); margin-right: 4px;">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
+                <button class="nav-btn danger" onclick="window.logout()">
+                    <i class="fas fa-sign-out-alt"></i> 退出
+                </button>
+            </div>
+        </nav>
+
+        <header>
+            <h1>个人信息</h1>
+            <p class="subtitle">查看当前账户的身份标识、权限分配并安全地更改您的系统访问密码。</p>
+        </header>
+
+        <div class="profile-grid">
+            <!-- 左侧：身份卡片 -->
+            <div class="card">
+                <h3 style="margin-bottom: 1.25rem; font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fas fa-id-card" style="color: var(--primary);"></i> 我的身份与权限
+                </h3>
+                
+                <div style="display: flex; flex-direction: column; gap: 1rem;">
+                    <div class="profile-info-item">
+                        <span class="label">当前登录账号</span>
+                        <span class="value" id="usernameDisplay">加载中...</span>
+                    </div>
+                    
+                    <div class="profile-info-item">
+                        <span class="label">账号 ID (系统隔离主键)</span>
+                        <span class="value" id="accountIdDisplay" style="font-family: 'JetBrains Mono', monospace;">加载中...</span>
+                    </div>
+                    
+                    <div class="profile-info-item">
+                        <span class="label">自然语言身份描述</span>
+                        <div class="identity-desc" id="identityDisplay">加载中...</div>
+                    </div>
+                    
+                    <div class="profile-info-item">
+                        <span class="label">分配的数据与文档权限规则</span>
+                        <div id="rulesContainer">
+                            <div class="password-tips"><i class="fas fa-spinner fa-spin"></i> 正在读取安全规则...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：修改密码 -->
+            <div class="card">
+                <h3 style="margin-bottom: 1.25rem; font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fas fa-key" style="color: var(--accent);"></i> 安全密码修改
+                </h3>
+                
+                <div class="form-group">
+                    <label>原密码</label>
+                    <input type="password" id="oldPassword" placeholder="请输入原密码">
+                </div>
+                
+                <div class="form-group">
+                    <label>新密码</label>
+                    <input type="password" id="newPassword" placeholder="请输入新密码">
+                    <div class="password-tips">
+                        <i class="fas fa-circle-info"></i> 限制 4 个字符及以上
+                    </div>
+                </div>
+                
+                <div class="form-group" style="margin-bottom: 1.8rem;">
+                    <label>确认新密码</label>
+                    <input type="password" id="confirmPassword" placeholder="请再次输入新密码">
+                </div>
+                
+                <button class="btn w-full" id="changePasswordBtn" onclick="handleChangePassword()">
+                    <i class="fas fa-shield-halved"></i> 确认更新密码
+                </button>
+                
+                <div id="statusMessage" style="margin-top: 1rem; font-size: 0.88rem; text-align: center; display: none;"></div>
+            </div>
+        </div>
+
+        <!-- 页面底部：管理员配置跳转 -->
+        <div class="admin-link-section">
+            <button class="btn-secondary" onclick="window.location.href='admin.html'" style="padding: 0.75rem 2rem; font-size: 0.95rem;">
+                <i class="fas fa-sliders-h" style="color: var(--primary);"></i> 进入管理员配置后台
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // ========== 鉴权与通用操作 ==========
+        function authHeaders() {
+            const key = (typeof window.getAuthToken === 'function'
+                ? window.getAuthToken()
+                : (sessionStorage.getItem('authToken') || '')) || '';
+            return { 'X-Auth-Token': key, 'Content-Type': 'application/json' };
+        }
+
+        function clearAuthAndReturn() {
+            sessionStorage.removeItem('accountName');
+            sessionStorage.removeItem('authToken');
+            window.location.href = '/login.html';
+        }
+
+        window.logout = async function() {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
+            } catch(e) {}
+            clearAuthAndReturn();
+        };
+
+        // ========== 主题管理 ==========
+        window.toggleTheme = function() {
+            const isDark = document.documentElement.classList.toggle('dark-theme');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateThemeIcon();
+        };
+
+        function updateThemeIcon() {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                const isDark = document.documentElement.classList.contains('dark-theme');
+                icon.className = isDark ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+        setTimeout(updateThemeIcon, 0);
+
+        // ========== 页面加载逻辑 ==========
+        window.onload = async () => {
+            updateThemeIcon();
+            const key = typeof window.getAuthToken === 'function' ? window.getAuthToken() : sessionStorage.getItem('authToken');
+            if (!key) { window.location.href = '/login.html'; return; }
+            
+            try {
+                // 1. Verify Authentication
+                const verifyResp = await fetch('/api/auth/verify', { method: 'POST', headers: { 'X-Auth-Token': key } });
+                if (!verifyResp.ok) { clearAuthAndReturn(); return; }
+                const verifyData = await verifyResp.json();
+                if (verifyData.status === 'ok' && verifyData.account) {
+                    const disp = document.getElementById('accountDisplay');
+                    if (disp) disp.innerText = `账号: ${verifyData.account}`;
+                }
+                
+                // 2. Fetch Profile details
+                const profileResp = await fetch('/api/admin/accounts/profile', {
+                    headers: { 'X-Auth-Token': key }
+                });
+                
+                if (!profileResp.ok) {
+                    throw new Error(`无法获取账号配置信息 (${profileResp.status})`);
+                }
+                
+                const profileData = await profileResp.json();
+                
+                // Render details
+                document.getElementById('usernameDisplay').innerText = profileData.username || '未设定账号';
+                document.getElementById('accountIdDisplay').innerText = profileData.accountId || '未生成 ID';
+                document.getElementById('identityDisplay').innerText = profileData.profile?.identityDescription || '暂无详细身份描述。';
+                
+                const rulesContainer = document.getElementById('rulesContainer');
+                const rules = profileData.rules || [];
+                if (rules.length === 0) {
+                    rulesContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">暂无可用规则限制 (默认继承通用规则)</span>';
+                } else {
+                    rulesContainer.innerHTML = `<div class="rule-list">${rules.map(r => `<div class="rule-tag">${escapeHtml(r)}</div>`).join('')}</div>`;
+                }
+                
+            } catch (e) {
+                console.error("Profile load failed", e);
+                alert("加载个人身份数据失败，请尝试重新登录。");
+                clearAuthAndReturn();
+            }
+        };
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        // ========== 修改密码交互 ==========
+        async function handleChangePassword() {
+            const oldPassword = document.getElementById('oldPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const msgEl = document.getElementById('statusMessage');
+            const btn = document.getElementById('changePasswordBtn');
+            
+            msgEl.style.display = 'none';
+            
+            if (!oldPassword) {
+                showMsg('请输入原密码', 'var(--error)');
+                return;
+            }
+            if (!newPassword) {
+                showMsg('请输入新密码', 'var(--error)');
+                return;
+            }
+            if (newPassword.length < 4) {
+                showMsg('密码长度不能少于 4 位', 'var(--error)');
+                return;
+            }
+            if (newPassword !== confirmPassword) {
+                showMsg('两次输入的新密码不一致，请检查', 'var(--error)');
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在修改密码...';
+            
+            try {
+                const resp = await fetch('/api/auth/change-password', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ old_password: oldPassword, password: newPassword })
+                });
+                
+                const data = await resp.json();
+                if (resp.ok) {
+                    showMsg('✓ 密码修改成功！请用新密码重新登录', 'var(--success)');
+                    document.getElementById('oldPassword').value = '';
+                    document.getElementById('newPassword').value = '';
+                    document.getElementById('confirmPassword').value = '';
+                    setTimeout(() => {
+                        clearAuthAndReturn();
+                    }, 1500);
+                } else {
+                    showMsg(data.detail || '密码修改失败，请重试', 'var(--error)');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-shield-halved"></i> 确认更新密码';
+                }
+            } catch (e) {
+                showMsg('服务器连接失败，请稍后重试', 'var(--error)');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-shield-halved"></i> 确认更新密码';
+            }
+        }
+
+        function showMsg(text, color) {
+            const msgEl = document.getElementById('statusMessage');
+            msgEl.innerText = text;
+            msgEl.style.color = color;
+            msgEl.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

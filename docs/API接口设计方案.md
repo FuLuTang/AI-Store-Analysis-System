@@ -138,6 +138,30 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
 - **响应 (200)**: `{"status": "ok", "account": "tan***"}`
 - **错误 (401)**: Invalid or expired token
 
+#### [POST] /api/auth/change-password
+
+- **说明**: 安全修改密码接口。支持普通用户修改密码，或管理员直接重置任意账号密码。
+- **Header**: 
+  - 普通用户：`X-Auth-Token`（必填，必须提供原密码进行校验）
+  - 管理员：`X-Admin-Token`（必填，无需原密码校验，可重置任意账号）
+- **Body (JSON)**:
+  - 普通用户：
+    ```json
+    {
+      "old_password": "current_password",
+      "password": "new_password"
+    }
+    ```
+  - 管理员：
+    ```json
+    {
+      "accountId": "tes_1b39fb",
+      "password": "new_password"
+    }
+    ```
+- **响应 (200)**: `{"status": "ok", "message": "密码修改成功"}`
+- **错误 (400)**: 密码至少需要 4 位 / 缺少原密码 / 原密码错误
+
 #### [GET] /api/config
 
 - **说明**: 获取当前用户的系统基础 LLM 预设配置状态（如是否有 API Key 等，不返回敏感明文）。
@@ -500,9 +524,11 @@ Agent 代表用户执行敏感系统功能时使用的受限 Token：
 
 #### [GET] /api/admin/accounts/profile
 
-- **说明**: 读取指定账号的身份描述与基础资料。
-- **Query**: `account_id`
-- **响应 (200)**: `{"profile": {"reasoningEffort": "...", "identityDescription": "..."}}`
+- **说明**: 读取账号的身份描述与基础资料。支持管理员身份（用 `X-Admin-Token`）读取任意账号；也支持普通用户（用 `X-Auth-Token`）读取自身账号。
+- **Header**: `X-Admin-Token`（管理员）或 `X-Auth-Token`（普通用户）
+- **Query**: `account_id`（管理员必填；普通用户可选，默认返回自身账号，传入他人 ID 时返回 403 越权）
+- **响应 (200)**: `{"status": "ok", "accountId": "...", "username": "...", "profile": {"reasoningEffort": "...", "identityDescription": "..."}, "ruleCount": 0, "rules": []}`
+- **错误 (403)**: 仅可以查看当前账号的信息 (普通用户越权时)
 
 #### [POST] /api/admin/accounts/profile
 

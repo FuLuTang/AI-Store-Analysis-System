@@ -351,12 +351,11 @@ def _call_permission_ai(identity_description: str, path: str, tool: str, reason:
         }
     client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
     system_prompt = (
-        "你是 service_docs 权限判断器。你不是 Agent，不要闲聊。"
-        "你只有一次调用机会，只能输出 JSON 对象。"
+        "你是 service_docs 权限判断器。输出 JSON 。"
         "目标：根据用户身份描述、目标路径、目标工具、已有规则，给出 allow/deny 判定，"
         "并在合适时给出可复用的 regex_pattern。"
         "文件名本身风险较低，但正文读取、结构读取和资源链接要谨慎。"
-        "若信息不足，优先 deny。"
+        "若信息不足，优先 deny。若对人物的描述不太清晰，优先保守处理。"
     )
     user_prompt = (
         f"用户身份描述:\n{identity_description or '(空)'}\n\n"

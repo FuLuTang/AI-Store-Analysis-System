@@ -13,6 +13,20 @@ MAX_READ_BYTES = 64 * 1024  # 64KB
 FORBIDDEN_READ_BASENAMES = {"plan.json"}
 
 
+def _normalize_workspace_write_path(path: str) -> str:
+    rel = str(path or "").strip().replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    changed = True
+    while changed:
+        changed = False
+        for prefix in ("chatbot/workspace/",):
+            if rel.startswith(prefix):
+                rel = rel[len(prefix):]
+                changed = True
+    return rel
+
+
 def _format_size(size: int) -> str:
     units = ["B", "KB", "MB", "GB"]
     value = float(size)
@@ -307,6 +321,8 @@ def write_file_impl(
     mode: str = "overwrite",
     emit_log: Optional[Callable[[str, str | dict], None]] = None,
 ) -> str:
+    original_path = str(path or "")
+    path = _normalize_workspace_write_path(path)
     p = ws.resolve_write(path)
     if p.name in FORBIDDEN_READ_BASENAMES:
         return json.dumps({"error": f"不允许使用 write_file 修改受限文件: {path}"}, ensure_ascii=False)
@@ -333,6 +349,7 @@ def write_file_impl(
     result = json.dumps({
         "ok": True,
         "path": path,
+        "original_path": original_path if original_path != path else "",
         "mode": mode,
         "bytes_written": len(content.encode("utf-8")),
         "size": size,

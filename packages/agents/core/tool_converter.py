@@ -153,8 +153,7 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                 "相当于 write_file + run_python 一步到位。\n"
                 "提示：可以直接对 'scripts/old_session_scripts/[run_id]/[脚本名]' 执行 run_python，"
                 "系统会自动将其复制一份到 'scripts/[脚本名]' 里面并运行。\n"
-                "如果脚本会产生较长输出、触发外部请求，或你希望工具完成后稍等再继续总结，"
-                "可传 wait_seconds；系统会在工具结果写入历史后等待对应秒数，再恢复 Agent 循环。"
+                "如果脚本运行超过 5 秒，系统会自动中止并返回超时结果；较长任务应改成后台处理。"
             ),
             parameters={
                 "type": "object",
@@ -166,10 +165,6 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                     "content": {
                         "type": "string",
                         "description": "（可选）脚本代码内容。传入后自动写入 script_path 再执行，无需先调用 write_file。",
-                    },
-                    "wait_seconds": {
-                        "type": "integer",
-                        "description": "（可选）工具结果写入后等待多少秒再恢复 Agent 循环，建议 1-30 秒。",
                     },
                 },
                 "required": ["script_path"],
@@ -294,11 +289,11 @@ def available_tool_call_for_agent(ws: Workspace, task_type: str = "diagnosis") -
                         },
                         "delay_seconds": {
                             "type": "integer",
-                            "description": "可选。delay 模式使用，至少 1 秒；不传或解析失败默认 3 秒。用户说分钟或小时提醒时，请换算成秒。",
+                            "description": "可选。delay 模式使用，至少 1 秒；不传或解析失败默认 1 秒。用户说分钟或小时提醒时，请换算成秒。",
                         },
                         "run_at": {
                             "type": "string",
-                            "description": "可选。alarm 模式使用，ISO 时间字符串，例如 2026-06-12T18:30:00+08:00。精度按分钟处理；解析失败默认 3 秒 delay。",
+                            "description": "可选。alarm 模式使用，ISO 时间字符串，例如 2026-06-12T18:30:00+08:00。精度按分钟处理；解析失败默认 1 秒 delay。",
                         },
                         "resume_prompt": {
                             "type": "string",
@@ -506,8 +501,8 @@ def build_tool_map(
                 pass
         return output
 
-    def _run_python(script_path: str, content: str = None, wait_seconds: int = 0) -> str:
-        return run_python_impl(ws, script_path, content=content, emit_log=_emit_log)
+    def _run_python(script_path: str, content: str = None) -> str:
+        return run_python_impl(ws, script_path, content=content, timeout=5, emit_log=_emit_log)
 
     def _duckdb_query(sql: str) -> str:
         return duckdb_query_impl(ws, sql, emit_log=_emit_log)

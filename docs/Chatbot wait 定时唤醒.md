@@ -10,19 +10,19 @@
 
 - 用户要求倒计时、稍后提醒、指定时间提醒。
 - Agent 提交异步任务、调用外部 API 后，需要稍后查询状态或继续总结。
-- 小任务只需要短暂等待时，可以空参数调用，系统默认 3 秒后唤醒。
+- 小任务只需要短暂等待时，可以空参数调用，系统默认 1 秒后唤醒。
 
 不适用场景：
 
 - 诊断/价格推荐主流程 Agent 不暴露该工具。
-- `run_python(wait_seconds)` 仍保留，用于工具执行后的短延迟恢复当前 loop。
+- `run_python` 不再提供 `wait_seconds`；长耗时脚本由工具自身超时返回，后续如需继续查询应显式使用 `wait`。
 
 ## 2. 工具参数
 
 | 参数名 | 类型 | 是否必填 | 默认值 | 描述 |
 | :--- | :--- | :--- | :--- | :--- |
 | `mode` | string | 否 | `delay` | `delay` 表示多少秒后继续；`alarm` 表示指定时间提醒。 |
-| `delay_seconds` | integer | 否 | `3` | `delay` 模式使用；不传或解析失败时默认 3 秒。 |
+| `delay_seconds` | integer | 否 | `1` | `delay` 模式使用；不传或解析失败时默认 1 秒。 |
 | `run_at` | string | 否 | - | `alarm` 模式使用，ISO 时间字符串，如 `2026-06-12T18:30:00+08:00`；精度按分钟处理。 |
 | `resume_prompt` | string | 否 | `请根据前文和最新上下文继续处理。` | 到点后给 Agent 的恢复指令。 |
 | `reason` | string | 否 | `""` | 管理员查看调度文件时使用的简短原因。 |
@@ -62,7 +62,7 @@ nano storage/accounts/chatbot_scheduler.jsonl
 `delay` 模式：
 
 - 到点后直接唤醒对应账号的 Agent Loop。
-- `resume_prompt` 作为临时系统提示注入本次 loop，不写入 `chat.jsonl`。
+- 不向 `chatbot/chat.jsonl` 追加消息；系统只在本次内存上下文尾部临时拼接一条纯 `system` 消息，记录设置时间、到期时间、当前时间和 `resume_prompt`。
 
 `alarm` 模式：
 

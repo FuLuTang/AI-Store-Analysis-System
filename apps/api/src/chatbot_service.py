@@ -148,6 +148,59 @@ def _format_attachment_context(attachments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _client_context_message(client_context: object) -> Optional[dict]:
+    if not isinstance(client_context, dict):
+        return None
+
+    items: list[str] = []
+    timezone = str(client_context.get("timezone") or "").strip()
+    if timezone:
+        items.append(f"timezone: {timezone}")
+    utc_offset = client_context.get("utcOffsetMinutes")
+    if utc_offset is not None and str(utc_offset).strip():
+        items.append(f"utcOffsetMinutes: {utc_offset}")
+    locale = str(client_context.get("locale") or "").strip()
+    if locale:
+        items.append(f"locale: {locale}")
+    local_time = str(client_context.get("localTime") or "").strip()
+    if local_time:
+        items.append(f"localTime: {local_time}")
+    page_path = str(client_context.get("path") or "").strip()
+    if page_path:
+        items.append(f"path: {page_path}")
+    device = str(client_context.get("device") or "").strip()
+    if device:
+        items.append(f"device: {device}")
+
+    if not items:
+        return None
+
+    return {
+        "role": "system",
+        "content": "【客户端上下文】\n" + "\n".join(items),
+        "datetime": _now_iso(),
+    }
+
+
+def _wake_runtime_message(task: dict, prompt: str) -> dict:
+    now_text = _now_iso()
+    created_at = str(task.get("created_at") or "").strip() or now_text
+    run_at = str(task.get("run_at") or "").strip() or now_text
+    return {
+        "role": "system",
+        "content": (
+            "【定时唤醒指令｜必须执行】\n"
+            "这是一个 wait.delay 到期事件，只存在于本次内存上下文，不是历史聊天消息。\n"
+            "你必须立即根据“恢复指令”回复用户；不要继续排查旧工具错误，不要重新设置 wait，除非恢复指令明确要求。\n"
+            f"设置时间: {created_at}\n"
+            f"到期时间: {run_at}\n"
+            f"当前时间: {now_text}\n"
+            f"恢复指令: {prompt}"
+        ),
+        "datetime": now_text,
+    }
+
+
 def _is_notice_message(message: dict) -> bool:
     return (
         str(message.get("role", "")).strip().lower() == "system"
@@ -392,6 +445,78 @@ def _compress_history_for_model(history: list[dict]) -> list[dict]:
 
         compressed_history.append(message)
     return compressed_history
+
+
+def _message_tool_call_ids(message: dict) -> list[str]:
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return []
+    ids: list[str] = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        call_id = str(call.get("id") or "").strip()
+        if call_id:
+            ids.append(call_id)
+    return ids
+
+
+def _strip_unclosed_tool_calls(message: dict) -> Optional[dict]:
+    content = str(message.get("content") or "").strip()
+    if not content:
+        return None
+    cleaned = dict(message)
+    cleaned.pop("tool_calls", None)
+    cleaned.pop("reasoning_content", None)
+    return cleaned
+
+
+def _repair_tool_call_sequence_for_model(history: list[dict]) -> list[dict]:
+    repaired: list[dict] = []
+    index = 0
+    total = len(history)
+
+    while index < total:
+        message = history[index]
+        role = str(message.get("role", "")).strip().lower()
+
+        if role == "assistant":
+            expected_ids = _message_tool_call_ids(message)
+            if expected_ids:
+                cursor = index + 1
+                interleaved_cards: list[dict] = []
+                while cursor < total and _is_card_message(history[cursor]):
+                    interleaved_cards.append(history[cursor])
+                    cursor += 1
+
+                tool_slice = history[cursor:cursor + len(expected_ids)]
+                tool_ids = [
+                    str(item.get("tool_call_id") or "").strip()
+                    for item in tool_slice
+                    if str(item.get("role", "")).strip().lower() == "tool"
+                ]
+                if len(tool_slice) == len(expected_ids) and tool_ids == expected_ids:
+                    repaired.append(message)
+                    repaired.extend(interleaved_cards)
+                    repaired.extend(tool_slice)
+                    index = cursor + len(expected_ids)
+                    continue
+
+                cleaned = _strip_unclosed_tool_calls(message)
+                if cleaned is not None:
+                    repaired.append(cleaned)
+                index += 1
+                continue
+
+        if role == "tool":
+            # Tool messages are only valid as part of the contiguous assistant→tool block above.
+            index += 1
+            continue
+
+        repaired.append(message)
+        index += 1
+
+    return repaired
 
 
 class ChatbotHistoryStore:
@@ -720,6 +845,7 @@ def _build_initial_messages(history: list[dict], content: str, attachments: list
 
 def _build_messages_from_history(history: list[dict]) -> list[dict]:
     history = _compress_history_for_model(history)
+    history = _repair_tool_call_sequence_for_model(history)
     messages: list[dict] = [{"role": "system", "content": build_chatbot_system_content()}]
     pending_card_messages: list[dict] = []
     for index, item in enumerate(history):
@@ -731,6 +857,9 @@ def _build_messages_from_history(history: list[dict]) -> list[dict]:
             pending_card_messages.append(_system_card_message_for_model(item))
             continue
         if role == "system":
+            content = str(item.get("content") or "").strip()
+            if content:
+                messages.append(_normalize_message_for_model(item))
             continue
         messages.append(_normalize_message_for_model(item))
         if role == "tool" and pending_card_messages:
@@ -851,19 +980,6 @@ def register_chatbot_routes(
         )
         return {"attachments": saved}
 
-    async def _resume_chatbot_agent_after(
-        session,
-        request_id: str,
-        preset: dict,
-        base_url: str,
-        api_key: str,
-        model: str,
-        delay_seconds: int,
-        t0: float,
-    ):
-        await asyncio.sleep(max(0, delay_seconds))
-        await _run_chatbot_agent_background(session, f"{request_id}:resume", preset, base_url, api_key, model, t0)
-
     async def _run_chatbot_agent_background(
         session,
         request_id: str,
@@ -872,19 +988,21 @@ def register_chatbot_routes(
         api_key: str,
         model: str,
         t0: float,
-        transient_system_prompt: str = "",
+        runtime_system_messages: Optional[list[dict]] = None,
     ):
         _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
-        keep_state_for_resume = False
         try:
             history = history_store.load_messages(session.account_dir)
             initial_messages = _build_messages_from_history(history)
-            transient_system_prompt = str(transient_system_prompt or "").strip()
-            if transient_system_prompt:
-                initial_messages.append({
-                    "role": "system",
-                    "content": f"【定时唤醒】{transient_system_prompt}",
-                })
+            runtime_messages = list(runtime_system_messages or [])
+            if runtime_messages:
+                initial_messages.extend(_normalize_message_for_model(item) for item in runtime_messages)
+                logger.info(
+                    "[chatbot] stage=runtime_system_attached request_id=%s count=%d preview=%s",
+                    request_id,
+                    len(runtime_messages),
+                    _preview_text("\n".join(str(item.get("content") or "") for item in runtime_messages)),
+                )
             ws = _build_chatbot_workspace(session.account_dir)
             logger.info(
                 "[chatbot] stage=server_to_llm_prepare request_id=%s model=%s upstream_messages=%d base_url=%s workspace=%s",
@@ -902,7 +1020,10 @@ def register_chatbot_routes(
             client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
             def load_messages_for_loop():
-                return _build_messages_from_history(history_store.load_messages(session.account_dir))
+                messages = _build_messages_from_history(history_store.load_messages(session.account_dir))
+                if runtime_messages:
+                    messages.extend(_normalize_message_for_model(item) for item in runtime_messages)
+                return messages
 
             loop = ChatAgentLoop(
                 client=client,
@@ -928,28 +1049,6 @@ def register_chatbot_routes(
                 check_aborted=None,
             )
             result = await asyncio.to_thread(loop.run)
-            resume_after_seconds = int(result.get("_resume_after_seconds") or 0)
-            if resume_after_seconds > 0:
-                keep_state_for_resume = True
-                _set_chatbot_state(session.account_dir, f"等待 {resume_after_seconds} 秒后继续处理......")
-                logger.info(
-                    "[chatbot] stage=agent_scheduled_resume request_id=%s delay_seconds=%d",
-                    request_id,
-                    resume_after_seconds,
-                )
-                asyncio.create_task(
-                    _resume_chatbot_agent_after(
-                        session,
-                        request_id,
-                        preset,
-                        base_url,
-                        api_key,
-                        model,
-                        resume_after_seconds,
-                        t0,
-                    )
-                )
-                return
             final_text = _extract_final_text(result)
             elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
             logger.info(
@@ -988,8 +1087,7 @@ def register_chatbot_routes(
                 "datetime": _now_iso(),
             }])
         finally:
-            if not keep_state_for_resume:
-                _set_chatbot_state(session.account_dir, None)
+            _set_chatbot_state(session.account_dir, None)
 
     def _scheduled_task_account_dir(task: dict) -> Optional[Path]:
         raw_dir = str(task.get("account_dir") or "").strip()
@@ -1022,6 +1120,7 @@ def register_chatbot_routes(
             logger.error("[chatbot-scheduler] skip task=%s reason=llm_config_incomplete", task.get("id"))
             return
 
+        runtime_system_messages: list[dict] = []
         if mode == "alarm":
             history_store.append_messages(account_dir, [{
                 "role": "system",
@@ -1029,9 +1128,8 @@ def register_chatbot_routes(
                 "content": prompt,
                 "datetime": _now_iso(),
             }])
-            transient_prompt = ""
         else:
-            transient_prompt = prompt
+            runtime_system_messages.append(_wake_runtime_message(task, prompt))
 
         session = SimpleNamespace(
             account_id=account_dir.name,
@@ -1047,7 +1145,7 @@ def register_chatbot_routes(
                 api_key,
                 model,
                 time.perf_counter(),
-                transient_system_prompt=transient_prompt,
+                runtime_system_messages=runtime_system_messages,
             )
         )
         logger.info(
@@ -1176,6 +1274,9 @@ def register_chatbot_routes(
             content = "请查看本次上传的附件。"
 
         initial_messages, prefix_to_persist = _build_initial_messages(history, content, attachments)
+        client_context_message = _client_context_message(payload.get("clientContext"))
+        if client_context_message:
+            initial_messages.append(client_context_message)
         history_store.append_messages(session.account_dir, prefix_to_persist)
 
         if _is_chatbot_running(session.account_dir):
@@ -1202,7 +1303,17 @@ def register_chatbot_routes(
         )
 
         _set_chatbot_state(session.account_dir, CHATBOT_TYPING_STATE)
-        asyncio.create_task(_run_chatbot_agent_background(session, request_id, preset, base_url, api_key, model, t0))
+        runtime_system_messages = [client_context_message] if client_context_message else []
+        asyncio.create_task(_run_chatbot_agent_background(
+            session,
+            request_id,
+            preset,
+            base_url,
+            api_key,
+            model,
+            t0,
+            runtime_system_messages=runtime_system_messages,
+        ))
         return JSONResponse({"status": "ok"})
 
     def _build_chatbot_state_payload(x_auth_token: Optional[str] = Header(default=None)):

@@ -157,6 +157,45 @@
             return { 'X-Auth-Token': key };
         }
 
+        function formatLocalIso(date) {
+            const pad = (value) => String(value).padStart(2, '0');
+            const offsetMinutes = -date.getTimezoneOffset();
+            const sign = offsetMinutes >= 0 ? '+' : '-';
+            const abs = Math.abs(offsetMinutes);
+            const hours = pad(Math.floor(abs / 60));
+            const minutes = pad(abs % 60);
+            return [
+                date.getFullYear(),
+                '-',
+                pad(date.getMonth() + 1),
+                '-',
+                pad(date.getDate()),
+                'T',
+                pad(date.getHours()),
+                ':',
+                pad(date.getMinutes()),
+                ':',
+                pad(date.getSeconds()),
+                sign,
+                hours,
+                ':',
+                minutes,
+            ].join('');
+        }
+
+        function buildClientContext() {
+            const now = new Date();
+            const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+            const locale = navigator.language || '';
+            return {
+                timezone,
+                utcOffsetMinutes: -now.getTimezoneOffset(),
+                localTime: formatLocalIso(now),
+                locale,
+                path: window.location.pathname,
+            };
+        }
+
         function clearAuthAndReturn() {
             sessionStorage.removeItem('accountName');
             sessionStorage.removeItem('authToken');
@@ -505,12 +544,16 @@
         }
 
         function setChatStatusDot(state) {
-            const hasState = String(state || '').trim().length > 0;
-            chatStatusDot.classList.toggle('chat-status-dot-waiting', hasState);
+            const stateText = String(state || '').trim();
+            const hasState = stateText.length > 0 && stateText !== '在线';
+            const isWaitingState = /等待|wait/i.test(stateText);
             chatStatusDot.classList.toggle('chat-status-dot-online', !hasState);
-            chatStatusDot.title = hasState ? String(state).trim() : '在线';
-            chatStatusText.textContent = hasState ? String(state).trim() : '在线';
-            chatStatusText.classList.toggle('chat-status-text-waiting', hasState);
+            chatStatusDot.classList.toggle('chat-status-dot-waiting', hasState && !isWaitingState);
+            chatStatusDot.classList.toggle('chat-status-dot-awaiting', hasState && isWaitingState);
+            chatStatusDot.title = hasState ? stateText : '在线';
+            chatStatusText.textContent = hasState ? stateText : '在线';
+            chatStatusText.classList.toggle('chat-status-text-waiting', hasState && !isWaitingState);
+            chatStatusText.classList.toggle('chat-status-text-awaiting', hasState && isWaitingState);
         }
 
         function renderChatAttachmentDrafts() {
@@ -677,7 +720,8 @@
                     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         content,
-                        attachmentIds: uploadedAttachments.map(item => item.attachmentId)
+                        attachmentIds: uploadedAttachments.map(item => item.attachmentId),
+                        clientContext: buildClientContext(),
                     })
                 });
 

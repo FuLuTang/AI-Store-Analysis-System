@@ -28,8 +28,6 @@ if not logger.handlers:
 
 AUTH_TOOL_NAME = "get_user_service_token"
 AUTH_CARD_NAME = "ask_token_auth"
-RESUMABLE_TOOL_NAMES = {"run_python"}
-MAX_TOOL_RESUME_WAIT_SECONDS = 60
 
 
 class ChatAgentLoop:
@@ -141,10 +139,6 @@ class ChatAgentLoop:
                         token_total = prompt_tokens + completion_tokens
                     if token_total:
                         assistant_message["token_count"] = int(token_total)
-                round_messages.append(assistant_message)
-                self.messages = round_messages
-                self._persist_messages([assistant_message])
-
                 if sr.usage:
                     u = sr.usage
                     inp = getattr(u, "prompt_tokens", 0) or 0
@@ -185,12 +179,14 @@ class ChatAgentLoop:
                     )
 
                 if not sr.tool_calls and sr.finish_reason != "tool_calls":
+                    round_messages.append(assistant_message)
+                    self.messages = round_messages
+                    self._persist_messages([assistant_message])
                     self._emit_log("chatbot_agent", {"level": "info", "message": f"✅ 对话结束，最终回答 {len(sr.content)} 字"})
                     self._emit_status("chatbot_agent", "success")
                     return self._with_usage(self._parse_final_output(sr.content))
 
                 if sr.tool_calls:
-                    self._set_status("正在处理信息......")
                     auth_call = next((tc for tc in sr.tool_calls if tc.get("name") == AUTH_TOOL_NAME), None)
                     if auth_call:
                         try:
@@ -206,10 +202,10 @@ class ChatAgentLoop:
                             "options": ["是", "否"],
                             "datetime": datetime.now().astimezone().isoformat(timespec="seconds"),
                         }
-                        round_messages.append(auth_card)
+                        round_messages.extend([assistant_message, auth_card])
                         self.messages = round_messages
+                        self._persist_messages([assistant_message, auth_card])
                         self._set_status(None)
-                        self._persist_messages([auth_card])
                         self._emit_log("chatbot_agent", {"level": "info", "message": "等待用户确认代理操作许可"})
                         self._emit_status("chatbot_agent", "waiting_auth")
                         return self._with_usage({
@@ -221,8 +217,14 @@ class ChatAgentLoop:
                             "_waiting_auth": True,
                         })
 
+                    tool_messages: list[dict] = []
+                    wait_scheduled = False
                     for tc in sr.tool_calls:
-                        self._set_status("正在处理信息......")
+                        tool_name = tc.get("name", "")
+                        if tool_name in {"run_python", "wait"}:
+                            self._set_status("等待外部返回结果...")
+                        else:
+                            self._set_status("正在处理信息......")
                         target = _tool_target(tc["name"], tc["arguments"])
                         self._emit_log("chatbot_agent", {"level": "info", "message": f"🔧 {target}"})
 
@@ -234,26 +236,38 @@ class ChatAgentLoop:
                             "content": result,
                             "datetime": datetime.now().astimezone().isoformat(timespec="seconds"),
                         }
-                        round_messages.append(tool_message)
-                        self.messages = round_messages
-                        self._persist_messages([tool_message])
+                        tool_messages.append(tool_message)
+                        if tool_name == "wait":
+                            wait_scheduled = True
 
-                        wait_seconds = self._tool_resume_wait_seconds(tc)
-                        if wait_seconds > 0:
-                            self._set_status(f"等待 {wait_seconds} 秒后继续处理......")
-                            self._emit_log(
-                                "chatbot_agent",
-                                {"level": "info", "message": f"⏱️ 工具结果已写入，{wait_seconds} 秒后恢复 Agent"},
-                            )
-                            self._emit_status("chatbot_agent", "scheduled_resume")
-                            return self._with_usage({
-                                "full_report": "",
-                                "cards": [],
-                                "metrics": [],
-                                "mapping": [],
-                                "warnings": [],
-                                "_resume_after_seconds": wait_seconds,
-                            })
+                    persist_batch = [assistant_message, *tool_messages]
+                    round_messages.extend(persist_batch)
+                    self.messages = round_messages
+                    self._persist_messages(persist_batch)
+
+                    if wait_scheduled:
+                        wait_reply = str(assistant_message.get("content") or "").strip()
+                        if not wait_reply:
+                            wait_reply = "我已经调用 wait 帮你设好了，到点后我会自动回来提醒你。"
+                            wait_message = {
+                                "role": "assistant",
+                                "content": wait_reply,
+                                "datetime": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            }
+                            round_messages.append(wait_message)
+                            self.messages = round_messages
+                            self._persist_messages([wait_message])
+                        self._set_status(None)
+                        self._emit_log("chatbot_agent", {"level": "info", "message": "⏰ wait 已登记，结束当前 Agent 轮次"})
+                        self._emit_status("chatbot_agent", "scheduled_wait")
+                        return self._with_usage({
+                            "full_report": "",
+                            "cards": [],
+                            "metrics": [],
+                            "mapping": [],
+                            "warnings": [],
+                            "_waiting_scheduled": True,
+                        })
 
                     self._set_status("正在调查数据......")
 
@@ -493,19 +507,6 @@ class ChatAgentLoop:
         except Exception as e:
             logger.error("tool_exec_error tool=%s error=%s", name, e)
             return json.dumps({"error": str(e)}, ensure_ascii=False)
-
-    def _tool_resume_wait_seconds(self, tc: dict) -> int:
-        if tc.get("name") not in RESUMABLE_TOOL_NAMES:
-            return 0
-        try:
-            args = json.loads(tc.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            return 0
-        try:
-            raw = int(args.get("wait_seconds") or 0)
-        except (TypeError, ValueError):
-            return 0
-        return max(0, min(raw, MAX_TOOL_RESUME_WAIT_SECONDS))
 
     def _with_usage(self, result: dict) -> dict:
         total = self._total_input + self._total_output

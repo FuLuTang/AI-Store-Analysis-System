@@ -193,6 +193,8 @@
 
 Chatbot 内部还会使用 `request_service_docs_access` 工具来申请 `service_docs` 的访问权限；这不是 HTTP 接口，而是模型可调用的内部工具。
 
+`service_docs` 的权限规则不是永久有效的。规则生成时会绑定目录快照；如果后台后来上传、新建或删除了同级文件/文件夹，相关规则会自动失效，命中访问时也会再做一次兜底校验。
+
 ### Chatbot `wait` 工具
 
 Chatbot Agent 可调用 `wait` 登记未来唤醒任务。该工具不阻塞当前对话。

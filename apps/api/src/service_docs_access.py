@@ -14,6 +14,9 @@ AUDIT_FILE_NAME = "service_docs_access_audit.jsonl"
 PROFILE_FILE_NAME = "profile.json"
 IDENTITY_PROFILE_KEY = "identityDescription"
 REASONING_PROFILE_KEY = "reasoningEffort"
+STORAGE_ROOT = Path(__file__).resolve().parents[3] / "storage"
+SERVICE_DOCS_ROOT = STORAGE_ROOT / "service_docs"
+ACCOUNTS_ROOT = STORAGE_ROOT / "accounts"
 
 TOOL_READ_LIKE = {"read_file", "read_document_structure", "get_resource_link"}
 TOOL_DISCOVERY_LIKE = {"list_files", "search"}
@@ -77,6 +80,10 @@ def update_identity_description(account_dir: Path, identity_description: str) ->
 
 
 def load_rules(account_dir: Path) -> list[dict]:
+    return _load_rules(account_dir, include_inactive=False)
+
+
+def _load_rules(account_dir: Path, include_inactive: bool) -> list[dict]:
     path = _rules_path(account_dir)
     if not path.exists():
         return []
@@ -95,7 +102,7 @@ def load_rules(account_dir: Path) -> list[dict]:
         if not isinstance(item, dict):
             continue
         status = str(item.get("status") or "active").strip().lower()
-        if status != "active":
+        if not include_inactive and status != "active":
             continue
         pattern = str(item.get("pattern") or "").strip()
         decision = str(item.get("decision") or "").strip().lower()
@@ -112,14 +119,19 @@ def load_rules(account_dir: Path) -> list[dict]:
             "createdAt": str(item.get("createdAt") or _now_iso()),
             "identitySnapshot": str(item.get("identitySnapshot") or "").strip(),
             "toolHint": str(item.get("toolHint") or "").strip(),
+            "watchSnapshots": item.get("watchSnapshots") if isinstance(item.get("watchSnapshots"), list) else [],
+            "invalidatedAt": str(item.get("invalidatedAt") or "").strip(),
+            "invalidatedReason": str(item.get("invalidatedReason") or "").strip(),
         })
     return result
 
 
 def summarize_rules(account_dir: Path) -> dict:
-    rules = load_rules(account_dir)
+    rules = _load_rules(account_dir, include_inactive=True)
     return {
         "count": len(rules),
+        "activeCount": sum(1 for rule in rules if str(rule.get("status") or "") == "active"),
+        "invalidatedCount": sum(1 for rule in rules if str(rule.get("status") or "") == "invalidated"),
         "rules": rules,
     }
 
@@ -154,32 +166,162 @@ def _normalize_service_docs_rel(path: str) -> str:
     return rel.strip("/")
 
 
+def _service_docs_abs_from_rel(rel_path: str) -> Path:
+    rel = str(rel_path or "").strip().strip("/")
+    return (SERVICE_DOCS_ROOT / rel).resolve() if rel else SERVICE_DOCS_ROOT.resolve()
+
+
+def _list_child_names(dir_path: Path) -> list[str]:
+    if not dir_path.exists() or not dir_path.is_dir():
+        return []
+    names = []
+    for child in dir_path.iterdir():
+        if child.name.startswith("."):
+            continue
+        names.append(child.name)
+    return sorted(names)
+
+
+def _watch_directories_for_rel(rel_path: str) -> list[str]:
+    rel = str(rel_path or "").strip().strip("/")
+    watch_dirs: list[str] = []
+    if not rel:
+        return [""]
+    parts = rel.split("/")
+    limit = len(parts) - 1
+    if limit <= 0:
+        return [""]
+    watch_dirs.append("")
+    for idx in range(1, limit + 1):
+        watch_dirs.append("/".join(parts[:idx]))
+    return watch_dirs
+
+
+def _build_watch_snapshots(rel_path: str) -> list[dict]:
+    snapshots = []
+    for watch_dir in _watch_directories_for_rel(rel_path):
+        dir_path = _service_docs_abs_from_rel(watch_dir)
+        snapshots.append({
+            "path": watch_dir,
+            "children": _list_child_names(dir_path),
+        })
+    return snapshots
+
+
+def _rule_snapshot_mismatch(rule: dict) -> tuple[bool, str]:
+    snapshots = rule.get("watchSnapshots")
+    if not isinstance(snapshots, list) or not snapshots:
+        return False, ""
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        watch_path = str(snapshot.get("path") or "").strip().strip("/")
+        expected = snapshot.get("children")
+        if not isinstance(expected, list):
+            continue
+        current = _list_child_names(_service_docs_abs_from_rel(watch_path))
+        if current != expected:
+            label = watch_path or "/"
+            return True, f"目录快照已变化: {label}"
+    return False, ""
+
+
+def _invalidate_rule(rule: dict, reason: str) -> dict:
+    updated = dict(rule)
+    updated["status"] = "invalidated"
+    updated["invalidatedAt"] = _now_iso()
+    updated["invalidatedReason"] = str(reason or "").strip() or "目录快照已变化"
+    return updated
+
+
+def refresh_rules_for_account(account_dir: Path) -> bool:
+    rules = _load_rules(account_dir, include_inactive=True)
+    changed = False
+    updated_rules = []
+    for rule in rules:
+        current = dict(rule)
+        if str(current.get("status") or "") == "active":
+            mismatched, reason = _rule_snapshot_mismatch(current)
+            if mismatched:
+                current = _invalidate_rule(current, reason)
+                append_audit_event(account_dir, {
+                    "kind": "service_docs_rule_invalidated",
+                    "ruleId": current.get("id"),
+                    "reason": reason,
+                    "pattern": current.get("pattern"),
+                })
+                changed = True
+        updated_rules.append(current)
+    if changed:
+        save_rules(account_dir, updated_rules)
+    return changed
+
+
+def refresh_rules_for_all_accounts(accounts_dir: Path = ACCOUNTS_ROOT) -> int:
+    if not accounts_dir.exists():
+        return 0
+    changed_accounts = 0
+    for account_dir in accounts_dir.iterdir():
+        if not account_dir.is_dir():
+            continue
+        if refresh_rules_for_account(account_dir):
+            changed_accounts += 1
+    return changed_accounts
+
+
 def _top_level_label(rel_path: str) -> str:
     parts = [part for part in str(rel_path or "").split("/") if part]
     return parts[0] if parts else ""
 
 
-def _match_rule(rules: list[dict], rel_path: str) -> dict | None:
+def _match_rule(account_dir: Path, rules: list[dict], rel_path: str) -> dict | None:
     matched_allow = None
+    changed = False
+    updated_rules = []
     for rule in rules:
+        current_rule = dict(rule)
+        if str(current_rule.get("status") or "") != "active":
+            updated_rules.append(current_rule)
+            continue
         pattern = str(rule.get("pattern") or "").strip()
         if not pattern:
+            updated_rules.append(current_rule)
             continue
         try:
             if re.search(pattern, rel_path):
-                if str(rule.get("decision")) == "deny":
-                    return rule
+                mismatched, reason = _rule_snapshot_mismatch(current_rule)
+                if mismatched:
+                    current_rule = _invalidate_rule(current_rule, reason)
+                    append_audit_event(account_dir, {
+                        "kind": "service_docs_rule_invalidated_on_access",
+                        "ruleId": current_rule.get("id"),
+                        "reason": reason,
+                        "pattern": current_rule.get("pattern"),
+                        "path": rel_path,
+                    })
+                    changed = True
+                    updated_rules.append(current_rule)
+                    continue
+                if str(current_rule.get("decision")) == "deny":
+                    updated_rules.append(current_rule)
+                    if changed:
+                        save_rules(account_dir, updated_rules + rules[len(updated_rules):])
+                    return current_rule
                 if matched_allow is None:
-                    matched_allow = rule
+                    matched_allow = current_rule
         except re.error:
+            updated_rules.append(current_rule)
             continue
+        updated_rules.append(current_rule)
+    if changed:
+        save_rules(account_dir, updated_rules)
     return matched_allow
 
 
 def classify_access_for_path(account_dir: Path, path: str) -> dict:
     rel_path = _normalize_service_docs_rel(path)
     rules = load_rules(account_dir)
-    matched = _match_rule(rules, rel_path)
+    matched = _match_rule(account_dir, rules, rel_path)
     if matched:
         decision = str(matched.get("decision") or "").strip().lower()
         return {
@@ -414,6 +556,7 @@ def request_access_via_ai(account_dir: Path, path: str, tool: str, reason: str, 
         except Exception:
             regex_pattern = ""
     if regex_pattern:
+        rel = _normalize_service_docs_rel(path)
         next_rules = list(rules)
         next_rules.append({
             "id": uuid.uuid4().hex,
@@ -426,6 +569,9 @@ def request_access_via_ai(account_dir: Path, path: str, tool: str, reason: str, 
             "createdAt": _now_iso(),
             "identitySnapshot": identity_description,
             "toolHint": tool,
+            "watchSnapshots": _build_watch_snapshots(rel),
+            "invalidatedAt": "",
+            "invalidatedReason": "",
         })
         save_rules(account_dir, next_rules)
         rule_saved = True

@@ -1668,12 +1668,15 @@
             adminRulesContainer.innerHTML = list.map(rule => {
                 const decision = String(rule.decision || '').toLowerCase();
                 const badge = decision === 'deny' ? '拒绝' : '允许';
+                const status = String(rule.status || 'active').toLowerCase();
+                const statusText = status === 'invalidated' ? '已失效' : '生效中';
                 const reason = rule.reason ? ` · ${escapeHtml(rule.reason)}` : '';
                 const confidence = typeof rule.confidence === 'number' ? ` · 置信度 ${rule.confidence}` : '';
                 const source = rule.source ? ` · 来源 ${escapeHtml(rule.source)}` : '';
+                const invalidated = rule.invalidatedReason ? ` · 失效原因 ${escapeHtml(rule.invalidatedReason)}` : '';
                 return `<div style="padding: 0.45rem 0; border-bottom: 1px dashed var(--border);">
-                    <div><strong>[${badge}]</strong> ${escapeHtml(rule.pattern || '')}</div>
-                    <div style="color: var(--text-muted); font-size: 0.82rem;">${escapeHtml(rule.toolHint || '')}${source}${confidence}${reason}</div>
+                    <div><strong>[${badge}]</strong> ${escapeHtml(rule.pattern || '')} <span style="color: var(--text-muted); font-size: 0.82rem;">(${statusText})</span></div>
+                    <div style="color: var(--text-muted); font-size: 0.82rem;">${escapeHtml(rule.toolHint || '')}${source}${confidence}${reason}${invalidated}</div>
                 </div>`;
             }).join('');
         }
@@ -1715,7 +1718,7 @@
             }
             adminCurrentAccountId = data.accountId || accountId;
             renderAdminRules(data.rules || []);
-            setAccountProfileStatus(`当前账号：${data.username || data.accountId || accountId}，规则数 ${data.ruleCount ?? 0}`);
+            setAccountProfileStatus(`当前账号：${data.username || data.accountId || accountId}，规则 ${data.ruleCount ?? 0} 条，生效 ${data.activeRuleCount ?? 0} 条，失效 ${data.invalidatedRuleCount ?? 0} 条`);
         }
 
         async function loadAdminAccounts() {

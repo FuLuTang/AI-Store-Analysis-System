@@ -62,6 +62,7 @@ from apps.api.src.service_docs_access import (
     load_identity_description as load_service_docs_identity_description,
     load_rules as load_service_docs_rules,
     project_search_payload_for_account,
+    refresh_rules_for_all_accounts as refresh_all_service_docs_rules,
     request_access_via_ai,
     save_account_profile as save_service_docs_account_profile,
     summarize_rules as summarize_service_docs_rules,
@@ -1121,6 +1122,8 @@ def get_admin_account_profile(
             "identityDescription": str(profile.get("identityDescription") or "").strip(),
         },
         "ruleCount": rules_summary["count"],
+        "activeRuleCount": rules_summary["activeCount"],
+        "invalidatedRuleCount": rules_summary["invalidatedCount"],
         "rules": rules_summary["rules"],
     }
 
@@ -1297,11 +1300,13 @@ async def save_admin_service_doc_file(request: Request, x_admin_token: Optional[
         add_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
     else:
         remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+    invalidated_accounts = refresh_all_service_docs_rules(ACCOUNTS_DIR)
         
     return {
         "status": "ok",
         "path": path,
         "bytesWritten": bytes_written,
+        "invalidatedRuleAccounts": invalidated_accounts,
     }
 
 
@@ -1367,6 +1372,7 @@ async def upload_admin_service_doc_file(
                         remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
                         
                     extracted_paths.append(rel_path)
+        invalidated_accounts = refresh_all_service_docs_rules(ACCOUNTS_DIR)
                     
         return {
             "status": "ok",
@@ -1374,6 +1380,7 @@ async def upload_admin_service_doc_file(
             "path": join_domain_path(SERVICE_DOCS_DOMAIN, extract_dir.relative_to(SERVICE_DOCS_DIR).as_posix()),
             "bytesWritten": bytes_written,
             "mimeType": "application/zip-extracted",
+            "invalidatedRuleAccounts": invalidated_accounts,
         }
         
     # 普通单文件上传处理
@@ -1385,12 +1392,14 @@ async def upload_admin_service_doc_file(
         add_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
     else:
         remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+    invalidated_accounts = refresh_all_service_docs_rules(ACCOUNTS_DIR)
         
     return {
         "status": "ok",
         "path": join_domain_path(SERVICE_DOCS_DOMAIN, rel_path),
         "bytesWritten": len(raw),
         "mimeType": file.content_type or "application/octet-stream",
+        "invalidatedRuleAccounts": invalidated_accounts,
     }
 
 
@@ -1412,9 +1421,11 @@ async def create_admin_service_doc_folder(request: Request, x_admin_token: Optio
     if target.exists() and target.is_file():
         raise HTTPException(status_code=400, detail="目标路径已存在且是文件")
     target.mkdir(parents=True, exist_ok=True)
+    invalidated_accounts = refresh_all_service_docs_rules(ACCOUNTS_DIR)
     return {
         "status": "ok",
         "path": join_domain_path(SERVICE_DOCS_DOMAIN, target.relative_to(SERVICE_DOCS_DIR).as_posix()) + "/",
+        "invalidatedRuleAccounts": invalidated_accounts,
     }
 
 
@@ -1432,8 +1443,9 @@ def delete_admin_service_doc_file(path: str, x_admin_token: Optional[str] = Head
     from apps.api.src.download_guard import remove_restricted_pattern
     rel_path = _service_docs_rel_path(path).as_posix()
     remove_restricted_pattern(rel_path, SERVICE_DOCS_DIR)
+    invalidated_accounts = refresh_all_service_docs_rules(ACCOUNTS_DIR)
     
-    return {"status": "ok", "path": path}
+    return {"status": "ok", "path": path, "invalidatedRuleAccounts": invalidated_accounts}
 
 
 @app.post("/api/admin/chatbot/notice")
